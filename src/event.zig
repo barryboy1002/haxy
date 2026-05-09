@@ -79,105 +79,111 @@ pub fn consume(
 ) !void {
     const Ctx = struct {
         repo_events: []RepoEvent(hash_kind),
-        history_count: u64,
 
         pub fn run(ctx: @This(), cursor: *DB.Cursor(.read_write)) !void {
             const moment = try DB.HashMap(.read_write).init(cursor.*);
 
-            // the map with all of haxy's state and materialized views
-            const haxy_cursor = try moment.putCursor(hash.hashInt(hash_kind, "haxy"));
-            const haxy = try DB.HashMap(.read_write).init(haxy_cursor);
-
-            // try reading the last object id that was consumed
+            // the last_object_id represents the object id that was last consumed
             var last_object_id_maybe: ?[hash.byteLen(hash_kind)]u8 = null;
-            if (try haxy.getCursor(hash.hashInt(hash_kind, "last-object-id"))) |last_object_id_cursor| {
+            if (try moment.getCursor(hash.hashInt(hash_kind, "haxy-last-object-id"))) |last_object_id_cursor| {
                 var last_object_id_buffer: [hash.byteLen(hash_kind)]u8 = undefined;
                 _ = try last_object_id_cursor.readBytes(&last_object_id_buffer);
                 last_object_id_maybe = last_object_id_buffer;
             }
 
+            // the list with all of haxy's state, including materialized views.
+            // the reason it is a list is so we can keep every previous haxy
+            // state, making it easy to revert to an older state if the user
+            // rebases some of the past commits.
+            const haxy_cursor = try moment.putCursor(hash.hashInt(hash_kind, "haxy"));
+            const haxy = try DB.ArrayList(.read_write).init(haxy_cursor);
+
+            // add a new item to the haxy list created above.
+            // we call the item haxy_moments. it is a map of object id to haxy moment.
+            // in other words, it maps each object id to a hash map containing the
+            // state that the database was in when that object id was consumed.
+            var haxy_moments_cursor = try haxy.appendCursor();
+            // use the previous haxy_moments as the basis for this one if it exists
+            if (try haxy.getCursor(-2)) |last_haxy_moments_cursor| {
+                try haxy_moments_cursor.write(.{ .slot = last_haxy_moments_cursor.slot() });
+            }
+            var haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
+
             // for each event we want to consume...
             for (ctx.repo_events) |repo_event| {
-                // map that associates this oid with the current transaction id.
-                // this will be important for reverting things when a rebase occurrs.
-                var object_id_to_tx_id_cursor = try haxy.putCursor(hash.hashInt(hash_kind, "object-id->tx-id"));
-
-                // map with the views as they appeared when each event was consumed.
-                // we can use this to see (and revert) the views to any previous state.
-                var object_id_to_views_cursor = try haxy.putCursor(hash.hashInt(hash_kind, "object-id->views"));
-
                 // if this object id has already been consumed, skip it
-                {
-                    const object_id_to_views = try DB.HashMap(.read_only).init(object_id_to_views_cursor.readOnly());
-                    if (null != try object_id_to_views.getCursor(hash.bytesToInt(hash_kind, &repo_event.oid))) {
-                        continue;
-                    }
+                if (null != try haxy_moments.getCursor(hash.bytesToInt(hash_kind, &repo_event.oid))) {
+                    continue;
                 }
 
-                // compare last-object-id to the event's parent. this is important
+                // compare last_object_id to the event's parent. this is important
                 // in situations where the branch was rebased, because in that case
-                // the last-object-id may no longer be valid.
+                // the last_object_id may no longer be valid.
                 if (last_object_id_maybe) |*last_object_id| {
                     if (repo_event.parent_oid) |*parent_oid| {
                         if (!std.mem.eql(u8, last_object_id, parent_oid)) {
-                            // the last-object-id does not match the current event's parent id.
+                            // the last_object_id does not match the current event's parent id.
                             // this means that a rebase occurred. we just need to revert the
-                            // object-id maps to the state they were in when parent-oid was consumed.
+                            // haxy list to the state it was in what parent_oid was consumed,
+                            // and then create a new haxy_moments map to work with.
 
-                            const object_id_to_tx_id = try DB.HashMap(.read_only).init(object_id_to_tx_id_cursor.readOnly());
-                            const tx_id_cursor = try object_id_to_tx_id.getCursor(hash.bytesToInt(hash_kind, parent_oid)) orelse return error.ObjectNotFound;
-                            const tx_id = try tx_id_cursor.readUint();
-                            const history = try DB.ArrayList(.read_only).init(cursor.db.rootCursor().readOnly());
-
-                            const old_moment_cursor = try history.getCursor(tx_id) orelse return error.TransactionNotFound;
+                            const old_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(hash_kind, parent_oid)) orelse return error.CursorNotFound;
                             const old_moment = try DB.HashMap(.read_only).init(old_moment_cursor);
 
-                            const old_haxy_cursor = try old_moment.getCursor(hash.hashInt(hash_kind, "haxy")) orelse return error.CursorNotFound;
-                            const old_haxy = try DB.HashMap(.read_only).init(old_haxy_cursor);
+                            const old_moment_index_cursor = try old_moment.getCursor(hash.hashInt(hash_kind, "index")) orelse return error.CursorNotFound;
+                            const old_moment_index = try old_moment_index_cursor.readUint();
 
-                            const old_object_id_to_tx_id_cursor = try old_haxy.getCursor(hash.hashInt(hash_kind, "object-id->tx-id")) orelse return error.CursorNotFound;
-                            const old_object_id_to_views_cursor = try old_haxy.getCursor(hash.hashInt(hash_kind, "object-id->views")) orelse return error.CursorNotFound;
+                            // resize the haxy list so we truncate all the moments that were
+                            // created after the parent_oid was consumed
+                            try haxy.slice(old_moment_index + 1);
 
-                            try object_id_to_tx_id_cursor.write(.{ .slot = old_object_id_to_tx_id_cursor.slot() });
-                            try object_id_to_views_cursor.write(.{ .slot = old_object_id_to_views_cursor.slot() });
+                            // make a new haxy moment and set its initial value to the last haxy moment
+                            haxy_moments_cursor = try haxy.appendCursor();
+                            const old_haxy_moments_cursor = try haxy.getCursor(old_moment_index) orelse return error.CursorNotFound;
+                            try haxy_moments_cursor.write(.{ .slot = old_haxy_moments_cursor.slot() });
+                            haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
 
                             last_object_id_maybe = parent_oid.*;
                         }
                     } else {
                         // the branch was rebased all the way to the very beginning.
                         // we have a repo event with no parent, which means it is now
-                        // the very first event. all we need to do is set the
-                        // object-id maps to be empty.
-                        try object_id_to_tx_id_cursor.write(.{ .slot = null });
-                        try object_id_to_views_cursor.write(.{ .slot = null });
+                        // the very first event. all we need to do is set the haxy list
+                        // to be empty and make a new haxy_moments map to work with.
+
+                        try haxy.slice(0);
+                        haxy_moments_cursor = try haxy.appendCursor();
+                        haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
+
+                        last_object_id_maybe = null;
                     }
                 } else {
                     if (repo_event.parent_oid) |_| {
-                        // there is no last-object-id, but this event has a parent.
+                        // there is no last_object_id, but this event has a parent.
                         // this is an invalid state. if the event has a parent, that
                         // implies that an event has already been processed, but
-                        // if that's true then there would be a last-object-id.
+                        // if that's true then there would be a last_object_id.
                         return error.UnexpectedParent;
                     }
                 }
 
-                // associate this object id with this transaction id
-                const object_id_to_tx_id = try DB.HashMap(.read_write).init(object_id_to_tx_id_cursor);
-                try object_id_to_tx_id.put(hash.bytesToInt(hash_kind, &repo_event.oid), .{ .uint = ctx.history_count });
+                // create a moment for this object id
+                var haxy_moment_cursor = try haxy_moments.putCursor(hash.bytesToInt(hash_kind, &repo_event.oid));
 
-                // init the object-id->views map
-                const object_id_to_views = try DB.HashMap(.read_write).init(object_id_to_views_cursor);
-
-                // create a new views map for the current event we are consuming
-                var views_cursor = try object_id_to_views.putCursor(hash.bytesToInt(hash_kind, &repo_event.oid));
-
-                // if there was a previous event, set the views map to have the same value as it.
+                // if there was a previous object id, make this haxy moment's initial value to it.
                 // this efficiently "clones" the map so we make further modifications based on it.
                 if (last_object_id_maybe) |*last_object_id| {
-                    if (try object_id_to_views.getCursor(hash.bytesToInt(hash_kind, last_object_id))) |last_view_cursor| {
-                        try views_cursor.write(.{ .slot = last_view_cursor.slot() });
+                    if (try haxy_moments.getCursor(hash.bytesToInt(hash_kind, last_object_id))) |last_haxy_moment_cursor| {
+                        try haxy_moment_cursor.write(.{ .slot = last_haxy_moment_cursor.slot() });
                     }
                 }
+
+                const haxy_moment = try DB.HashMap(.read_write).init(haxy_moment_cursor);
+
+                // associate this moment with the index it will first appear at in the haxy list.
+                // this will be important later so we can truncate that list if the user ever
+                // rebases starting at this object id.
+                try haxy_moment.put(hash.hashInt(hash_kind, "index"), .{ .uint = try haxy.count() - 1 });
 
                 // consume the event into the views map
                 {
@@ -187,6 +193,8 @@ pub fn consume(
                     var current_event_id: [event_id_size]u8 = undefined;
                     _ = try std.fmt.hexToBytes(&current_event_id, &event.id);
 
+                    // create a new views map for the current event we are consuming
+                    const views_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "views"));
                     const views = try DB.HashMap(.read_write).init(views_cursor);
 
                     switch (event.data) {
@@ -210,7 +218,7 @@ pub fn consume(
             }
 
             if (last_object_id_maybe) |*last_object_id| {
-                try haxy.put(hash.hashInt(hash_kind, "last-object-id"), .{ .bytes = last_object_id });
+                try moment.put(hash.hashInt(hash_kind, "haxy-last-object-id"), .{ .bytes = last_object_id });
             }
         }
     };
@@ -220,10 +228,7 @@ pub fn consume(
 
     // create a new transaction in the database that runs the above-defined Ctx function
     const history = try DB.ArrayList(.read_write).init(db.rootCursor());
-    try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{
-        .repo_events = repo_events,
-        .history_count = try history.count(),
-    });
+    try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .repo_events = repo_events });
 }
 
 fn upsert(
