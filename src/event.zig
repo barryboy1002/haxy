@@ -130,7 +130,7 @@ pub fn consume(
                             const old_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(hash_kind, parent_oid)) orelse return error.CursorNotFound;
                             const old_moment = try DB.HashMap(.read_only).init(old_moment_cursor);
 
-                            const old_moment_index_cursor = try old_moment.getCursor(hash.hashInt(hash_kind, "index")) orelse return error.CursorNotFound;
+                            const old_moment_index_cursor = try old_moment.getCursor(hash.hashInt(hash_kind, "moment-index")) orelse return error.CursorNotFound;
                             const old_moment_index = try old_moment_index_cursor.readUint();
 
                             // resize the haxy list so we truncate all the moments that were
@@ -183,7 +183,7 @@ pub fn consume(
                 // associate this moment with the index it will first appear at in the haxy list.
                 // this will be important later so we can truncate that list if the user ever
                 // rebases starting at this object id.
-                try haxy_moment.put(hash.hashInt(hash_kind, "index"), .{ .uint = try haxy.count() - 1 });
+                try haxy_moment.put(hash.hashInt(hash_kind, "moment-index"), .{ .uint = try haxy.count() - 1 });
 
                 // consume the event into the views map
                 {
@@ -193,13 +193,9 @@ pub fn consume(
                     var current_event_id: [event_id_size]u8 = undefined;
                     _ = try std.fmt.hexToBytes(&current_event_id, &event.id);
 
-                    // create a new views map for the current event we are consuming
-                    const views_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "views"));
-                    const views = try DB.HashMap(.read_write).init(views_cursor);
-
                     switch (event.data) {
                         .issue => |data| {
-                            const event_id_to_issue_cursor = try views.putCursor(hash.hashInt(hash_kind, "event-id->issue"));
+                            const event_id_to_issue_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "event-id->issue"));
                             const event_id_to_issue = try DB.HashMap(.read_write).init(event_id_to_issue_cursor);
 
                             const issue_cursor = try event_id_to_issue.putCursor(hash.hashInt(hash_kind, &current_event_id));

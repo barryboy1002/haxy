@@ -202,12 +202,8 @@ test "rebase" {
         const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
         const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
 
-        // get the views
-        const views_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "views")) orelse return error.NotFound;
-        const views = try Repo.DB.HashMap(.read_only).init(views_cursor);
-
         // get the map of issues
-        const event_id_to_issue_cursor = try views.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
+        const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
         const event_id_to_issue = try Repo.DB.HashMap(.read_only).init(event_id_to_issue_cursor);
 
         // get the issue out of the map that was edited
@@ -309,12 +305,8 @@ test "rebase" {
         const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
         const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
 
-        // get the views
-        const views_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "views")) orelse return error.NotFound;
-        const views = try Repo.DB.HashMap(.read_only).init(views_cursor);
-
         // get the map of issues
-        const event_id_to_issue_cursor = try views.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
+        const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
         const event_id_to_issue = try Repo.DB.HashMap(.read_only).init(event_id_to_issue_cursor);
 
         // get the issue out of the map that was edited
@@ -411,12 +403,8 @@ test "rebase" {
         const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
         const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
 
-        // get the views
-        const views_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "views")) orelse return error.NotFound;
-        const views = try Repo.DB.HashMap(.read_only).init(views_cursor);
-
         // get the map of issues
-        const event_id_to_issue_cursor = try views.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
+        const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
         const event_id_to_issue = try Repo.DB.HashMap(.read_only).init(event_id_to_issue_cursor);
 
         // the first issue no longer exists
