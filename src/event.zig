@@ -130,11 +130,13 @@ pub fn consumeInTransaction(
     }
     var haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
 
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     // compute a list of events that haven't been consumed yet
     const RepoEvent = struct {
-        parent_oid: ?[hash.byteLen(repo_opts.hash)]u8,
+        parent_oids: []const [hash.hexLen(repo_opts.hash)]u8,
         oid: [hash.byteLen(repo_opts.hash)]u8,
-        is_merge: bool,
     };
     var repo_events: std.ArrayList(RepoEvent) = .empty;
     defer repo_events.deinit(allocator);
@@ -145,9 +147,7 @@ pub fn consumeInTransaction(
         const head_oid = (try rf.readRecur(.xit, repo_opts, state.readOnly(), io, .{ .ref = ref })) orelse return error.OidNotFound;
         try commit_iter.include(&head_oid);
 
-        while (try commit_iter.next()) |commit_object| {
-            defer commit_object.deinit();
-
+        while (try commit_iter.next(arena.allocator())) |commit_object| {
             var oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
             _ = try std.fmt.hexToBytes(&oid, &commit_object.oid);
 
@@ -157,28 +157,37 @@ pub fn consumeInTransaction(
             }
 
             const parent_oids = commit_object.content.commit.metadata.parent_oids orelse return error.ParentOidsNotFound;
-
-            if (parent_oids.len > 1) {
-                // this is a merge commit
-                try repo_events.append(allocator, .{ .parent_oid = null, .oid = oid, .is_merge = true });
-            } else {
-                if (parent_oids.len == 0) {
-                    try repo_events.append(allocator, .{ .parent_oid = null, .oid = oid, .is_merge = false });
-                } else {
-                    var parent_oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-                    _ = try std.fmt.hexToBytes(&parent_oid, &parent_oids[0]);
-                    try repo_events.append(allocator, .{ .parent_oid = parent_oid, .oid = oid, .is_merge = false });
-                }
-            }
+            try repo_events.append(allocator, .{ .parent_oids = parent_oids, .oid = oid });
         }
     }
-    if (repo_events.items.len == 0) return;
+
+    // if there are no events to process, look at the oid at HEAD and update
+    // the last_object_id to point to it. this is important in situations
+    // where we do a merge and then force-push to remove the merge. see the
+    // merge test for an example.
+    if (repo_events.items.len == 0) {
+        const head_oid_hex = (try rf.readRecur(.xit, repo_opts, state.readOnly(), io, .{ .ref = ref })) orelse return error.OidNotFound;
+        var head_oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&head_oid, &head_oid_hex);
+
+        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &head_oid)) orelse return error.CursorNotFound;
+        const haxy_moment = try DB.HashMap(.read_only).init(haxy_moment_cursor);
+
+        const moment_index_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "moment-index")) orelse return error.CursorNotFound;
+        const moment_index = try moment_index_cursor.readUint();
+
+        try haxy.slice(moment_index + 1);
+        try state.extra.moment.put(hash.hashInt(repo_opts.hash, "haxy-last-object-id"), .{ .bytes = &head_oid });
+        return;
+    }
 
     // if this branch was rebased and force pushed, we need to detect that and
     // properly revert the haxy state to the last valid state. we detect this
     // by simply asking if the last event is a descendent of the last event
     // we consumed. if it isn't, then we know the haxy state needs to be reverted.
     if (last_object_id_maybe) |*last_object_id| {
+        var is_rebased = false;
+
         _ = mrg.getDescendent(
             .xit,
             repo_opts,
@@ -188,9 +197,30 @@ pub fn consumeInTransaction(
             &std.fmt.bytesToHex(last_object_id, .lower),
             &std.fmt.bytesToHex(repo_events.items[0].oid, .lower),
         ) catch |err| switch (err) {
-            error.DescendentNotFound => {
-                if (repo_events.items[repo_events.items.len - 1].parent_oid) |*parent_oid| {
-                    const old_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, parent_oid)) orelse return error.CursorNotFound;
+            error.DescendentNotFound => is_rebased = true,
+            else => |e| return e,
+        };
+
+        if (is_rebased) {
+            const parent_oids = repo_events.items[repo_events.items.len - 1].parent_oids;
+            switch (parent_oids.len) {
+                0 => {
+                    // the branch was rebased all the way to the very beginning.
+                    // we have a repo event with no parent, which means it is now
+                    // the very first event. all we need to do is set the haxy list
+                    // to be empty and make a new haxy_moments map to work with.
+
+                    try haxy.slice(0);
+                    haxy_moments_cursor = try haxy.appendCursor();
+                    haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
+
+                    last_object_id_maybe = null;
+                },
+                1 => {
+                    var oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+                    _ = try std.fmt.hexToBytes(&oid, &parent_oids[0]);
+
+                    const old_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &oid)) orelse return error.CursorNotFound;
                     const old_moment = try DB.HashMap(.read_only).init(old_moment_cursor);
 
                     const old_moment_index_cursor = try old_moment.getCursor(hash.hashInt(repo_opts.hash, "moment-index")) orelse return error.CursorNotFound;
@@ -206,24 +236,13 @@ pub fn consumeInTransaction(
                     try haxy_moments_cursor.write(.{ .slot = old_haxy_moments_cursor.slot() });
                     haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
 
-                    last_object_id_maybe = parent_oid.*;
-                } else {
-                    // the branch was rebased all the way to the very beginning.
-                    // we have a repo event with no parent, which means it is now
-                    // the very first event. all we need to do is set the haxy list
-                    // to be empty and make a new haxy_moments map to work with.
-
-                    try haxy.slice(0);
-                    haxy_moments_cursor = try haxy.appendCursor();
-                    haxy_moments = try DB.HashMap(.read_write).init(haxy_moments_cursor);
-
-                    last_object_id_maybe = null;
-                }
-            },
-            else => |e| return e,
-        };
+                    last_object_id_maybe = oid;
+                },
+                else => return error.UnexpectedParentCount,
+            }
+        }
     } else {
-        if (repo_events.items[repo_events.items.len - 1].parent_oid) |_| {
+        if (repo_events.items[repo_events.items.len - 1].parent_oids.len != 0) {
             // there is no last_object_id, but this event has a parent.
             // this is an invalid state. if the event has a parent, that
             // implies that an event has already been processed, but
@@ -240,15 +259,36 @@ pub fn consumeInTransaction(
         // create a moment for this object id
         var haxy_moment_cursor = try haxy_moments.putCursor(hash.bytesToInt(repo_opts.hash, &repo_event.oid));
 
-        // if there was a previous object id, make this haxy moment's initial value to it.
+        // if there was a previous object id, set this haxy moment's initial value to it.
         // this efficiently "clones" the map so we make further modifications based on it.
-        if (last_object_id_maybe) |*last_object_id| {
-            if (try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, last_object_id))) |last_haxy_moment_cursor| {
-                try haxy_moment_cursor.write(.{ .slot = last_haxy_moment_cursor.slot() });
-            }
+        if (repo_event.parent_oids.len > 0) {
+            var first_parent_oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&first_parent_oid, &repo_event.parent_oids[0]);
+
+            const first_parent_haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &first_parent_oid)) orelse return error.CursorNotFound;
+            try haxy_moment_cursor.write(.{ .slot = first_parent_haxy_moment_cursor.slot() });
         }
 
         const haxy_moment = try DB.HashMap(.read_write).init(haxy_moment_cursor);
+
+        // merge changes from every parent after the first parent. the first parent
+        // is the baseline, so a later parent only contributes values it changed.
+        if (repo_event.parent_oids.len > 1) {
+            var first_parent_oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&first_parent_oid, &repo_event.parent_oids[0]);
+            const first_parent_haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &first_parent_oid)) orelse return error.CursorNotFound;
+            const first_parent_haxy_moment = try DB.HashMap(.read_only).init(first_parent_haxy_moment_cursor);
+
+            for (repo_event.parent_oids[1..]) |*parent_oid| {
+                var oid: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&oid, parent_oid);
+
+                const parent_haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &oid)) orelse return error.CursorNotFound;
+                const parent_haxy_moment = try DB.HashMap(.read_only).init(parent_haxy_moment_cursor);
+
+                try mergeChangedMapEntries(DB, haxy_moment, parent_haxy_moment, first_parent_haxy_moment, true);
+            }
+        }
 
         // associate this moment with the index it will first appear at in the haxy list.
         // this will be important later so we can truncate that list if the user ever
@@ -256,12 +296,9 @@ pub fn consumeInTransaction(
         try haxy_moment.put(hash.hashInt(repo_opts.hash, "moment-index"), .{ .uint = try haxy.count() - 1 });
 
         // consume the event unless it's a merge commit
-        if (!repo_event.is_merge) {
+        if (repo_event.parent_oids.len <= 1) {
             var commit_object = try obj.Object(.xit, repo_opts, .full).init(state.readOnly(), io, allocator, &std.fmt.bytesToHex(repo_event.oid, .lower));
             defer commit_object.deinit();
-
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            defer arena.deinit();
 
             // read the message from the commit
             try commit_object.object_reader.seekTo(commit_object.content.commit.message_position);
@@ -312,6 +349,46 @@ fn upsert(
             }
         },
         else => @compileError("upsert expects a struct"),
+    }
+}
+
+fn mergeChangedMapEntries(
+    comptime DB: type,
+    target: DB.HashMap(.read_write),
+    parent: DB.HashMap(.read_only),
+    baseline: DB.HashMap(.read_only),
+    comptime is_top_level: bool,
+) !void {
+    var parent_iter = try parent.iterator();
+    while (try parent_iter.next()) |kv_pair_cursor| {
+        const kv_pair = try kv_pair_cursor.readKeyValuePair();
+
+        const baseline_value_cursor = try baseline.getCursor(kv_pair.hash) orelse {
+            try target.put(kv_pair.hash, .{ .slot = kv_pair.value_cursor.slot() });
+            continue;
+        };
+
+        if (baseline_value_cursor.slot().value == kv_pair.value_cursor.slot().value) {
+            continue;
+        }
+
+        if (kv_pair.value_cursor.slot().tag != baseline_value_cursor.slot().tag) {
+            return error.UnexpectedTag;
+        }
+
+        const tag = kv_pair.value_cursor.slot().tag;
+
+        if (tag == .hash_map) {
+            const target_child_cursor = try target.putCursor(kv_pair.hash);
+            const target_child = try DB.HashMap(.read_write).init(target_child_cursor);
+            const parent_child = try DB.HashMap(.read_only).init(kv_pair.value_cursor);
+            const baseline_child = try DB.HashMap(.read_only).init(baseline_value_cursor);
+            try mergeChangedMapEntries(DB, target_child, parent_child, baseline_child, false);
+        } else if (is_top_level) {
+            continue;
+        } else {
+            try target.put(kv_pair.hash, .{ .slot = kv_pair.value_cursor.slot() });
+        }
     }
 }
 

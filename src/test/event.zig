@@ -634,4 +634,73 @@ test "merge" {
             try std.testing.expectEqualStrings(events_to_consume2[0].data.issue.tags, first_issue.issue.tags);
         }
     }
+
+    //
+    // insert issues as commits in the repo
+    //
+
+    {
+        var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer json.deinit();
+
+        for (events_to_consume, 0..) |event, i| {
+            json.clearRetainingCapacity();
+
+            try std.json.Stringify.value(event, .{}, &json.writer);
+
+            // commit the event into a special branch
+            _ = try repo.commitAtRef(
+                io,
+                allocator,
+                // make the first event have no parents so we completely rebase the branch,
+                // undoing the merge that we did above
+                .{ .parent_oids = if (i == 0) &.{} else null, .message = json.written() },
+                null,
+                .{ .kind = .head, .name = "haxy/meta" },
+            );
+        }
+    }
+
+    //
+    // consume events into the database
+    //
+
+    {
+        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+
+        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
+
+        // read the moment we just created
+        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
+
+        // get the last object id
+        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
+        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+        _ = try last_object_id_cursor.readBytes(&last_object_id);
+
+        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
+
+        try std.testing.expectEqual(1, try haxy.count());
+
+        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
+        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
+
+        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
+        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+
+        // get the map of issues
+        const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
+        const event_id_to_issue = try Repo.DB.HashMap(.read_only).init(event_id_to_issue_cursor);
+
+        // make sure the new issue is not there
+        {
+            // get the issue out of the map
+            var first_issue_id: [evt.event_id_size]u8 = undefined;
+            _ = try std.fmt.hexToBytes(&first_issue_id, &events_to_consume2[0].id);
+            const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_issue_id));
+            try std.testing.expect(null == first_issue_cursor);
+        }
+    }
 }
