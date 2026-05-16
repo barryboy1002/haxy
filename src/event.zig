@@ -6,13 +6,21 @@ const mrg = xit.merge;
 const obj = xit.object;
 const rf = xit.ref;
 
+pub const user = @import("event/user.zig");
+
 pub const event_id_size: usize = 32;
 
 pub const EventKind = enum {
+    user,
     issue,
 };
 
 pub const EventData = union(EventKind) {
+    user: struct {
+        name: []const u8,
+        email: []const u8,
+        password_hash: []const u8,
+    },
     issue: struct {
         title: []const u8,
         description: []const u8,
@@ -27,6 +35,13 @@ pub const EventData = union(EventKind) {
         kind: EventKind,
     ) !EventData {
         return switch (kind) {
+            .user => .{
+                .user = .{
+                    .name = try readBytes(DB, hash_kind, allocator, map, "name"),
+                    .email = try readBytes(DB, hash_kind, allocator, map, "email"),
+                    .password_hash = try readBytes(DB, hash_kind, allocator, map, "password_hash"),
+                },
+            },
             .issue => .{
                 .issue = .{
                     .title = try readBytes(DB, hash_kind, allocator, map, "title"),
@@ -313,6 +328,15 @@ pub fn consumeInTransaction(
             _ = try std.fmt.hexToBytes(&current_event_id, &event.id);
 
             switch (event.data) {
+                .user => |data| {
+                    const event_id_to_user_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->user"));
+                    const event_id_to_user = try DB.HashMap(.read_write).init(event_id_to_user_cursor);
+
+                    const user_cursor = try event_id_to_user.putCursor(hash.hashInt(repo_opts.hash, &current_event_id));
+                    const user_map = try DB.HashMap(.read_write).init(user_cursor);
+
+                    try upsert(DB, repo_opts.hash, user_map, @TypeOf(data), data);
+                },
                 .issue => |data| {
                     const event_id_to_issue_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->issue"));
                     const event_id_to_issue = try DB.HashMap(.read_write).init(event_id_to_issue_cursor);

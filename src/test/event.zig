@@ -1,6 +1,7 @@
 const std = @import("std");
 const hx = @import("haxy");
 const evt = hx.event;
+const usr = evt.user;
 const xit = hx.xit;
 const rp = xit.repo;
 const hash = xit.hash;
@@ -780,4 +781,132 @@ test "merge" {
     //
 
     try std.testing.expectError(error.MergeConflict, evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }));
+}
+
+test "user" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const temp_dir_name = "temp-event-user";
+
+    // create the temp dir
+    const cwd = std.Io.Dir.cwd();
+    var temp_dir_or_err = cwd.openDir(io, temp_dir_name, .{});
+    if (temp_dir_or_err) |*temp_dir| {
+        temp_dir.close(io);
+        try cwd.deleteTree(io, temp_dir_name);
+    } else |_| {}
+    var temp_dir = try cwd.createDirPathOpen(io, temp_dir_name, .{});
+    defer cwd.deleteTree(io, temp_dir_name) catch {};
+    defer temp_dir.close(io);
+
+    const cwd_path = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd_path);
+
+    const work_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name });
+    defer allocator.free(work_path);
+
+    const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
+    const Repo = rp.Repo(.xit, repo_opts);
+    var repo = try Repo.init(io, allocator, .{ .path = work_path });
+    defer repo.deinit(io, allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    //
+    // define test events
+    //
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const user_event_id = evt.randomId(prng.random());
+
+    var first_password_hash_buf: [usr.password_hash_max_len]u8 = undefined;
+    const first_password_hash = try usr.hashPassword("correct horse battery staple", &first_password_hash_buf, io);
+
+    var second_password_hash_buf: [usr.password_hash_max_len]u8 = undefined;
+    const second_password_hash = try usr.hashPassword("Tr0ub4dor&3", &second_password_hash_buf, io);
+
+    const events_to_consume = [_]evt.Event{
+        .{
+            .id = std.fmt.bytesToHex(user_event_id, .lower),
+            .data = .{
+                .user = .{
+                    .name = "Alice Example",
+                    .email = "alice@example.test",
+                    .password_hash = first_password_hash,
+                },
+            },
+        },
+        // this event edits the previous one because it has the same id
+        .{
+            .id = std.fmt.bytesToHex(user_event_id, .lower),
+            .data = .{
+                .user = .{
+                    .name = "Alice Example",
+                    .email = "alice@example.test",
+                    .password_hash = second_password_hash,
+                },
+            },
+        },
+    };
+
+    //
+    // insert users as commits in the repo
+    //
+
+    {
+        var json: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer json.deinit();
+
+        for (events_to_consume) |event| {
+            json.clearRetainingCapacity();
+
+            try std.json.Stringify.value(event, .{}, &json.writer);
+
+            // commit the event into a special branch
+            _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
+        }
+    }
+
+    //
+    // consume events into the database
+    //
+
+    {
+        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+
+        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
+
+        // read the moment we just created
+        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
+
+        // get the last object id
+        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
+        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+        _ = try last_object_id_cursor.readBytes(&last_object_id);
+
+        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
+
+        try std.testing.expectEqual(1, try haxy.count());
+
+        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
+        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
+
+        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
+        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+
+        // get the map of users
+        const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->user")) orelse return error.NotFound;
+        const event_id_to_user = try Repo.DB.HashMap(.read_only).init(event_id_to_user_cursor);
+
+        // get the user out of the map that was edited
+        const user_cursor = try event_id_to_user.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)) orelse return error.NotFound;
+        const user_map = try Repo.DB.HashMap(.read_only).init(user_cursor);
+        const user = try evt.EventData.read(Repo.DB, repo_opts.hash, arena.allocator(), user_map, .user);
+
+        // the password was correctly edited
+        try std.testing.expectEqualStrings(events_to_consume[1].data.user.password_hash, user.user.password_hash);
+    }
 }
