@@ -17,21 +17,27 @@ pub const EventKind = enum {
 };
 
 pub const EventData = union(EventKind) {
-    user: ?struct {
+    user: User,
+    repo: Repo,
+    issue: Issue,
+
+    pub const User = struct {
         name: []const u8,
         email: []const u8,
         password_hash: []const u8,
-    },
-    repo: ?struct {
+    };
+
+    pub const Repo = struct {
         user_id: []const u8,
         name: []const u8,
         enable_issue: bool,
-    },
-    issue: ?struct {
+    };
+
+    pub const Issue = struct {
         title: []const u8,
         description: []const u8,
         tags: []const u8,
-    },
+    };
 
     pub fn read(
         comptime DB: type,
@@ -65,6 +71,24 @@ pub const EventData = union(EventKind) {
         };
     }
 
+    pub fn fromJson(
+        allocator: std.mem.Allocator,
+        kind: EventKind,
+        source: std.json.Value,
+    ) !EventData {
+        return switch (kind) {
+            .user => .{
+                .user = try std.json.parseFromValueLeaky(User, allocator, source, .{}),
+            },
+            .repo => .{
+                .repo = try std.json.parseFromValueLeaky(Repo, allocator, source, .{}),
+            },
+            .issue => .{
+                .issue = try std.json.parseFromValueLeaky(Issue, allocator, source, .{}),
+            },
+        };
+    }
+
     fn readBytes(
         comptime DB: type,
         comptime hash_kind: hash.HashKind,
@@ -94,7 +118,44 @@ pub const EventData = union(EventKind) {
 
 pub const Event = struct {
     id: [event_id_size * 2]u8,
-    data: EventData,
+    kind: EventKind,
+    data: ?EventData = null,
+
+    pub fn jsonStringify(self: Event, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("id");
+        try jw.write(self.id);
+        try jw.objectField("kind");
+        try jw.write(self.kind);
+        try jw.objectField("data");
+        if (self.data) |data_maybe| {
+            switch (data_maybe) {
+                .user => |data| try jw.write(data),
+                .repo => |data| try jw.write(data),
+                .issue => |data| try jw.write(data),
+            }
+        } else {
+            try jw.write(null);
+        }
+        try jw.endObject();
+    }
+
+    fn fromString(allocator: std.mem.Allocator, message: []const u8) !Event {
+        const JsonEvent = struct {
+            id: [event_id_size * 2]u8,
+            kind: EventKind,
+            data: ?std.json.Value = null,
+        };
+        const json_event = try std.json.parseFromSliceLeaky(JsonEvent, allocator, message, .{});
+        return .{
+            .id = json_event.id,
+            .kind = json_event.kind,
+            .data = if (json_event.data) |data|
+                try EventData.fromJson(allocator, json_event.kind, data)
+            else
+                null,
+        };
+    }
 };
 
 pub fn randomId(random: std.Random) [event_id_size]u8 {
@@ -349,23 +410,23 @@ pub fn consumeInTransaction(
             try commit_object.object_reader.seekTo(commit_object.content.commit.message_position);
             const message = try commit_object.object_reader.interface.allocRemaining(arena.allocator(), .unlimited);
 
-            const event = try std.json.parseFromSliceLeaky(Event, arena.allocator(), message, .{});
+            const event = try Event.fromString(arena.allocator(), message);
 
             // get the id of the current event as bytes
             var current_event_id: [event_id_size]u8 = undefined;
             _ = try std.fmt.hexToBytes(&current_event_id, &event.id);
 
-            switch (event.data) {
-                .user => |data_maybe| {
+            switch (event.kind) {
+                .user => {
                     const user_key = hash.hashInt(repo_opts.hash, &current_event_id);
 
                     const event_id_to_user_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->user"));
                     const event_id_to_user = try DB.HashMap(.read_write).init(event_id_to_user_cursor);
 
-                    if (data_maybe) |data| {
+                    if (event.data) |data| {
                         const user_cursor = try event_id_to_user.putCursor(user_key);
                         const user_map = try DB.HashMap(.read_write).init(user_cursor);
-                        try upsert(DB, repo_opts.hash, user_map, @TypeOf(data), data);
+                        try upsert(DB, repo_opts.hash, user_map, EventData.User, data.user);
                     } else {
                         if (!try event_id_to_user.remove(user_key)) return error.EventNotFound;
 
@@ -374,28 +435,28 @@ pub fn consumeInTransaction(
                         _ = try user_id_to_repos.remove(user_key);
                     }
                 },
-                .repo => |data_maybe| {
+                .repo => {
                     const repo_key = hash.hashInt(repo_opts.hash, &current_event_id);
 
                     const event_id_to_repo_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->repo"));
                     const event_id_to_repo = try DB.HashMap(.read_write).init(event_id_to_repo_cursor);
 
-                    if (data_maybe) |data| {
+                    if (event.data) |data| {
                         const repo_cursor = try event_id_to_repo.putCursor(repo_key);
                         const repo_map = try DB.HashMap(.read_write).init(repo_cursor);
-                        try upsert(DB, repo_opts.hash, repo_map, @TypeOf(data), data);
+                        try upsert(DB, repo_opts.hash, repo_map, EventData.Repo, data.repo);
 
                         const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "user-id->repos"));
                         const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
 
-                        const user_repos_cursor = try user_id_to_repos.putCursor(hash.hashInt(repo_opts.hash, data.user_id));
+                        const user_repos_cursor = try user_id_to_repos.putCursor(hash.hashInt(repo_opts.hash, data.repo.user_id));
                         const user_repos = try DB.CountedHashSet(.read_write).init(user_repos_cursor);
                         try user_repos.put(repo_key, .{ .bytes = &current_event_id });
                     } else {
                         if (try event_id_to_repo.getCursor(repo_key)) |existing_repo_cursor| {
                             const existing_repo_map = try DB.HashMap(.read_only).init(existing_repo_cursor);
                             const existing_repo = try EventData.read(DB, repo_opts.hash, arena.allocator(), existing_repo_map, .repo);
-                            const data = existing_repo.repo orelse return error.InvalidEventData;
+                            const data = existing_repo.repo;
 
                             const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "user-id->repos"));
                             const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
@@ -408,16 +469,16 @@ pub fn consumeInTransaction(
                         if (!try event_id_to_repo.remove(repo_key)) return error.EventNotFound;
                     }
                 },
-                .issue => |data_maybe| {
+                .issue => {
                     const issue_key = hash.hashInt(repo_opts.hash, &current_event_id);
 
                     const event_id_to_issue_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->issue"));
                     const event_id_to_issue = try DB.HashMap(.read_write).init(event_id_to_issue_cursor);
 
-                    if (data_maybe) |data| {
+                    if (event.data) |data| {
                         const issue_cursor = try event_id_to_issue.putCursor(issue_key);
                         const issue = try DB.HashMap(.read_write).init(issue_cursor);
-                        try upsert(DB, repo_opts.hash, issue, @TypeOf(data), data);
+                        try upsert(DB, repo_opts.hash, issue, EventData.Issue, data.issue);
                     } else {
                         if (!try event_id_to_issue.remove(issue_key)) return error.EventNotFound;
                     }
