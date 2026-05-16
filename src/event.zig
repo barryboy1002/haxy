@@ -71,24 +71,6 @@ pub const EventData = union(EventKind) {
         };
     }
 
-    pub fn fromJson(
-        allocator: std.mem.Allocator,
-        kind: EventKind,
-        source: std.json.Value,
-    ) !EventData {
-        return switch (kind) {
-            .user => .{
-                .user = try std.json.parseFromValueLeaky(User, allocator, source, .{}),
-            },
-            .repo => .{
-                .repo = try std.json.parseFromValueLeaky(Repo, allocator, source, .{}),
-            },
-            .issue => .{
-                .issue = try std.json.parseFromValueLeaky(Issue, allocator, source, .{}),
-            },
-        };
-    }
-
     fn readBytes(
         comptime DB: type,
         comptime hash_kind: hash.HashKind,
@@ -118,24 +100,41 @@ pub const EventData = union(EventKind) {
 
 pub const Event = struct {
     id: [event_id_size * 2]u8,
-    kind: EventKind,
-    data: ?EventData = null,
+    data: MaybeEventData,
+
+    pub const MaybeEventData = union(EventKind) {
+        user: ?EventData.User,
+        repo: ?EventData.Repo,
+        issue: ?EventData.Issue,
+
+        fn fromJson(
+            allocator: std.mem.Allocator,
+            kind: EventKind,
+            value_maybe: ?std.json.Value,
+        ) !MaybeEventData {
+            return switch (kind) {
+                .user => .{
+                    .user = if (value_maybe) |value| try std.json.parseFromValueLeaky(EventData.User, allocator, value, .{}) else null,
+                },
+                .repo => .{
+                    .repo = if (value_maybe) |value| try std.json.parseFromValueLeaky(EventData.Repo, allocator, value, .{}) else null,
+                },
+                .issue => .{
+                    .issue = if (value_maybe) |value| try std.json.parseFromValueLeaky(EventData.Issue, allocator, value, .{}) else null,
+                },
+            };
+        }
+    };
 
     pub fn jsonStringify(self: Event, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("id");
         try jw.write(self.id);
         try jw.objectField("kind");
-        try jw.write(self.kind);
+        try jw.write(@tagName(self.data));
         try jw.objectField("data");
-        if (self.data) |data_maybe| {
-            switch (data_maybe) {
-                .user => |data| try jw.write(data),
-                .repo => |data| try jw.write(data),
-                .issue => |data| try jw.write(data),
-            }
-        } else {
-            try jw.write(null);
+        switch (self.data) {
+            inline else => |data_maybe| try jw.write(data_maybe),
         }
         try jw.endObject();
     }
@@ -149,11 +148,7 @@ pub const Event = struct {
         const json_event = try std.json.parseFromSliceLeaky(JsonEvent, allocator, message, .{});
         return .{
             .id = json_event.id,
-            .kind = json_event.kind,
-            .data = if (json_event.data) |data|
-                try EventData.fromJson(allocator, json_event.kind, data)
-            else
-                null,
+            .data = try MaybeEventData.fromJson(allocator, json_event.kind, json_event.data),
         };
     }
 };
@@ -416,17 +411,17 @@ pub fn consumeInTransaction(
             var current_event_id: [event_id_size]u8 = undefined;
             _ = try std.fmt.hexToBytes(&current_event_id, &event.id);
 
-            switch (event.kind) {
-                .user => {
+            switch (event.data) {
+                .user => |user_data_maybe| {
                     const user_key = hash.hashInt(repo_opts.hash, &current_event_id);
 
                     const event_id_to_user_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->user"));
                     const event_id_to_user = try DB.HashMap(.read_write).init(event_id_to_user_cursor);
 
-                    if (event.data) |data| {
+                    if (user_data_maybe) |user_data| {
                         const user_cursor = try event_id_to_user.putCursor(user_key);
                         const user_map = try DB.HashMap(.read_write).init(user_cursor);
-                        try upsert(DB, repo_opts.hash, user_map, EventData.User, data.user);
+                        try upsert(DB, repo_opts.hash, user_map, EventData.User, user_data);
                     } else {
                         if (!try event_id_to_user.remove(user_key)) return error.EventNotFound;
 
@@ -435,21 +430,21 @@ pub fn consumeInTransaction(
                         _ = try user_id_to_repos.remove(user_key);
                     }
                 },
-                .repo => {
+                .repo => |repo_data_maybe| {
                     const repo_key = hash.hashInt(repo_opts.hash, &current_event_id);
 
                     const event_id_to_repo_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->repo"));
                     const event_id_to_repo = try DB.HashMap(.read_write).init(event_id_to_repo_cursor);
 
-                    if (event.data) |data| {
+                    if (repo_data_maybe) |repo_data| {
                         const repo_cursor = try event_id_to_repo.putCursor(repo_key);
                         const repo_map = try DB.HashMap(.read_write).init(repo_cursor);
-                        try upsert(DB, repo_opts.hash, repo_map, EventData.Repo, data.repo);
+                        try upsert(DB, repo_opts.hash, repo_map, EventData.Repo, repo_data);
 
                         const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "user-id->repos"));
                         const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
 
-                        const user_repos_cursor = try user_id_to_repos.putCursor(hash.hashInt(repo_opts.hash, data.repo.user_id));
+                        const user_repos_cursor = try user_id_to_repos.putCursor(hash.hashInt(repo_opts.hash, repo_data.user_id));
                         const user_repos = try DB.CountedHashSet(.read_write).init(user_repos_cursor);
                         try user_repos.put(repo_key, .{ .bytes = &current_event_id });
                     } else {
@@ -469,16 +464,16 @@ pub fn consumeInTransaction(
                         if (!try event_id_to_repo.remove(repo_key)) return error.EventNotFound;
                     }
                 },
-                .issue => {
+                .issue => |issue_data_maybe| {
                     const issue_key = hash.hashInt(repo_opts.hash, &current_event_id);
 
                     const event_id_to_issue_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "event-id->issue"));
                     const event_id_to_issue = try DB.HashMap(.read_write).init(event_id_to_issue_cursor);
 
-                    if (event.data) |data| {
+                    if (issue_data_maybe) |issue_data| {
                         const issue_cursor = try event_id_to_issue.putCursor(issue_key);
                         const issue = try DB.HashMap(.read_write).init(issue_cursor);
-                        try upsert(DB, repo_opts.hash, issue, EventData.Issue, data.issue);
+                        try upsert(DB, repo_opts.hash, issue, EventData.Issue, issue_data);
                     } else {
                         if (!try event_id_to_issue.remove(issue_key)) return error.EventNotFound;
                     }
