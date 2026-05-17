@@ -146,7 +146,7 @@ test "rebase" {
         // get the issue out of the map that was edited
         const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_event_id)) orelse return error.NotFound;
         const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
-        const first_issue = try evt.Issue.read(Repo.DB, repo_opts.hash, &arena, first_issue_map);
+        const first_issue = try evt.read(evt.Issue, Repo.DB, repo_opts.hash, &arena, first_issue_map);
 
         // the description was correctly edited
         try std.testing.expectEqualStrings(events_to_consume[1].data.issue.?.description, first_issue.description);
@@ -282,7 +282,7 @@ test "rebase" {
         // get the issue out of the map that was edited
         const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_event_id)) orelse return error.NotFound;
         const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
-        const first_issue = try evt.Issue.read(Repo.DB, repo_opts.hash, &arena, first_issue_map);
+        const first_issue = try evt.read(evt.Issue, Repo.DB, repo_opts.hash, &arena, first_issue_map);
 
         // the description is no longer edited
         try std.testing.expectEqualStrings(events_to_consume[0].data.issue.?.description, first_issue.description);
@@ -493,7 +493,7 @@ test "merge" {
         _ = try std.fmt.hexToBytes(&first_issue_id, &events_to_consume[0].id);
         const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_issue_id)) orelse return error.NotFound;
         const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
-        const first_issue = try evt.Issue.read(Repo.DB, repo_opts.hash, &arena, first_issue_map);
+        const first_issue = try evt.read(evt.Issue, Repo.DB, repo_opts.hash, &arena, first_issue_map);
 
         try std.testing.expectEqualStrings(events_to_consume[0].data.issue.?.description, first_issue.description);
         try std.testing.expectEqualStrings(events_to_consume[0].data.issue.?.tags, first_issue.tags);
@@ -617,7 +617,7 @@ test "merge" {
             _ = try std.fmt.hexToBytes(&first_issue_id, &events_to_consume[0].id);
             const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_issue_id)) orelse return error.NotFound;
             const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
-            const first_issue = try evt.Issue.read(Repo.DB, repo_opts.hash, &arena, first_issue_map);
+            const first_issue = try evt.read(evt.Issue, Repo.DB, repo_opts.hash, &arena, first_issue_map);
 
             try std.testing.expectEqualStrings(events_to_consume[0].data.issue.?.description, first_issue.description);
             try std.testing.expectEqualStrings(events_to_consume[0].data.issue.?.tags, first_issue.tags);
@@ -630,7 +630,7 @@ test "merge" {
             _ = try std.fmt.hexToBytes(&first_issue_id, &events_to_consume2[0].id);
             const first_issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, &first_issue_id)) orelse return error.NotFound;
             const first_issue_map = try Repo.DB.HashMap(.read_only).init(first_issue_cursor);
-            const first_issue = try evt.Issue.read(Repo.DB, repo_opts.hash, &arena, first_issue_map);
+            const first_issue = try evt.read(evt.Issue, Repo.DB, repo_opts.hash, &arena, first_issue_map);
 
             try std.testing.expectEqualStrings(events_to_consume2[0].data.issue.?.description, first_issue.description);
             try std.testing.expectEqualStrings(events_to_consume2[0].data.issue.?.tags, first_issue.tags);
@@ -914,7 +914,7 @@ test "user and repo" {
         // get the user out of the map that was edited
         const user_cursor = try event_id_to_user.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)) orelse return error.NotFound;
         const user_map = try Repo.DB.HashMap(.read_only).init(user_cursor);
-        const user_event = try evt.User.read(Repo.DB, repo_opts.hash, &arena, user_map);
+        const user_event = try evt.read(evt.User, Repo.DB, repo_opts.hash, &arena, user_map);
 
         // the password was correctly edited
         try std.testing.expectEqualStrings(events_to_consume[1].data.user.?.password_hash, user_event.password_hash);
@@ -926,7 +926,7 @@ test "user and repo" {
         // get the repo out of the map
         const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(repo_opts.hash, &repo_event_id)) orelse return error.NotFound;
         const repo_map = try Repo.DB.HashMap(.read_only).init(repo_cursor);
-        const repo_event = try evt.Repo.read(Repo.DB, repo_opts.hash, &arena, repo_map);
+        const repo_event = try evt.read(evt.Repo, Repo.DB, repo_opts.hash, &arena, repo_map);
 
         try std.testing.expectEqualSlices(u8, &user_event_id, repo_event.user_id);
         try std.testing.expectEqualStrings("ziglings", repo_event.name);

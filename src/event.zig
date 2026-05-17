@@ -301,7 +301,7 @@ pub fn consumeInTransaction(
                     if (user_data_maybe) |user_data| {
                         const user_cursor = try event_id_to_user.putCursor(user_key);
                         const user = try DB.HashMap(.read_write).init(user_cursor);
-                        try upsert(DB, repo_opts.hash, user, User, user_data);
+                        try upsert(User, DB, repo_opts.hash, user, user_data);
                     } else {
                         if (!try event_id_to_user.remove(user_key)) return error.EventNotFound;
 
@@ -319,7 +319,7 @@ pub fn consumeInTransaction(
                     if (repo_data_maybe) |repo_data| {
                         const repo_cursor = try event_id_to_repo.putCursor(repo_key);
                         const repo = try DB.HashMap(.read_write).init(repo_cursor);
-                        try upsert(DB, repo_opts.hash, repo, Repo, repo_data);
+                        try upsert(Repo, DB, repo_opts.hash, repo, repo_data);
 
                         const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "user-id->repos"));
                         const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
@@ -330,7 +330,7 @@ pub fn consumeInTransaction(
                     } else {
                         if (try event_id_to_repo.getCursor(repo_key)) |existing_repo_cursor| {
                             const existing_repo = try DB.HashMap(.read_only).init(existing_repo_cursor);
-                            const existing_repo_data = try Repo.read(DB, repo_opts.hash, &arena, existing_repo);
+                            const existing_repo_data = try read(Repo, DB, repo_opts.hash, &arena, existing_repo);
 
                             const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(repo_opts.hash, "user-id->repos"));
                             const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
@@ -352,7 +352,7 @@ pub fn consumeInTransaction(
                     if (issue_data_maybe) |issue_data| {
                         const issue_cursor = try event_id_to_issue.putCursor(issue_key);
                         const issue = try DB.HashMap(.read_write).init(issue_cursor);
-                        try upsert(DB, repo_opts.hash, issue, Issue, issue_data);
+                        try upsert(Issue, DB, repo_opts.hash, issue, issue_data);
                     } else {
                         if (!try event_id_to_issue.remove(issue_key)) return error.EventNotFound;
                     }
@@ -376,7 +376,47 @@ pub fn consumeInTransaction(
 // reading from xitdb
 //
 
-pub fn readBytes(
+pub fn read(
+    comptime T: type,
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    arena: *std.heap.ArenaAllocator,
+    map: DB.HashMap(.read_only),
+) !T {
+    var value: T = undefined;
+
+    switch (@typeInfo(T)) {
+        .@"struct" => |struct_info| {
+            inline for (struct_info.fields) |field| {
+                switch (@typeInfo(field.type)) {
+                    .pointer => |pointer_info| {
+                        if (pointer_info.size == .slice and pointer_info.child == u8 and pointer_info.is_const) {
+                            @field(value, field.name) = try readBytes(DB, hash_kind, arena.allocator(), map, field.name);
+                        } else {
+                            @compileError("unsupported read field type: " ++ @typeName(field.type));
+                        }
+                    },
+                    .array => |array_info| {
+                        if (array_info.child == u8) {
+                            const bytes = try readBytes(DB, hash_kind, arena.allocator(), map, field.name);
+                            if (bytes.len != array_info.len) return error.InvalidByteArrayLength;
+                            @memcpy(@field(value, field.name)[0..], bytes);
+                        } else {
+                            @compileError("unsupported read field type: " ++ @typeName(field.type));
+                        }
+                    },
+                    .bool => @field(value, field.name) = try readBool(DB, hash_kind, map, field.name),
+                    else => @compileError("unsupported read field type: " ++ @typeName(field.type)),
+                }
+            }
+        },
+        else => @compileError("read expects a struct"),
+    }
+
+    return value;
+}
+
+fn readBytes(
     comptime DB: type,
     comptime hash_kind: hash.HashKind,
     allocator: std.mem.Allocator,
@@ -387,7 +427,7 @@ pub fn readBytes(
     return try cursor.readBytesAlloc(allocator, null);
 }
 
-pub fn readBool(
+fn readBool(
     comptime DB: type,
     comptime hash_kind: hash.HashKind,
     map: DB.HashMap(.read_only),
@@ -408,13 +448,13 @@ pub fn readBool(
 //
 
 fn upsert(
+    comptime T: type,
     comptime DB: type,
     comptime hash_kind: hash.HashKind,
     map: DB.HashMap(.read_write),
-    comptime Data: type,
-    data: Data,
+    data: T,
 ) !void {
-    switch (@typeInfo(Data)) {
+    switch (@typeInfo(T)) {
         .@"struct" => |struct_info| {
             inline for (struct_info.fields) |field| {
                 try upsertField(DB, hash_kind, map, field.name, field.type, @field(data, field.name));
