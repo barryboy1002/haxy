@@ -83,7 +83,7 @@ pub fn run(
     try err.print("serving web UI on http://{s}/\n", .{options.wui_listen});
     try err.flush();
 
-    web.run(io, &wui_server, &tasks, err);
+    web.run(io, allocator, &wui_server, &tasks, err);
 
     if (options.tui) {
         runTui(io, allocator, &tasks, err);

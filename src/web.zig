@@ -1,4 +1,5 @@
 const std = @import("std");
+const ui = @import("./ui.zig");
 
 const Asset = struct {
     path: []const u8,
@@ -15,12 +16,14 @@ const assets = [_]Asset{
 
 pub fn run(
     io: std.Io,
+    allocator: std.mem.Allocator,
     net_server: *std.Io.net.Server,
     tasks: *std.Io.Group,
     err: *std.Io.Writer,
 ) void {
     const Listener = struct {
         io: std.Io,
+        allocator: std.mem.Allocator,
         net_server: *std.Io.net.Server,
         tasks: *std.Io.Group,
         err: *std.Io.Writer,
@@ -35,12 +38,13 @@ pub fn run(
 
                 const Connection = struct {
                     io: std.Io,
+                    allocator: std.mem.Allocator,
                     stream: std.Io.net.Stream,
                     err: *std.Io.Writer,
 
                     fn run(conn: @This()) void {
                         defer conn.stream.close(conn.io);
-                        handleConnection(conn.io, conn.stream, conn.err) catch |request_err| {
+                        handleConnection(conn.io, conn.allocator, conn.stream, conn.err) catch |request_err| {
                             logError(conn.err, "web ui request failed: {s}\n", .{@errorName(request_err)});
                         };
                     }
@@ -48,6 +52,7 @@ pub fn run(
 
                 ctx.tasks.async(ctx.io, Connection.run, .{Connection{
                     .io = ctx.io,
+                    .allocator = ctx.allocator,
                     .stream = stream,
                     .err = ctx.err,
                 }});
@@ -57,14 +62,36 @@ pub fn run(
 
     tasks.async(io, Listener.run, .{Listener{
         .io = io,
+        .allocator = allocator,
         .net_server = net_server,
         .tasks = tasks,
         .err = err,
     }});
 }
 
+fn renderIndexHtml(allocator: std.mem.Allocator) ![]const u8 {
+    const template = (findAsset("/index.html") orelse return error.MissingIndexAsset).body;
+
+    var root = try ui.initRoot(allocator);
+    defer root.deinit();
+
+    const content = try ui.generateHtml(allocator, &root);
+    defer allocator.free(content);
+
+    const needle = "{{{ HAXY_CONTENT }}}";
+    const index = std.mem.indexOf(u8, template, needle) orelse return error.MissingTemplateToken;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, template[0..index]);
+    try out.appendSlice(allocator, content);
+    try out.appendSlice(allocator, template[index + needle.len ..]);
+    return try out.toOwnedSlice(allocator);
+}
+
 fn handleConnection(
     io: std.Io,
+    allocator: std.mem.Allocator,
     stream: std.Io.net.Stream,
     err: *std.Io.Writer,
 ) !void {
@@ -81,7 +108,7 @@ fn handleConnection(
             else => |e| return e,
         };
 
-        handleRequest(&http_server, &request) catch |request_err| {
+        handleRequest(&http_server, &request, allocator) catch |request_err| {
             try err.print("web ui request failed: {s}\n", .{@errorName(request_err)});
             try err.flush();
             if (http_server.reader.state == .received_head) {
@@ -97,6 +124,7 @@ fn handleConnection(
 fn handleRequest(
     http_server: *std.http.Server,
     request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
 ) !void {
     const method = if (request.head.method == .HEAD) .GET else request.head.method;
     if (method != .GET) {
@@ -130,7 +158,13 @@ fn handleRequest(
         http_server.reader.state = .ready;
     }
 
-    try writeStaticResponse(http_server, 200, "OK", asset.content_type, asset.body, request.head.method == .HEAD);
+    if (std.mem.eql(u8, asset.path, "index.html")) {
+        const index_html = try renderIndexHtml(allocator);
+        defer allocator.free(index_html);
+        try writeStaticResponse(http_server, 200, "OK", asset.content_type, index_html, request.head.method == .HEAD);
+    } else {
+        try writeStaticResponse(http_server, 200, "OK", asset.content_type, asset.body, request.head.method == .HEAD);
+    }
 }
 
 fn findAsset(request_path: []const u8) ?Asset {
