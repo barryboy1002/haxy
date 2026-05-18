@@ -5,11 +5,10 @@ const hash = xit.hash;
 const ui = @import("./ui.zig");
 const web = @import("./web.zig");
 
-const wui_listen = "127.0.0.1:8082";
-
 pub const Options = struct {
     http_listen: []const u8,
-    ssh_listen: ?[]const u8,
+    ssh_listen: []const u8,
+    wui_listen: []const u8,
     data_dir: []const u8,
     tui: bool,
 };
@@ -52,39 +51,36 @@ pub fn run(
 
     // create ssh listener
 
-    var ssh_server: ?std.Io.net.Server = null;
-    defer if (ssh_server) |*server| server.deinit(io);
-
-    if (options.ssh_listen) |ssh_listen| {
-        const ssh_listen_address = try parseListenAddress(ssh_listen);
-        const ssh_address = try std.Io.net.IpAddress.parseIp4(ssh_listen_address.host, ssh_listen_address.port);
-        ssh_server = try ssh_address.listen(io, .{ .reuse_address = true });
-    }
+    const ssh_listen_address = try parseListenAddress(options.ssh_listen);
+    const ssh_address = try std.Io.net.IpAddress.parseIp4(ssh_listen_address.host, ssh_listen_address.port);
+    var ssh_server = try ssh_address.listen(io, .{ .reuse_address = true });
+    defer ssh_server.deinit(io);
 
     // create wui listener
 
-    const wui_listen_address = try parseListenAddress(wui_listen);
+    const wui_listen_address = try parseListenAddress(options.wui_listen);
     const wui_address = try std.Io.net.IpAddress.parseIp4(wui_listen_address.host, wui_listen_address.port);
     var wui_server = try wui_address.listen(io, .{ .reuse_address = true });
     defer wui_server.deinit(io);
 
+    // start task group
+
     var tasks: std.Io.Group = .init;
     defer tasks.cancel(io);
+
+    // run listeners
 
     try err.print("serving HTTP on {s}, repo root {s}\n", .{ options.http_listen, repo_root_path });
     try err.flush();
 
     runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, &http_server, &tasks, err);
 
-    if (options.ssh_listen) |ssh_listen| {
-        try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ ssh_listen, repo_root_path });
-        try err.flush();
+    try err.print("serving SSH helper connections on {s}, repo root {s}\n", .{ options.ssh_listen, repo_root_path });
+    try err.flush();
 
-        const server = &(ssh_server orelse return error.MissingSshServer);
-        runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, server, &tasks, err);
-    }
+    runSshListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, &ssh_server, &tasks, err);
 
-    try err.print("serving web UI on http://{s}/\n", .{wui_listen});
+    try err.print("serving web UI on http://{s}/\n", .{options.wui_listen});
     try err.flush();
 
     web.run(io, &wui_server, &tasks, err);

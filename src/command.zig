@@ -22,7 +22,7 @@ fn commandHelp(command_kind: CommandKind) Help {
             \\a long-running server forwarding receive-pack and upload-pack.
             ,
             .example =
-            \\haxy serve --http-listen 127.0.0.1:8080 --ssh-listen 127.0.0.1:8081 --data-dir /srv/git
+            \\haxy serve --http-listen 127.0.0.1:8080 --ssh-listen 127.0.0.1:8081 --wui-listen 127.0.0.1:8082 --data-dir /srv/git
             ,
         },
         .ssh_helper => .{
@@ -96,6 +96,7 @@ pub const CommandArgs = struct {
     const value_flags = std.StaticStringMap(void).initComptime(.{
         .{"--http-listen"},
         .{"--ssh-listen"},
+        .{"--wui-listen"},
         .{"--ssh-connect"},
         .{"--data-dir"},
         .{"--service"},
@@ -191,7 +192,8 @@ pub const CommandArgs = struct {
 pub const Command = union(CommandKind) {
     serve: struct {
         http_listen: []const u8,
-        ssh_listen: ?[]const u8,
+        ssh_listen: []const u8,
+        wui_listen: []const u8,
         data_dir: []const u8,
         tui: bool,
     },
@@ -209,7 +211,8 @@ pub const Command = union(CommandKind) {
 
                 return .{ .serve = .{
                     .http_listen = (cmd_args.get("--http-listen") orelse null) orelse "127.0.0.1:8080",
-                    .ssh_listen = (cmd_args.get("--ssh-listen") orelse null),
+                    .ssh_listen = (cmd_args.get("--ssh-listen") orelse null) orelse "127.0.0.1:8081",
+                    .wui_listen = (cmd_args.get("--wui-listen") orelse null) orelse "127.0.0.1:8082",
                     .data_dir = (cmd_args.get("--data-dir") orelse null) orelse ".",
                     .tui = cmd_args.contains("--tui"),
                 } };
