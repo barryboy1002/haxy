@@ -1029,7 +1029,7 @@ fn testClone(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1062,7 +1062,7 @@ fn testClone(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1088,7 +1088,7 @@ fn testClone(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1114,7 +1114,7 @@ fn testClone(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1140,7 +1140,7 @@ fn testClone(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1166,7 +1166,7 @@ fn testClone(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1331,7 +1331,7 @@ fn testFetchLarge(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1364,7 +1364,7 @@ fn testFetchLarge(
                 .stderr = .ignore,
             });
             const term = try process.wait(io);
-            if (term != .exited) {
+            if (term != .exited or term.exited != 0) {
                 return error.GitCommandFailed;
             }
         }
@@ -1566,7 +1566,7 @@ fn testPushLarge(
             .stderr = .ignore,
         });
         const term = try process.wait(io);
-        if (term != .exited) {
+        if (term != .exited or term.exited != 0) {
             return error.GitCommandFailed;
         }
     } else {
