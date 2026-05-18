@@ -2,11 +2,13 @@ const std = @import("std");
 const xit = @import("xit");
 const rp = xit.repo;
 const hash = xit.hash;
+const ui = @import("./ui.zig");
 
 pub const Options = struct {
     http_listen: []const u8,
     ssh_listen: ?[]const u8,
     data_dir: []const u8,
+    ui: bool,
 };
 
 const ListenAddress = struct {
@@ -53,6 +55,10 @@ pub fn run(
 
     runHttpListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, &http_server, &tasks, err);
 
+    if (options.ui) {
+        runTui(io, allocator, &tasks, err);
+    }
+
     // create ssh listener
 
     var ssh_server: ?std.Io.net.Server = null;
@@ -72,6 +78,31 @@ pub fn run(
     }
 
     try tasks.await(io);
+}
+
+fn runTui(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    tasks: *std.Io.Group,
+    err: *std.Io.Writer,
+) void {
+    const TuiTask = struct {
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        err: *std.Io.Writer,
+
+        fn run(ctx: @This()) void {
+            ui.run(ctx.io, ctx.allocator) catch |ui_err| {
+                logError(ctx.err, "ui failed: {s}\n", .{@errorName(ui_err)});
+            };
+        }
+    };
+
+    tasks.async(io, TuiTask.run, .{TuiTask{
+        .io = io,
+        .allocator = allocator,
+        .err = err,
+    }});
 }
 
 fn runHttpListener(
