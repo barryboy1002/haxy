@@ -115,14 +115,14 @@ const WidgetList = struct {
         const inner_box = &self.scroll.child.box;
 
         {
-            var text_box = try wgt.TextBox(Widget).init(allocator, "this is a TextBox", .{ .border_style = .single, .wrap_kind = .none });
+            var text_box = try wgt.TextBox(Widget).init(allocator, "this is a TextBox", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit();
             text_box.getFocus().focusable = true;
             try inner_box.children.put(allocator, text_box.getFocus().id, .{ .widget = .{ .text_box = text_box }, .rect = null, .min_size = null });
         }
 
         {
-            var text_box = try wgt.TextBox(Widget).init(allocator, "this is a\nmulti-line TextBox", .{ .border_style = .single, .wrap_kind = .none });
+            var text_box = try wgt.TextBox(Widget).init(allocator, "this is a\nmulti-line TextBox", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit();
             text_box.getFocus().focusable = true;
             try inner_box.children.put(allocator, text_box.getFocus().id, .{ .widget = .{ .text_box = text_box }, .rect = null, .min_size = null });
@@ -146,7 +146,7 @@ const WidgetList = struct {
             commit.widget.text_box.options.border_style = if (self.getFocus().child_id == id)
                 (if (root_focus.grandchild_id == id) .double else .single)
             else
-                .hidden;
+                .single;
         }
         try self.scroll.build(constraint, root_focus);
     }
