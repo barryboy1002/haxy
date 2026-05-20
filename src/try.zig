@@ -53,36 +53,97 @@ pub fn main() !void {
         // define test events
 
         var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-        const alice_id = evt.EventWithId.randomId(prng.random());
-        const repo_event_id = evt.EventWithId.randomId(prng.random());
 
-        var alice_password_hash_buf: [evt.User.password_hash_max_len]u8 = undefined;
-        const alice_password_hash = try evt.User.hashPassword("correct horse battery staple", &alice_password_hash_buf, io);
+        const user_data = [_]struct {
+            name: []const u8,
+            display_name: []const u8,
+            email: []const u8,
+        }{
+            .{ .name = "alice", .display_name = "Alice Example", .email = "alice@example.test" },
+            .{ .name = "bob", .display_name = "Bob Smith", .email = "bob@example.test" },
+            .{ .name = "carol", .display_name = "Carol Johnson", .email = "carol@example.test" },
+            .{ .name = "dave", .display_name = "Dave Wilson", .email = "dave@example.test" },
+            .{ .name = "eve", .display_name = "Eve Anderson", .email = "eve@example.test" },
+            .{ .name = "frank", .display_name = "Frank Miller", .email = "frank@example.test" },
+            .{ .name = "grace", .display_name = "Grace Lee", .email = "grace@example.test" },
+            .{ .name = "henry", .display_name = "Henry Davis", .email = "henry@example.test" },
+            .{ .name = "ivy", .display_name = "Ivy Martinez", .email = "ivy@example.test" },
+            .{ .name = "jack", .display_name = "Jack Thompson", .email = "jack@example.test" },
+        };
 
-        const events_to_consume = [_]evt.EventWithId{
-            .{
-                .id = std.fmt.bytesToHex(alice_id, .lower),
+        const repo_data = [_]struct {
+            user_index: usize,
+            name: []const u8,
+            description: []const u8,
+        }{
+            .{ .user_index = 0, .name = "ziglings", .description = "Learn the Zig programming language by fixing tiny broken programs" },
+            .{ .user_index = 1, .name = "linux", .description = "Linux kernel source tree" },
+            .{ .user_index = 2, .name = "kubernetes", .description = "Production-grade container orchestration" },
+            .{ .user_index = 3, .name = "react", .description = "A declarative, efficient, and flexible JavaScript library for building user interfaces" },
+            .{ .user_index = 4, .name = "typescript", .description = "TypeScript is a superset of JavaScript that compiles to clean JavaScript output" },
+            .{ .user_index = 5, .name = "rust", .description = "Empowering everyone to build reliable and efficient software" },
+            .{ .user_index = 6, .name = "go", .description = "The Go programming language" },
+            .{ .user_index = 7, .name = "nodejs", .description = "Node.js JavaScript runtime" },
+            .{ .user_index = 8, .name = "cpython", .description = "The Python programming language" },
+            .{ .user_index = 9, .name = "docker", .description = "Container platform for developing, shipping, and running applications" },
+            .{ .user_index = 0, .name = "vim", .description = "The ubiquitous text editor" },
+            .{ .user_index = 1, .name = "neovim", .description = "Hyperextensible Vim-based text editor" },
+            .{ .user_index = 2, .name = "emacs", .description = "GNU Emacs source code mirror" },
+            .{ .user_index = 3, .name = "tmux", .description = "Terminal multiplexer" },
+            .{ .user_index = 4, .name = "zsh", .description = "Mirror of the Z shell source code repository" },
+            .{ .user_index = 5, .name = "git", .description = "Distributed version control system" },
+            .{ .user_index = 6, .name = "mercurial", .description = "Source-control management tool" },
+            .{ .user_index = 7, .name = "tensorflow", .description = "An end-to-end open source machine learning platform" },
+            .{ .user_index = 8, .name = "pytorch", .description = "Tensors and dynamic neural networks in Python with strong GPU acceleration" },
+            .{ .user_index = 9, .name = "numpy", .description = "The fundamental package for scientific computing with Python" },
+            .{ .user_index = 0, .name = "pandas", .description = "Flexible and powerful data analysis and manipulation library for Python" },
+            .{ .user_index = 1, .name = "scikit-learn", .description = "Machine learning in Python" },
+            .{ .user_index = 2, .name = "nginx", .description = "High performance HTTP server and reverse proxy" },
+            .{ .user_index = 3, .name = "redis", .description = "In-memory data structure store, used as a database, cache, and message broker" },
+            .{ .user_index = 4, .name = "postgres", .description = "The world's most advanced open source relational database" },
+            .{ .user_index = 5, .name = "sqlite", .description = "Self-contained, serverless, zero-configuration SQL database engine" },
+            .{ .user_index = 6, .name = "mongodb", .description = "The MongoDB Database" },
+            .{ .user_index = 7, .name = "elasticsearch", .description = "Free and open, distributed, RESTful search engine" },
+            .{ .user_index = 8, .name = "kafka", .description = "Distributed event streaming platform" },
+            .{ .user_index = 9, .name = "terraform", .description = "Infrastructure as code tool" },
+        };
+
+        var user_ids: [user_data.len][evt.event_id_size]u8 = undefined;
+        for (&user_ids) |*id| id.* = evt.EventWithId.randomId(prng.random());
+
+        var repo_event_ids: [repo_data.len][evt.event_id_size]u8 = undefined;
+        for (&repo_event_ids) |*id| id.* = evt.EventWithId.randomId(prng.random());
+
+        var password_hash_buf: [evt.User.password_hash_max_len]u8 = undefined;
+        const password_hash = try evt.User.hashPassword("correct horse battery staple", &password_hash_buf, io);
+
+        var events_to_consume: [user_data.len + repo_data.len]evt.EventWithId = undefined;
+        for (user_data, 0..) |u, i| {
+            events_to_consume[i] = .{
+                .id = std.fmt.bytesToHex(user_ids[i], .lower),
                 .event = .{
                     .user = .{
-                        .name = "alice",
-                        .display_name = "Alice Example",
-                        .email = "alice@example.test",
-                        .password_hash = alice_password_hash,
+                        .name = u.name,
+                        .display_name = u.display_name,
+                        .email = u.email,
+                        .password_hash = password_hash,
                     },
                 },
-            },
-            .{
-                .id = std.fmt.bytesToHex(repo_event_id, .lower),
+            };
+        }
+        for (repo_data, 0..) |r, i| {
+            events_to_consume[user_data.len + i] = .{
+                .id = std.fmt.bytesToHex(repo_event_ids[i], .lower),
                 .event = .{
                     .repo = .{
-                        .user_id = &alice_id,
-                        .name = "ziglings",
-                        .description = "Learn the Zig programming language by fixing tiny broken programs",
+                        .user_id = &user_ids[r.user_index],
+                        .name = r.name,
+                        .description = r.description,
                         .enable_issue = true,
                     },
                 },
-            },
-        };
+            };
+        }
 
         // insert users and repos as commits in the repo
         {
