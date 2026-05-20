@@ -60,7 +60,7 @@ pub fn main() !void {
             display_name: []const u8,
             email: []const u8,
         }{
-            .{ .name = "alice", .display_name = "Alice Example", .email = "alice@example.test" },
+            .{ .name = "alice", .display_name = "Alice Tulley", .email = "alice@example.test" },
             .{ .name = "bob", .display_name = "Bob Smith", .email = "bob@example.test" },
             .{ .name = "carol", .display_name = "Carol Johnson", .email = "carol@example.test" },
             .{ .name = "dave", .display_name = "Dave Wilson", .email = "dave@example.test" },
@@ -70,6 +70,16 @@ pub fn main() !void {
             .{ .name = "henry", .display_name = "Henry Davis", .email = "henry@example.test" },
             .{ .name = "ivy", .display_name = "Ivy Martinez", .email = "ivy@example.test" },
             .{ .name = "jack", .display_name = "Jack Thompson", .email = "jack@example.test" },
+            .{ .name = "kate", .display_name = "Kate Robinson", .email = "kate@example.test" },
+            .{ .name = "liam", .display_name = "Liam Walker", .email = "liam@example.test" },
+            .{ .name = "mona", .display_name = "Mona Patel", .email = "mona@example.test" },
+            .{ .name = "noah", .display_name = "Noah Garcia", .email = "noah@example.test" },
+            .{ .name = "olivia", .display_name = "Olivia Hernandez", .email = "olivia@example.test" },
+            .{ .name = "peter", .display_name = "Peter Wright", .email = "peter@example.test" },
+            .{ .name = "quinn", .display_name = "Quinn Foster", .email = "quinn@example.test" },
+            .{ .name = "rachel", .display_name = "Rachel Bennett", .email = "rachel@example.test" },
+            .{ .name = "sam", .display_name = "Sam Brooks", .email = "sam@example.test" },
+            .{ .name = "tina", .display_name = "Tina Cooper", .email = "tina@example.test" },
         };
 
         const repo_data = [_]struct {
@@ -107,6 +117,16 @@ pub fn main() !void {
             .{ .user_index = 7, .name = "elasticsearch", .description = "Free and open, distributed, RESTful search engine" },
             .{ .user_index = 8, .name = "kafka", .description = "Distributed event streaming platform" },
             .{ .user_index = 9, .name = "terraform", .description = "Infrastructure as code tool" },
+            .{ .user_index = 10, .name = "svelte", .description = "Cybernetically enhanced web apps" },
+            .{ .user_index = 11, .name = "vue", .description = "The progressive JavaScript framework" },
+            .{ .user_index = 12, .name = "flask", .description = "The Python micro framework for building web applications" },
+            .{ .user_index = 13, .name = "django", .description = "The web framework for perfectionists with deadlines" },
+            .{ .user_index = 14, .name = "rails", .description = "Ruby on Rails web framework" },
+            .{ .user_index = 15, .name = "phoenix", .description = "Peace of mind from prototype to production for Elixir web apps" },
+            .{ .user_index = 16, .name = "laravel", .description = "The PHP framework for web artisans" },
+            .{ .user_index = 17, .name = "prometheus", .description = "The Prometheus monitoring system and time series database" },
+            .{ .user_index = 18, .name = "grafana", .description = "The open and composable observability and data visualization platform" },
+            .{ .user_index = 19, .name = "ansible", .description = "Simple, agentless IT automation" },
         };
 
         var user_ids: [user_data.len][evt.event_id_size]u8 = undefined;
