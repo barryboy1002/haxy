@@ -58,7 +58,7 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const pg.Page) !Widget {
 
     try root.build(.{
         .min_size = .{ .width = null, .height = null },
-        .max_size = .{ .width = 80, .height = 24 },
+        .max_size = .{ .width = 80, .height = null },
     }, root.getFocus());
     if (root.getFocus().child_id) |child_id| {
         try root.getFocus().setFocus(child_id);

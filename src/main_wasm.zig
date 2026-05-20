@@ -20,7 +20,7 @@ fn updateHtml() !void {
 var page_arena: ?std.heap.ArenaAllocator = null;
 var page: ?pg.Page = null;
 
-fn start(json: []const u8) !void {
+fn start(json: []const u8, max_width: u32) !void {
     if (page_arena) |*a| a.deinit();
     page_arena = std.heap.ArenaAllocator.init(allocator);
 
@@ -36,15 +36,16 @@ fn start(json: []const u8) !void {
     if (root) |*old_root| old_root.deinit();
     root = next_root;
 
-    try updateHtml();
+    try tick(max_width);
 }
 
-fn tick() !void {
+fn tick(max_width: u32) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
-    // TODO: make this fit the current size of the browser window
     try root_ptr.build(.{
         .min_size = .{ .width = null, .height = null },
-        .max_size = .{ .width = 80, .height = 24 },
+        // height is null so the TUI grows to fit all its content; the browser
+        // page handles vertical scrolling.
+        .max_size = .{ .width = max_width, .height = null },
     }, root_ptr.getFocus());
     try updateHtml();
 }
@@ -82,18 +83,18 @@ export fn _alloc(len: u32) ?[*]u8 {
     return slice.ptr;
 }
 
-export fn _start(json_ptr: [*]u8, json_len: u32) void {
+export fn _start(json_ptr: [*]u8, json_len: u32, max_width: u32) void {
     const json = json_ptr[0..json_len];
     defer allocator.free(json);
-    start(json) catch |err| {
+    start(json, max_width) catch |err| {
         var buf: [256]u8 = undefined;
         const str = std.fmt.bufPrint(&buf, "start: {}", .{err}) catch unreachable;
         consoleLog(str);
     };
 }
 
-export fn _tick() bool {
-    tick() catch |err| {
+export fn _tick(max_width: u32) bool {
+    tick(max_width) catch |err| {
         var buf: [256]u8 = undefined;
         const str = std.fmt.bufPrint(&buf, "tick: {}", .{err}) catch unreachable;
         consoleLog(str);
