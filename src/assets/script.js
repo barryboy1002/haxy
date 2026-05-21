@@ -7,24 +7,26 @@ let currentHtml = "";
 
 const MIN_COLS = 30;
 
-// measured once after the font is loaded. recomputed lazily if it ever
-// reads back as zero (e.g. measured before the font was actually ready).
+// measured once after the font is loaded. recomputed lazily if they ever
+// read back as zero (e.g. measured before the font was actually ready).
 let cellWidth = null;
+let cellHeight = null;
 
-function measureCellWidth() {
+function measureCellSize() {
     const probe = document.createElement("span");
     probe.style.position = "absolute";
     probe.style.visibility = "hidden";
     probe.style.whiteSpace = "pre";
     probe.textContent = "X".repeat(100);
     grid.appendChild(probe);
-    const w = probe.getBoundingClientRect().width / 100;
+    const rect = probe.getBoundingClientRect();
     probe.remove();
-    return w;
+    cellWidth = rect.width / 100;
+    cellHeight = rect.height;
 }
 
 function maxCols() {
-    if (!cellWidth) cellWidth = measureCellWidth();
+    if (!cellWidth) measureCellSize();
     return Math.max(MIN_COLS, Math.floor(document.body.clientWidth / cellWidth));
 }
 
@@ -70,6 +72,17 @@ WebAssembly.instantiateStreaming(fetch("haxy.wasm"), importObject).then(async (r
             event.preventDefault();
         }
         wasmInstance.exports._onKeyDown(event.keyCode);
+        wasmInstance.exports._tick(maxCols());
+    });
+
+    grid.addEventListener("click", (event) => {
+        // ensure cellWidth/cellHeight are measured before converting pixels to grid cells
+        maxCols();
+        const rect = grid.getBoundingClientRect();
+        const col = Math.floor((event.clientX - rect.left) / cellWidth);
+        const row = Math.floor((event.clientY - rect.top) / cellHeight);
+        if (col < 0 || row < 0) return;
+        wasmInstance.exports._onMouseClick(col, row);
         wasmInstance.exports._tick(maxCols());
     });
 
