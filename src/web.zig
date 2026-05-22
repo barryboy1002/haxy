@@ -4,17 +4,17 @@ const rp = xit.repo;
 const ui = @import("./ui.zig");
 const pg = @import("./page.zig");
 
-const Asset = struct {
+const Embed = struct {
     path: []const u8,
     content_type: []const u8,
     body: []const u8,
 };
 
-const assets = [_]Asset{
-    .{ .path = "index.html", .content_type = "text/html; charset=utf-8", .body = @embedFile("assets/index.html") },
-    .{ .path = "script.js", .content_type = "text/javascript; charset=utf-8", .body = @embedFile("assets/script.js") },
-    .{ .path = "term.ttf", .content_type = "font/ttf", .body = @embedFile("assets/term.ttf") },
-    .{ .path = "haxy.wasm", .content_type = "application/wasm", .body = @embedFile("assets/haxy.wasm") },
+const embeds = [_]Embed{
+    .{ .path = "index.html", .content_type = "text/html; charset=utf-8", .body = @embedFile("embed/index.html") },
+    .{ .path = "script.js", .content_type = "text/javascript; charset=utf-8", .body = @embedFile("embed/script.js") },
+    .{ .path = "term.ttf", .content_type = "font/ttf", .body = @embedFile("embed/term.ttf") },
+    .{ .path = "haxy.wasm", .content_type = "application/wasm", .body = @embedFile("embed/haxy.wasm") },
 };
 
 pub fn run(
@@ -78,7 +78,7 @@ pub fn run(
 }
 
 fn renderIndexHtml(io: std.Io, allocator: std.mem.Allocator, admin_repo_path: []const u8) ![]const u8 {
-    const template = (findAsset("/index.html") orelse return error.MissingIndexAsset).body;
+    const template = (findEmbed("/index.html") orelse return error.MissingIndexAsset).body;
 
     // open the admin repo to read live user/repo data; if it doesn't exist
     // yet (e.g. a fresh `haxy serve` with no admin repo) fall back to empty.
@@ -187,7 +187,7 @@ fn handleRequest(
         return;
     }
 
-    const asset = findAsset(path) orelse {
+    const embed = findEmbed(path) orelse {
         if (http_server.reader.state == .received_head) {
             http_server.reader.state = .ready;
         }
@@ -199,16 +199,16 @@ fn handleRequest(
         http_server.reader.state = .ready;
     }
 
-    if (std.mem.eql(u8, asset.path, "index.html")) {
+    if (std.mem.eql(u8, embed.path, "index.html")) {
         const index_html = try renderIndexHtml(io, allocator, admin_repo_path);
         defer allocator.free(index_html);
-        try writeStaticResponse(http_server, 200, "OK", asset.content_type, index_html, request.head.method == .HEAD);
+        try writeStaticResponse(http_server, 200, "OK", embed.content_type, index_html, request.head.method == .HEAD);
     } else {
-        try writeStaticResponse(http_server, 200, "OK", asset.content_type, asset.body, request.head.method == .HEAD);
+        try writeStaticResponse(http_server, 200, "OK", embed.content_type, embed.body, request.head.method == .HEAD);
     }
 }
 
-fn findAsset(request_path: []const u8) ?Asset {
+fn findEmbed(request_path: []const u8) ?Embed {
     const path = if (std.mem.eql(u8, request_path, "/"))
         "index.html"
     else if (request_path.len > 1 and request_path[0] == '/')
@@ -216,8 +216,8 @@ fn findAsset(request_path: []const u8) ?Asset {
     else
         return null;
 
-    for (assets) |asset| {
-        if (std.mem.eql(u8, path, asset.path)) return asset;
+    for (embeds) |embed| {
+        if (std.mem.eql(u8, path, embed.path)) return embed;
     }
     return null;
 }
