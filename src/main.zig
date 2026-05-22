@@ -5,6 +5,7 @@ const rp = xit.repo;
 const cmd = @import("./command.zig");
 const srv = @import("./serve.zig");
 const ssh = @import("./ssh_git.zig");
+const ssh_tui = @import("./ssh_tui.zig");
 
 pub const RunOpts = struct {
     out: *std.Io.Writer,
@@ -79,6 +80,7 @@ pub fn run(
         .cli => |cli_cmd| switch (cli_cmd) {
             .serve => |options| try srv.run(repo_kind, any_repo_opts, io, allocator, cwd_path, options, run_opts.err, {}),
             .ssh_git => |options| try ssh.run(io, allocator, options, run_opts.environ_map),
+            .ssh_tui => |options| try ssh_tui.run(io, allocator, options, run_opts.environ_map),
         },
     }
 }

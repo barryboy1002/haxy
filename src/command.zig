@@ -1,10 +1,12 @@
 const std = @import("std");
 const srv = @import("./serve.zig");
 const ssh = @import("./ssh_git.zig");
+const ssh_tui = @import("./ssh_tui.zig");
 
 pub const CommandKind = enum {
     serve,
     ssh_git,
+    ssh_tui,
 };
 
 const Help = struct {
@@ -31,6 +33,15 @@ fn commandHelp(command_kind: CommandKind) Help {
             ,
             .example =
             \\haxy ssh-git --ssh-connect 127.0.0.1:8081 --service upload-pack <directory>
+            ,
+        },
+        .ssh_tui => .{
+            .name = "ssh-tui",
+            .descrip =
+            \\a helper run by sshd that forwards a TUI session to serve over a raw byte stream.
+            ,
+            .example =
+            \\haxy ssh-tui --tui-connect 127.0.0.1:8082 --user-key SHA256:...
             ,
         },
     };
@@ -95,8 +106,11 @@ pub const CommandArgs = struct {
     const value_flags = std.StaticStringMap(void).initComptime(.{
         .{"--http-listen"},
         .{"--ssh-listen"},
+        .{"--tui-listen"},
         .{"--wui-listen"},
         .{"--ssh-connect"},
+        .{"--tui-connect"},
+        .{"--user-key"},
         .{"--data-dir"},
         .{"--service"},
     });
@@ -191,6 +205,7 @@ pub const CommandArgs = struct {
 pub const Command = union(CommandKind) {
     serve: srv.Options,
     ssh_git: ssh.Options,
+    ssh_tui: ssh_tui.Options,
 
     pub fn initMaybe(cmd_args: *CommandArgs) !?Command {
         const command_kind = cmd_args.command_kind orelse return null;
@@ -205,6 +220,9 @@ pub const Command = union(CommandKind) {
                 }
                 if (cmd_args.get("--ssh-listen")) |val_maybe| {
                     options.ssh_listen = val_maybe orelse return error.SshListenNeedsValue;
+                }
+                if (cmd_args.get("--tui-listen")) |val_maybe| {
+                    options.tui_listen = val_maybe orelse return error.TuiListenNeedsValue;
                 }
                 if (cmd_args.get("--wui-listen")) |val_maybe| {
                     options.wui_listen = val_maybe orelse return error.WuiListenNeedsValue;
@@ -229,6 +247,20 @@ pub const Command = union(CommandKind) {
                 options.dir = if (cmd_args.positional_args.len == 1) cmd_args.positional_args[0] else null;
 
                 return .{ .ssh_git = options };
+            },
+            .ssh_tui => {
+                if (cmd_args.positional_args.len != 0) return null;
+
+                var options: ssh_tui.Options = .{};
+
+                if (cmd_args.get("--tui-connect")) |val_maybe| {
+                    options.tui_connect = val_maybe orelse return error.TuiConnectNeedsValue;
+                }
+                if (cmd_args.get("--user-key")) |val_maybe| {
+                    options.user_key = val_maybe orelse return error.UserKeyNeedsValue;
+                }
+
+                return .{ .ssh_tui = options };
             },
         }
     }

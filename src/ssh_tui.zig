@@ -29,6 +29,8 @@
 //! that side needs out-of-band signaling.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const ssh = @import("./ssh.zig");
 
 pub const magic = "haxy-tui-v1";
 
@@ -157,4 +159,163 @@ pub fn readFrame(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Frame {
             break :blk .close;
         },
     };
+}
+
+// helper subcommand: connects to the tui listener and proxies the user's
+// PTY in both directions. invoked by sshd via a forced-command entry in
+// authorized_keys.
+
+pub const Options = struct {
+    tui_connect: []const u8 = blk: {
+        const srv = @import("./serve.zig");
+        const opts: srv.Options = .{};
+        break :blk opts.tui_listen;
+    },
+    user_key: ?[]const u8 = null,
+};
+
+// SIGWINCH delivers no context; the handler reads this file-scope fd to
+// know where to write its wake-up byte. set by run() before sigaction is
+// installed; reset on the way out.
+var sigwinch_pipe_write: std.posix.fd_t = -1;
+
+pub fn run(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: Options,
+    environ_map: *std.process.Environ.Map,
+) !void {
+    _ = allocator;
+
+    if (builtin.os.tag == .windows) return error.WindowsNotSupported;
+
+    const user_key = options.user_key orelse return error.MissingUserKey;
+    const term_name = environ_map.get("TERM") orelse "xterm";
+
+    const initial_size = try getWinSize();
+
+    const conn = try ssh.parseConnectAddress(options.tui_connect);
+    const address = try std.Io.net.IpAddress.parseIp4(conn.host, conn.port);
+    const stream = try address.connect(io, .{ .mode = .stream });
+    defer stream.close(io);
+
+    // put stdin into raw mode so the server sees user keystrokes as-is.
+    // restore the original termios on the way out so we don't leave the
+    // user's shell in a broken state if anything throws.
+    const cooked = try std.posix.tcgetattr(std.posix.STDIN_FILENO);
+    defer std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, cooked) catch {};
+    try setRawMode(std.posix.STDIN_FILENO, cooked);
+
+    // self-pipe: SIGWINCH handler writes a byte, stdinProxy polls on the
+    // read end and converts it into a resize frame.
+    var pipe_fds: [2]i32 = undefined;
+    const o_flags: std.os.linux.O = .{ .NONBLOCK = true, .CLOEXEC = true };
+    if (std.posix.errno(std.os.linux.pipe2(&pipe_fds, o_flags)) != .SUCCESS) {
+        return error.PipeFailed;
+    }
+    defer {
+        sigwinch_pipe_write = -1;
+        _ = std.posix.system.close(pipe_fds[1]);
+        _ = std.posix.system.close(pipe_fds[0]);
+    }
+    sigwinch_pipe_write = pipe_fds[1];
+
+    std.posix.sigaction(std.posix.SIG.WINCH, &.{
+        .handler = .{ .handler = sigwinchHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    }, null);
+
+    // prelude
+    var prelude_buf: [1024]u8 = undefined;
+    var prelude_writer = stream.writer(io, &prelude_buf);
+    try writePrelude(&prelude_writer.interface, .{
+        .user_key = user_key,
+        .term = term_name,
+        .width = initial_size.width,
+        .height = initial_size.height,
+    });
+    try prelude_writer.interface.flush();
+
+    // stdin proxy thread: frames stdin bytes + emits resize frames on
+    // SIGWINCH. detached so we don't have to coordinate shutdown — when
+    // run() returns, the process exits and the thread goes with it.
+    const ctx = StdinThreadCtx{ .io = io, .stream = stream, .pipe_read = pipe_fds[0] };
+    const stdin_thread = try std.Thread.spawn(.{}, stdinProxy, .{ctx});
+    stdin_thread.detach();
+
+    // main: socket → stdout, raw. server's already-formed ANSI bytes pass
+    // straight through to the user's terminal.
+    try ssh.copyFd(stream.socket.handle, std.posix.STDOUT_FILENO);
+}
+
+fn sigwinchHandler(_: std.posix.SIG) callconv(.c) void {
+    const fd = sigwinch_pipe_write;
+    if (fd >= 0) {
+        const byte = [_]u8{1};
+        _ = std.posix.system.write(fd, byte[0..].ptr, 1);
+    }
+}
+
+fn setRawMode(fd: std.posix.fd_t, cooked: std.posix.termios) !void {
+    var raw = cooked;
+    raw.iflag = .{};
+    raw.oflag = .{};
+    raw.lflag = .{};
+    raw.cflag.CSIZE = .CS8;
+    raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
+    raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+    try std.posix.tcsetattr(fd, .FLUSH, raw);
+}
+
+const WinSize = struct { width: u16, height: u16 };
+
+fn getWinSize() !WinSize {
+    var ws: std.posix.winsize = undefined;
+    const rc = std.os.linux.ioctl(std.posix.STDOUT_FILENO, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
+    if (std.posix.errno(rc) != .SUCCESS) return error.IoctlFailed;
+    return .{ .width = ws.col, .height = ws.row };
+}
+
+const StdinThreadCtx = struct {
+    io: std.Io,
+    stream: std.Io.net.Stream,
+    pipe_read: std.posix.fd_t,
+};
+
+fn stdinProxy(ctx: StdinThreadCtx) void {
+    var send_buf: [4096]u8 = undefined;
+    var stream_writer = ctx.stream.writer(ctx.io, &send_buf);
+    const w = &stream_writer.interface;
+
+    while (true) {
+        var fds = [_]std.posix.pollfd{
+            .{ .fd = std.posix.STDIN_FILENO, .events = std.posix.POLL.IN, .revents = 0 },
+            .{ .fd = ctx.pipe_read, .events = std.posix.POLL.IN, .revents = 0 },
+        };
+        _ = std.posix.poll(&fds, -1) catch return;
+
+        if (fds[1].revents & std.posix.POLL.IN != 0) {
+            // drain whatever's in the pipe — multiple coalesced SIGWINCHes
+            // all collapse into one resize-frame emission.
+            var drain: [16]u8 = undefined;
+            _ = std.posix.read(ctx.pipe_read, &drain) catch {};
+            if (getWinSize()) |size| {
+                writeResizeFrame(w, size.width, size.height) catch return;
+                w.flush() catch return;
+            } else |_| {}
+        }
+        if (fds[0].revents & std.posix.POLL.IN != 0) {
+            var buf: [4096]u8 = undefined;
+            const n = std.posix.read(std.posix.STDIN_FILENO, &buf) catch return;
+            if (n == 0) {
+                writeCloseFrame(w) catch {};
+                w.flush() catch {};
+                ctx.stream.shutdown(ctx.io, .send) catch {};
+                return;
+            }
+            writeDataFrame(w, buf[0..n]) catch return;
+            w.flush() catch return;
+        }
+    }
 }
