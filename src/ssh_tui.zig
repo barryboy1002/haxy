@@ -270,11 +270,20 @@ fn setRawMode(fd: std.posix.fd_t, cooked: std.posix.termios) !void {
 
 const WinSize = struct { width: u16, height: u16 };
 
+// fall back to a conventional 80x24 if the PTY hasn't been told a size yet —
+// this happens when the SSH client has no local controlling terminal (e.g.
+// non-interactive piped input) and never sends a window-change request.
+const default_width: u16 = 80;
+const default_height: u16 = 24;
+
 fn getWinSize() !WinSize {
     var ws: std.posix.winsize = undefined;
     const rc = std.os.linux.ioctl(std.posix.STDOUT_FILENO, std.posix.T.IOCGWINSZ, @intFromPtr(&ws));
     if (std.posix.errno(rc) != .SUCCESS) return error.IoctlFailed;
-    return .{ .width = ws.col, .height = ws.row };
+    return .{
+        .width = if (ws.col == 0) default_width else ws.col,
+        .height = if (ws.row == 0) default_height else ws.row,
+    };
 }
 
 const StdinThreadCtx = struct {
