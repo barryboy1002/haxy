@@ -1,10 +1,12 @@
 const std = @import("std");
-const hx = @import("haxy");
-const ssh = hx.serve_ssh;
-const proto = hx.serve_ssh_protocol;
+const proto = @import("../serve_ssh_protocol.zig");
 const Ed25519 = std.crypto.sign.Ed25519;
 const X25519 = std.crypto.dh.X25519;
 const Sha256 = std.crypto.hash.sha2.Sha256;
+
+comptime {
+    std.testing.refAllDecls(@import("../serve_ssh.zig"));
+}
 
 test "fingerprint format matches openssh layout" {
     const seed = [_]u8{0x42} ** Ed25519.KeyPair.seed_length;

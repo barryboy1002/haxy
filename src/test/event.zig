@@ -1,7 +1,6 @@
 const std = @import("std");
-const hx = @import("haxy");
-const evt = hx.event;
-const xit = hx.xit;
+const evt = @import("../event.zig");
+const xit = @import("xit");
 const rp = xit.repo;
 const hash = xit.hash;
 

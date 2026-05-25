@@ -75,6 +75,24 @@ pub fn build(b: *std.Build) void {
         break :blk install_exe;
     };
 
+    // test
+    {
+        const unit_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/test.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        unit_tests.root_module.addImport("xit", xit_dep.module("xit"));
+
+        const run_unit_tests = b.addRunArtifact(unit_tests);
+        run_unit_tests.has_side_effects = true;
+        const test_step = b.step("test", "Run unit tests");
+        test_step.dependOn(&install_main_exe.step);
+        test_step.dependOn(&run_unit_tests.step);
+    }
+
     // module for using haxy as a library
     // (the commands below consume haxy this way)
     const haxy = b.addModule("haxy", .{
@@ -103,24 +121,6 @@ pub fn build(b: *std.Build) void {
 
         const run_step = b.step("try", "Try the app");
         run_step.dependOn(&run_cmd.step);
-    }
-
-    // test
-    {
-        const unit_tests = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/test.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        unit_tests.root_module.addImport("haxy", haxy);
-
-        const run_unit_tests = b.addRunArtifact(unit_tests);
-        run_unit_tests.has_side_effects = true;
-        const test_step = b.step("test", "Run unit tests");
-        test_step.dependOn(&install_main_exe.step);
-        test_step.dependOn(&run_unit_tests.step);
     }
 
     // testnet
