@@ -27,7 +27,7 @@ pub const View = struct {
     const button_index: usize = 1;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session, users_tab_id: usize) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
 
         {
@@ -42,7 +42,7 @@ pub const View = struct {
 
         var button_id: usize = undefined;
         {
-            var button = try wgt.TextBox(ui.Widget).init(allocator, "logout", .{ .border_style = .single, .wrap_kind = .none });
+            var button = try wgt.TextBox(ui.Widget).init(allocator, "logout", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
             errdefer button.deinit(allocator);
             button.getFocus().focusable = true;
             // the renderer distinguishes plain clickables from buttons that

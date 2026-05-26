@@ -28,7 +28,7 @@ pub const View = struct {
     const auth_tab_min_width: usize = @as(usize, "logout".len) + 2;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .rounded_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         var tab_ids: [3]usize = undefined;
@@ -36,7 +36,7 @@ pub const View = struct {
         // fixed tabs: users, repos
         const fixed_tab_names = [_][]const u8{ "users", "repos" };
         for (fixed_tab_names, 0..) |name, i| {
-            var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .wrap_kind = .none });
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().focusable = true;
             tab_ids[i] = text_box.getFocus().id;

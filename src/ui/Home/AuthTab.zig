@@ -20,7 +20,7 @@ pub const View = struct {
     session: *ui.Session,
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var text_box = try wgt.TextBox(ui.Widget).init(allocator, "login", .{ .border_style = .single, .wrap_kind = .none });
+        var text_box = try wgt.TextBox(ui.Widget).init(allocator, "login", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
         errdefer text_box.deinit(allocator);
         text_box.getFocus().focusable = true;
         return .{
