@@ -186,7 +186,7 @@ pub fn main(init: std.process.Init) !void {
         // consume events into the database
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        break :blk .{ .users_and_repos = try .init(repo_opts, &page_arena, &repo) };
+        break :blk .{ .home = try .init(repo_opts, &page_arena, &repo) };
     };
 
     // start the server

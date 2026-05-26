@@ -9,10 +9,10 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const evt = @import("./event.zig");
 
-pub const UsersAndRepos = @import("./ui/UsersAndRepos.zig");
+pub const Home = @import("./ui/Home.zig");
 
 pub const Page = union(enum) {
-    users_and_repos: UsersAndRepos,
+    home: Home,
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page) !void {
@@ -85,7 +85,7 @@ pub fn inputKey(root: *Widget, key: inp.Key, terminal: anytype) !void {
 
 pub fn initRoot(allocator: std.mem.Allocator, page: *const Page) !Widget {
     var root: Widget = switch (page.*) {
-        .users_and_repos => |*p| .{ .users_and_repos = try UsersAndRepos.View.init(allocator, p) },
+        .home => |*p| .{ .home = try Home.View.init(allocator, p) },
     };
     errdefer root.deinit();
 
@@ -105,8 +105,12 @@ pub const Widget = union(enum) {
     box: wgt.Box(Widget),
     text_box: wgt.TextBox(Widget),
     scroll: wgt.Scroll(Widget),
+    stack: wgt.Stack(Widget),
     selectable_list: SelectableList,
-    users_and_repos: UsersAndRepos.View,
+    home: Home.View,
+    home_header: Home.Header.View,
+    home_users: Home.Users.View,
+    home_repos: Home.Repos.View,
 
     pub fn deinit(self: *Widget) void {
         switch (self.*) {

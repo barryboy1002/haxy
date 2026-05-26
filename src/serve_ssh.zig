@@ -49,19 +49,15 @@ fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh
         .height_cells = if (pty.height_cells == 0) 24 else pty.height_cells,
     };
 
-    // build the UsersAndRepos page in a session-scoped arena. same fallback
-    // pattern as web.zig — if the admin repo doesn't exist yet, render an
-    // empty page rather than refusing the connection.
+    // build the Home page in a session-scoped arena.
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
     const repo_opts: rp.RepoOpts(.xit) = .{};
     const Repo = rp.Repo(.xit, repo_opts);
-    var repo_or_err = Repo.open(io, allocator, .{ .path = handler.admin_repo_path });
-    const page: ui.Page = if (repo_or_err) |*repo| blk: {
-        defer repo.deinit(io, allocator);
-        break :blk .{ .users_and_repos = try .init(repo_opts, &page_arena, repo) };
-    } else |_| .{ .users_and_repos = .empty() };
+    var repo = try Repo.open(io, allocator, .{ .path = handler.admin_repo_path });
+    defer repo.deinit(io, allocator);
+    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, &repo) };
 
     var root = try ui.initRoot(allocator, &page);
     defer root.deinit();

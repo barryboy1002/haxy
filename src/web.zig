@@ -81,17 +81,14 @@ pub fn run(
 fn renderIndexHtml(io: std.Io, allocator: std.mem.Allocator, admin_repo_path: []const u8) ![]const u8 {
     const template = (findEmbed("/index.html") orelse return error.MissingIndexAsset).body;
 
-    // open the admin repo to read live user/repo data; if it doesn't exist
-    // yet (e.g. a fresh `haxy serve` with no admin repo) fall back to empty.
+    // open the admin repo to read live user/repo data.
     const repo_opts: rp.RepoOpts(.xit) = .{};
     const Repo = rp.Repo(.xit, repo_opts);
-    var repo_or_err = Repo.open(io, allocator, .{ .path = admin_repo_path });
+    var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
+    defer repo.deinit(io, allocator);
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
-    const page: ui.Page = if (repo_or_err) |*repo| blk: {
-        defer repo.deinit(io, allocator);
-        break :blk .{ .users_and_repos = try .init(repo_opts, &page_arena, repo) };
-    } else |_| .{ .users_and_repos = .empty() };
+    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, &repo) };
 
     var root = try ui.initRoot(allocator, &page);
     defer root.deinit();
