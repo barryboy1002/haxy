@@ -1,0 +1,286 @@
+const std = @import("std");
+const builtin = @import("builtin");
+const evt = @import("../../../event.zig");
+const ui = @import("../../../ui.zig");
+const xit = @import("xit");
+const rp = xit.repo;
+const hash = xit.hash;
+const xitui = xit.xitui;
+const wgt = xitui.widget;
+const layout = xitui.layout;
+const inp = xitui.input;
+const Grid = xitui.grid.Grid;
+const Focus = xitui.focus.Focus;
+const bcrypt = std.crypto.pwhash.bcrypt;
+
+const wasm = builtin.target.cpu.arch == .wasm32;
+
+const repo_opts = ui.canonical_repo_opts;
+const DB = ui.DB;
+
+const Self = @This();
+
+pub fn init() Self {
+    return .{};
+}
+
+pub const View = struct {
+    center: ui.Center,
+    data: *const Self,
+    session: *ui.Session,
+    nav_ids: [3]usize,
+    status: Status,
+    // focus id of the header's "users" tab; on a successful submit we jump
+    // focus there so the user isn't stranded on the login button.
+    users_tab_id: usize,
+
+    pub const Status = enum { none, success, wrong_password, unknown_user };
+
+    const username_index: usize = 0;
+    const password_index: usize = 1;
+    const button_index: usize = 2;
+
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session, users_tab_id: usize) !View {
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        errdefer box.deinit();
+
+        var nav_ids: [3]usize = undefined;
+
+        {
+            var username = wgt.TextInput(ui.Widget).init(allocator, .{ .label = " username ", .name = "username" });
+            errdefer username.deinit();
+            username.getFocus().focusable = true;
+            nav_ids[username_index] = username.getFocus().id;
+            try box.children.put(allocator, username.getFocus().id, .{
+                .widget = .{ .text_input = username },
+                .rect = null,
+                .min_size = null,
+            });
+        }
+
+        {
+            var password = wgt.TextInput(ui.Widget).init(allocator, .{ .label = " password ", .password = true, .name = "password" });
+            errdefer password.deinit();
+            password.getFocus().focusable = true;
+            nav_ids[password_index] = password.getFocus().id;
+            try box.children.put(allocator, password.getFocus().id, .{
+                .widget = .{ .text_input = password },
+                .rect = null,
+                .min_size = null,
+            });
+        }
+
+        {
+            var button = try wgt.TextBox(ui.Widget).init(allocator, "login", .{ .border_style = .single, .wrap_kind = .none });
+            errdefer button.deinit();
+            button.getFocus().focusable = true;
+            // the renderer distinguishes plain clickables from buttons that
+            // should POST to a server route by this kind.
+            button.getFocus().kind = .submit_button;
+            nav_ids[button_index] = button.getFocus().id;
+            try box.children.put(allocator, button.getFocus().id, .{
+                .widget = .{ .text_box = button },
+                .rect = null,
+                .min_size = null,
+            });
+        }
+
+        box.getFocus().child_id = nav_ids[username_index];
+
+        return .{
+            .center = try ui.Center.init(allocator, .{ .box = box }, .both),
+            .data = data,
+            .session = session,
+            .nav_ids = nav_ids,
+            .status = .none,
+            .users_tab_id = users_tab_id,
+        };
+    }
+
+    pub fn deinit(self: *View) void {
+        self.center.deinit();
+    }
+
+    pub fn build(self: *View, constraint: layout.Constraint, root_focus: *Focus) !void {
+        const box = &self.center.child.box;
+
+        const button = &box.children.values()[button_index].widget.text_box;
+        button.options.border_style = if (root_focus.grandchild_id == self.nav_ids[button_index])
+            .double
+        else
+            .single;
+
+        const username_input = &box.children.values()[username_index].widget.text_input;
+        username_input.options.label = if (self.status == .unknown_user)
+            " username (invalid) "
+        else
+            " username ";
+
+        const password_input = &box.children.values()[password_index].widget.text_input;
+        password_input.options.label = if (self.status == .wrong_password)
+            " password (invalid) "
+        else
+            " password ";
+
+        try self.center.build(constraint, root_focus);
+    }
+
+    pub fn input(self: *View, key: inp.Key, root_focus: *Focus) !void {
+        const box = &self.center.child.box;
+        const child_id = box.focus.child_id orelse return;
+        const current = self.indexOf(child_id) orelse return;
+
+        switch (key) {
+            // Shift+Tab walks backward through the form, matching the
+            // typical UX; arrow_up does the same.
+            .arrow_up, .back_tab => if (current > 0) {
+                try root_focus.setFocus(self.nav_ids[current - 1]);
+                return;
+            },
+            // Tab moves to the next field, matching the form-style UX users
+            // expect; arrow_down does the same.
+            .arrow_down, .tab => if (current + 1 < self.nav_ids.len) {
+                try root_focus.setFocus(self.nav_ids[current + 1]);
+                return;
+            },
+            // submit on Enter from any nav field — typical "press Enter in
+            // a form to submit" UX
+            .enter => {
+                try self.submit(root_focus);
+                return;
+            },
+            else => {},
+        }
+
+        if (current == button_index) {
+            switch (key) {
+                .mouse => |mouse| {
+                    if (mouse.action == .press and mouse.action.press == .left) {
+                        if (root_focus.children.get(child_id)) |entry| {
+                            const r = entry.rect;
+                            if (mouse.x >= r.x and mouse.y >= r.y and
+                                mouse.x < r.x + r.size.width and mouse.y < r.y + r.size.height)
+                            {
+                                try self.submit(root_focus);
+                                return;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        const username_input = &box.children.values()[username_index].widget.text_input;
+        const password_input = &box.children.values()[password_index].widget.text_input;
+        const username_len_before = username_input.content.items.len;
+        const password_len_before = password_input.content.items.len;
+
+        if (box.children.getIndex(child_id)) |idx| {
+            try box.children.values()[idx].widget.input(key, root_focus);
+        }
+
+        if (username_input.content.items.len != username_len_before or
+            password_input.content.items.len != password_len_before)
+        {
+            self.status = .none;
+        }
+    }
+
+    pub fn clearGrid(self: *View) void {
+        self.center.clearGrid();
+    }
+
+    pub fn getGrid(self: View) ?Grid {
+        return self.center.getGrid();
+    }
+
+    pub fn getFocus(self: *View) *Focus {
+        return self.center.getFocus();
+    }
+
+    pub fn getSelectedIndex(self: View) ?usize {
+        const child_id = self.center.child.box.focus.child_id orelse return null;
+        return self.indexOf(child_id);
+    }
+
+    fn indexOf(self: View, child_id: usize) ?usize {
+        for (self.nav_ids, 0..) |id, i| {
+            if (id == child_id) return i;
+        }
+        return null;
+    }
+
+    fn submit(self: *View, root_focus: *Focus) !void {
+        if (comptime wasm) {
+            // no DB cursor available on the wasm render path
+            self.status = .unknown_user;
+            return;
+        }
+
+        const box = &self.center.child.box;
+        const username_input = &box.children.values()[username_index].widget.text_input;
+        const password_input = &box.children.values()[password_index].widget.text_input;
+
+        var username_buf: [256]u8 = undefined;
+        const username = joinCodepoints(&username_buf, username_input.content.items) orelse {
+            self.status = .unknown_user;
+            return;
+        };
+
+        var password_buf: [256]u8 = undefined;
+        const password = joinCodepoints(&password_buf, password_input.content.items) orelse {
+            self.status = .wrong_password;
+            return;
+        };
+
+        const haxy_moment = self.session.haxy_moment orelse {
+            // no DB context (e.g. wasm/web rendering path); treat as unknown.
+            self.status = .unknown_user;
+            return;
+        };
+        const arena = self.session.arena orelse {
+            self.status = .unknown_user;
+            return;
+        };
+
+        const result = try evt.User.verifyCredentials(DB, repo_opts.hash, haxy_moment, arena, username, password);
+        switch (result) {
+            .unknown_user => {
+                self.status = .unknown_user;
+                return;
+            },
+            .wrong_password => {
+                self.status = .wrong_password;
+                return;
+            },
+            .success => |user_id| {
+                // dupe user_id into the arena so the session can hold a stable slice
+                const user_id_stable = try arena.allocator().dupe(u8, &user_id);
+                self.session.user_id = user_id_stable;
+                self.status = .success;
+
+                // wipe the entered credentials so they don't linger if the
+                // user returns to this page after logging out.
+                username_input.clear();
+                password_input.clear();
+
+                // jump focus back to the users tab — the login button we
+                // just pressed is about to be hidden by the tab-label swap.
+                try root_focus.setFocus(self.users_tab_id);
+            },
+        }
+    }
+};
+
+// joins a list of utf-8 codepoint slices (as TextInput stores them) into a
+// flat buffer. returns null if the joined bytes don't fit.
+fn joinCodepoints(buf: []u8, codepoints: []const []const u8) ?[]const u8 {
+    var len: usize = 0;
+    for (codepoints) |cp| {
+        if (len + cp.len > buf.len) return null;
+        @memcpy(buf[len..][0..cp.len], cp);
+        len += cp.len;
+    }
+    return buf[0..len];
+}

@@ -57,9 +57,11 @@ fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh
     const Repo = rp.Repo(.xit, repo_opts);
     var repo = try Repo.open(io, allocator, .{ .path = handler.admin_repo_path });
     defer repo.deinit(io, allocator);
-    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, &repo) };
+    var ui_session: ui.Session = .{};
 
-    var root = try ui.initRoot(allocator, &page);
+    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, &repo, &ui_session) };
+
+    var root = try ui.initRoot(allocator, &page, &ui_session);
     defer root.deinit();
 
     // terminal and its writer adapter live in a nested block so the deinit

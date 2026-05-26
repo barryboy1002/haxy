@@ -1,8 +1,10 @@
 const std = @import("std");
 const ui = @import("./ui.zig");
 const web = @import("./web.zig");
-const xitui = @import("xit").xitui;
+const xit = @import("xit");
+const xitui = xit.xitui;
 const inp = xitui.input;
+const wgt = xitui.widget;
 
 const allocator = std.heap.wasm_allocator;
 
@@ -10,7 +12,7 @@ var root: ?ui.Widget = null;
 
 fn updateHtml() !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
-    const html = try web.generateHtml(allocator, root_ptr);
+    const html = try web.generateHtml(allocator, root_ptr, &session);
     defer allocator.free(html);
     setHtml(html);
 }
@@ -19,6 +21,7 @@ fn updateHtml() !void {
 // to outlive `root`, because `root` holds slices into the parsed strings.
 var page_arena: ?std.heap.ArenaAllocator = null;
 var page: ?ui.Page = null;
+var session: ui.Session = .{};
 
 fn start(json: []const u8, max_width: u32) !void {
     if (page_arena) |*a| a.deinit();
@@ -30,7 +33,14 @@ fn start(json: []const u8, max_width: u32) !void {
         .allocate = .alloc_always,
     });
 
-    var next_root = try ui.initRoot(allocator, &(page orelse unreachable));
+    // restore session.user_id from the serialized page so the first render
+    // matches what the server rendered (otherwise wasm would render the
+    // page in a logged-out state on top of a logged-in server-rendered HTML).
+    session.user_id = switch (page orelse unreachable) {
+        .home => |h| h.user_id,
+    };
+
+    var next_root = try ui.initRoot(allocator, &(page orelse unreachable), &session);
     errdefer next_root.deinit();
 
     if (root) |*old_root| old_root.deinit();
@@ -53,6 +63,7 @@ fn tick(max_width: u32) !void {
 fn onKeyDown(key_code: u32) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
     const key: inp.Key = switch (key_code) {
+        13 => .enter,
         33 => .page_up,
         34 => .page_down,
         35 => .end,
@@ -122,4 +133,26 @@ export fn _onMouseClick(focus_id: u32) void {
         const str = std.fmt.bufPrint(&buf, "onMouseClick: {}", .{err}) catch unreachable;
         consoleLog(str);
     };
+}
+
+// js calls this when the value of an overlay <input> changes; we replace
+// the matching TextInput's content with the supplied utf-8 bytes.
+export fn _setTextInputValue(focus_id: u32, value_ptr: [*]const u8, value_len: u32) void {
+    setTextInputValue(focus_id, value_ptr[0..value_len]) catch |err| {
+        var buf: [256]u8 = undefined;
+        const str = std.fmt.bufPrint(&buf, "setTextInputValue: {}", .{err}) catch unreachable;
+        consoleLog(str);
+    };
+}
+
+fn setTextInputValue(focus_id: u32, bytes: []const u8) !void {
+    const root_ptr = if (root) |*r| r else return error.NotStarted;
+    const root_focus = root_ptr.getFocus();
+    const child = root_focus.children.get(focus_id) orelse return error.UnknownFocusId;
+    switch (child.focus.kind) {
+        .text_input, .text_input_password => {},
+        else => return error.NotATextInput,
+    }
+    const ti: *wgt.TextInput(ui.Widget) = @fieldParentPtr("focus", child.focus);
+    try ti.setContent(bytes);
 }

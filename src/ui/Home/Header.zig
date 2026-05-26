@@ -8,36 +8,70 @@ const inp = xitui.input;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
+pub const AuthTab = @import("./AuthTab.zig");
+
+auth_tab: AuthTab,
+
 const Self = @This();
 
-const Tab = enum { users, repos };
-
 pub fn init() Self {
-    return .{};
+    return .{ .auth_tab = AuthTab.init() };
 }
 
 pub const View = struct {
     box: wgt.Box(ui.Widget),
     data: *const Self,
+    tab_ids: [3]usize,
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self) !View {
+    const auth_tab_index: usize = 2;
+    // the auth slot must fit either "login" or "logout"
+    const auth_tab_min_width: usize = @as(usize, "logout".len) + 2;
+
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
         errdefer box.deinit();
 
-        inline for (@typeInfo(Tab).@"enum".fields) |tab_field| {
-            const tab: Tab = @enumFromInt(tab_field.value);
-            const name = switch (tab) {
-                .users => "users",
-                .repos => "repos",
-            };
+        var tab_ids: [3]usize = undefined;
+
+        // fixed tabs: users, repos
+        const fixed_tab_names = [_][]const u8{ "users", "repos" };
+        for (fixed_tab_names, 0..) |name, i| {
             var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .wrap_kind = .none });
             errdefer text_box.deinit();
             text_box.getFocus().focusable = true;
-            try box.children.put(box.allocator, text_box.getFocus().id, .{ .widget = .{ .text_box = text_box }, .rect = null, .min_size = null });
+            tab_ids[i] = text_box.getFocus().id;
+            try box.children.put(box.allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = name.len + 2, .height = null },
+            });
         }
 
-        var self = View{ .box = box, .data = data };
-        self.getFocus().child_id = box.children.keys()[0];
+        // spacer pushes the auth tab to the right
+        {
+            var spacer = ui.Spacer.init(allocator);
+            errdefer spacer.deinit();
+            try box.children.put(box.allocator, spacer.getFocus().id, .{
+                .widget = .{ .spacer = spacer },
+                .rect = null,
+                .min_size = .{ .width = 1, .height = null },
+            });
+        }
+
+        // auth tab — knows how to swap its own label based on session
+        {
+            var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
+            errdefer auth_tab.deinit();
+            tab_ids[auth_tab_index] = auth_tab.getFocus().id;
+            try box.children.put(box.allocator, auth_tab.getFocus().id, .{
+                .widget = .{ .home_auth_tab = auth_tab },
+                .rect = null,
+                .min_size = .{ .width = auth_tab_min_width, .height = null },
+            });
+        }
+
+        var self = View{ .box = box, .data = data, .tab_ids = tab_ids };
+        self.getFocus().child_id = tab_ids[0];
         return self;
     }
 
@@ -47,37 +81,34 @@ pub const View = struct {
 
     pub fn build(self: *View, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
-        for (self.box.children.keys(), self.box.children.values()) |id, *tab| {
-            tab.widget.text_box.options.border_style = if (self.getFocus().child_id == id)
-                (if (root_focus.grandchild_id == id) .double else .single)
-            else
-                .hidden;
+        for (self.box.children.keys(), self.box.children.values()) |id, *child| {
+            const tb: ?*wgt.TextBox(ui.Widget) = switch (child.widget) {
+                .text_box => |*x| x,
+                .home_auth_tab => |*at| &at.text_box,
+                else => null,
+            };
+            if (tb) |t| {
+                t.options.border_style = if (self.getFocus().child_id == id)
+                    (if (root_focus.grandchild_id == id) .double else .single)
+                else
+                    .hidden;
+            }
         }
         try self.box.build(constraint, root_focus);
     }
 
     pub fn input(self: *View, key: inp.Key, root_focus: *Focus) !void {
-        if (self.getFocus().child_id) |child_id| {
-            const children = &self.box.children;
-            if (children.getIndex(child_id)) |current_index| {
-                var index = current_index;
-
-                switch (key) {
-                    .arrow_left => {
-                        index -|= 1;
-                    },
-                    .arrow_right => {
-                        if (index + 1 < children.count()) {
-                            index += 1;
-                        }
-                    },
-                    else => {},
-                }
-
-                if (index != current_index) {
-                    try root_focus.setFocus(children.keys()[index]);
-                }
-            }
+        const current_tab = self.currentTabIndex() orelse return;
+        var new_tab = current_tab;
+        switch (key) {
+            .arrow_left => new_tab -|= 1,
+            .arrow_right => if (new_tab + 1 < self.tab_ids.len) {
+                new_tab += 1;
+            },
+            else => {},
+        }
+        if (new_tab != current_tab) {
+            try root_focus.setFocus(self.tab_ids[new_tab]);
         }
     }
 
@@ -94,10 +125,14 @@ pub const View = struct {
     }
 
     pub fn getSelectedIndex(self: View) ?usize {
-        if (self.box.focus.child_id) |child_id| {
-            return self.box.children.getIndex(child_id);
-        } else {
-            return null;
+        return self.currentTabIndex();
+    }
+
+    fn currentTabIndex(self: View) ?usize {
+        const child_id = self.box.focus.child_id orelse return null;
+        for (self.tab_ids, 0..) |id, i| {
+            if (id == child_id) return i;
         }
+        return null;
     }
 };

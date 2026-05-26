@@ -40,16 +40,17 @@ pub fn main(init: std.process.Init) !void {
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
-    // create the admin repo and build the Page from it
+    const work_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server", "admin" });
+    defer allocator.free(work_path);
+
+    const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
+    const Repo = rp.Repo(.xit, repo_opts);
+    var repo = try Repo.init(io, allocator, .{ .path = work_path });
+    defer repo.deinit(io, allocator);
+
+    var session: ui.Session = .{};
+
     const page: ui.Page = blk: {
-        const work_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server", "admin" });
-        defer allocator.free(work_path);
-
-        const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
-        const Repo = rp.Repo(.xit, repo_opts);
-        var repo = try Repo.init(io, allocator, .{ .path = work_path });
-        defer repo.deinit(io, allocator);
-
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
@@ -138,7 +139,7 @@ pub fn main(init: std.process.Init) !void {
         for (&repo_event_ids) |*id| id.* = evt.EventWithId.randomId(prng.random());
 
         var password_hash_buf: [evt.User.password_hash_max_len]u8 = undefined;
-        const password_hash = try evt.User.hashPassword("correct horse battery staple", &password_hash_buf, io);
+        const password_hash = try evt.User.hashPassword("password", &password_hash_buf, io);
 
         var events_to_consume: [user_data.len + repo_data.len]evt.EventWithId = undefined;
         for (user_data, 0..) |u, i| {
@@ -186,7 +187,7 @@ pub fn main(init: std.process.Init) !void {
         // consume events into the database
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        break :blk .{ .home = try .init(repo_opts, &page_arena, &repo) };
+        break :blk .{ .home = try .init(repo_opts, &page_arena, &repo, &session) };
     };
 
     // start the server
@@ -251,15 +252,16 @@ pub fn main(init: std.process.Init) !void {
             io: std.Io,
             allocator: std.mem.Allocator,
             page: *const ui.Page,
+            session: *ui.Session,
 
             pub fn run(self: @This()) !void {
                 // launch the TUI
-                try hx.ui.run(self.io, self.allocator, self.page);
+                try hx.ui.run(self.io, self.allocator, self.page, self.session);
             }
         };
 
         try srv.run(.xit, .{}, io, allocator, cwd_path, .{
             .data_dir = server_path,
-        }, run_opts.err, Runnable{ .io = io, .allocator = allocator, .page = &page });
+        }, run_opts.err, Runnable{ .io = io, .allocator = allocator, .page = &page, .session = &session });
     }
 }

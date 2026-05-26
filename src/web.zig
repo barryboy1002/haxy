@@ -1,9 +1,14 @@
 const std = @import("std");
 const xit = @import("xit");
 const rp = xit.repo;
+const hash = xit.hash;
+const evt = @import("./event.zig");
 const ui = @import("./ui.zig");
 const xitui = xit.xitui;
+const wgt = xitui.widget;
 const Focus = xitui.focus.Focus;
+
+const cookie_name = "haxy_user";
 
 const Embed = struct {
     path: []const u8,
@@ -78,53 +83,6 @@ pub fn run(
     }});
 }
 
-fn renderIndexHtml(io: std.Io, allocator: std.mem.Allocator, admin_repo_path: []const u8) ![]const u8 {
-    const template = (findEmbed("/index.html") orelse return error.MissingIndexAsset).body;
-
-    // open the admin repo to read live user/repo data.
-    const repo_opts: rp.RepoOpts(.xit) = .{};
-    const Repo = rp.Repo(.xit, repo_opts);
-    var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
-    defer repo.deinit(io, allocator);
-    var page_arena = std.heap.ArenaAllocator.init(allocator);
-    defer page_arena.deinit();
-    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, &repo) };
-
-    var root = try ui.initRoot(allocator, &page);
-    defer root.deinit();
-
-    const content = try generateHtml(allocator, &root);
-    defer allocator.free(content);
-
-    // serialize the page so the wasm side can parse it back without making
-    // a second request. base64-encoded so the json can be embedded in html.
-    var json: std.Io.Writer.Allocating = .init(allocator);
-    defer json.deinit();
-    try std.json.Stringify.value(page, .{}, &json.writer);
-
-    const b64 = std.base64.standard.Encoder;
-    const json_b64 = try allocator.alloc(u8, b64.calcSize(json.written().len));
-    defer allocator.free(json_b64);
-    _ = b64.encode(json_b64, json.written());
-
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
-    {
-        var cursor: usize = 0;
-        for (&[_]struct { needle: []const u8, replacement: []const u8 }{
-            .{ .needle = "{{{ HAXY_HTML }}}", .replacement = content },
-            .{ .needle = "{{{ HAXY_JSON }}}", .replacement = json_b64 },
-        }) |sub| {
-            const idx = std.mem.indexOfPos(u8, template, cursor, sub.needle) orelse return error.MissingTemplateToken;
-            try out.appendSlice(allocator, template[cursor..idx]);
-            try out.appendSlice(allocator, sub.replacement);
-            cursor = idx + sub.needle.len;
-        }
-        try out.appendSlice(allocator, template[cursor..]);
-    }
-    return try out.toOwnedSlice(allocator);
-}
-
 fn handleConnection(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -165,8 +123,19 @@ fn handleRequest(
     allocator: std.mem.Allocator,
     admin_repo_path: []const u8,
 ) !void {
-    const method = if (request.head.method == .HEAD) .GET else request.head.method;
-    if (method != .GET) {
+    const method = request.head.method;
+    const uri = try std.Uri.parseAfterScheme("", request.head.target);
+    const path = uri.path.percent_encoded;
+
+    if (method == .POST and std.mem.eql(u8, path, "/login")) {
+        return handleLogin(io, http_server, request, allocator, admin_repo_path);
+    }
+    if (method == .POST and std.mem.eql(u8, path, "/logout")) {
+        return handleLogout(http_server, request);
+    }
+
+    const get_or_head = method == .GET or method == .HEAD;
+    if (!get_or_head) {
         if (http_server.reader.state == .received_head) {
             http_server.reader.state = .ready;
         }
@@ -174,14 +143,24 @@ fn handleRequest(
         return;
     }
 
-    const uri = try std.Uri.parseAfterScheme("", request.head.target);
-    const path = uri.path.percent_encoded;
-
     if (std.mem.eql(u8, path, "/favicon.ico")) {
         if (http_server.reader.state == .received_head) {
             http_server.reader.state = .ready;
         }
         try writeStaticResponse(http_server, 204, "No Content", "image/x-icon", "", true);
+        return;
+    }
+
+    // for the index page we need to consult the session cookie before
+    // consuming the request, so we don't dispatch through findEmbed here.
+    if (std.mem.eql(u8, path, "/") or std.mem.eql(u8, path, "/index.html")) {
+        const user_id_hex = getCookieValue(request, cookie_name);
+        if (http_server.reader.state == .received_head) {
+            http_server.reader.state = .ready;
+        }
+        const html = try renderIndexHtml(io, allocator, admin_repo_path, user_id_hex);
+        defer allocator.free(html);
+        try writeStaticResponse(http_server, 200, "OK", "text/html; charset=utf-8", html, method == .HEAD);
         return;
     }
 
@@ -196,14 +175,123 @@ fn handleRequest(
     if (http_server.reader.state == .received_head) {
         http_server.reader.state = .ready;
     }
+    try writeStaticResponse(http_server, 200, "OK", embed.content_type, embed.body, method == .HEAD);
+}
 
-    if (std.mem.eql(u8, embed.path, "index.html")) {
-        const index_html = try renderIndexHtml(io, allocator, admin_repo_path);
-        defer allocator.free(index_html);
-        try writeStaticResponse(http_server, 200, "OK", embed.content_type, index_html, request.head.method == .HEAD);
-    } else {
-        try writeStaticResponse(http_server, 200, "OK", embed.content_type, embed.body, request.head.method == .HEAD);
+fn handleLogin(
+    io: std.Io,
+    http_server: *std.http.Server,
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    admin_repo_path: []const u8,
+) !void {
+    var body_buf: [256]u8 = undefined;
+    const reader = request.readerExpectNone(&body_buf);
+    const body = reader.allocRemaining(allocator, .limited(65536)) catch &[_]u8{};
+    defer allocator.free(body);
+
+    const username = (try parseFormField(allocator, body, "username")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(username);
+    const password = (try parseFormField(allocator, body, "password")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(password);
+
+    const repo_opts: rp.RepoOpts(.xit) = .{};
+    const Repo = rp.Repo(.xit, repo_opts);
+    var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
+    defer repo.deinit(io, allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const haxy_moment = try openHaxyMoment(repo_opts, &repo);
+    const result = try evt.User.verifyCredentials(Repo.DB, repo_opts.hash, haxy_moment, &arena, username, password);
+
+    switch (result) {
+        .success => |user_id| {
+            const hex = std.fmt.bytesToHex(user_id, .lower);
+            try http_server.out.print(
+                "HTTP/1.1 303 See Other\r\nLocation: /\r\nSet-Cookie: " ++ cookie_name ++ "={s}; Path=/; HttpOnly; SameSite=Strict\r\nContent-Length: 0\r\n\r\n",
+                .{hex},
+            );
+        },
+        .unknown_user, .wrong_password => {
+            try http_server.out.print(
+                "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\n\r\n",
+                .{},
+            );
+        },
     }
+}
+
+fn handleLogout(http_server: *std.http.Server, request: *std.http.Server.Request) !void {
+    // we don't need the body, but the http server wants the request consumed
+    // before the next one (and before we write the response).
+    var sink_buf: [64]u8 = undefined;
+    _ = request.readerExpectNone(&sink_buf).discardRemaining() catch {};
+
+    try http_server.out.print(
+        "HTTP/1.1 303 See Other\r\nLocation: /\r\nSet-Cookie: " ++ cookie_name ++ "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0\r\nContent-Length: 0\r\n\r\n",
+        .{},
+    );
+}
+
+fn renderIndexHtml(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    admin_repo_path: []const u8,
+    user_id_hex_opt: ?[]const u8,
+) ![]const u8 {
+    const template = (findEmbed("/index.html") orelse return error.MissingIndexAsset).body;
+
+    // open the admin repo to read live user/repo data.
+    const repo_opts: rp.RepoOpts(.xit) = .{};
+    const Repo = rp.Repo(.xit, repo_opts);
+    var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
+    defer repo.deinit(io, allocator);
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+
+    var session: ui.Session = .{};
+    if (user_id_hex_opt) |hex| {
+        if (decodeHexAlloc(page_arena.allocator(), hex)) |bytes| {
+            session.user_id = bytes;
+        } else |_| {}
+    }
+
+    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, &repo, &session) };
+    var root = try ui.initRoot(allocator, &page, &session);
+    defer root.deinit();
+
+    const content = try generateHtml(allocator, &root, &session);
+    defer allocator.free(content);
+
+    // serialize the page so the wasm side can parse it back without making
+    // a second request. base64-encoded so the json can be embedded in html.
+    var json: std.Io.Writer.Allocating = .init(allocator);
+    defer json.deinit();
+    try std.json.Stringify.value(page, .{}, &json.writer);
+
+    const b64 = std.base64.standard.Encoder;
+    const json_b64 = try allocator.alloc(u8, b64.calcSize(json.written().len));
+    defer allocator.free(json_b64);
+    _ = b64.encode(json_b64, json.written());
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    {
+        var cursor: usize = 0;
+        for (&[_]struct { needle: []const u8, replacement: []const u8 }{
+            .{ .needle = "{{{ HAXY_HTML }}}", .replacement = content },
+            .{ .needle = "{{{ HAXY_JSON }}}", .replacement = json_b64 },
+        }) |sub| {
+            const idx = std.mem.indexOfPos(u8, template, cursor, sub.needle) orelse return error.MissingTemplateToken;
+            try out.appendSlice(allocator, template[cursor..idx]);
+            try out.appendSlice(allocator, sub.replacement);
+            cursor = idx + sub.needle.len;
+        }
+        try out.appendSlice(allocator, template[cursor..]);
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 fn findEmbed(request_path: []const u8) ?Embed {
@@ -255,12 +343,83 @@ fn logError(err: *std.Io.Writer, comptime fmt: []const u8, args: anytype) void {
     err.flush() catch {};
 }
 
-pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget) ![]const u8 {
+pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget, session: *const ui.Session) ![]const u8 {
     const grid = root.getGrid() orelse return error.MissingGrid;
     const root_focus = root.getFocus();
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
+
+    // determines the form route for any submit_button on this page. only one
+    // is visible at a time: login when logged out, logout when logged in.
+    const submit_url: []const u8 = if (session.user_id != null) "/logout" else "/login";
+
+    // collect the text inputs in deterministic top-to-bottom, left-to-right
+    // order. root_focus.children is a hash map so iterating it directly would
+    // give arbitrary tab order between username / password.
+    const InputEntry = struct {
+        focus_id: usize,
+        x: usize,
+        y: usize,
+        width: usize,
+        is_password: bool,
+        ti: *wgt.TextInput(ui.Widget),
+    };
+    var inputs: std.ArrayList(InputEntry) = .empty;
+    defer inputs.deinit(allocator);
+    var focus_iter = root_focus.children.iterator();
+    while (focus_iter.next()) |entry| {
+        const child = entry.value_ptr.*;
+        const is_password = switch (child.focus.kind) {
+            .text_input => false,
+            .text_input_password => true,
+            else => continue,
+        };
+        try inputs.append(allocator, .{
+            .focus_id = entry.key_ptr.*,
+            .x = child.rect.x,
+            .y = child.rect.y,
+            .width = child.rect.size.width,
+            .is_password = is_password,
+            .ti = @fieldParentPtr("focus", child.focus),
+        });
+    }
+    std.mem.sort(InputEntry, inputs.items, {}, struct {
+        fn lt(_: void, a: InputEntry, b: InputEntry) bool {
+            if (a.y != b.y) return a.y < b.y;
+            return a.x < b.x;
+        }
+    }.lt);
+
+    // emit the overlay inputs FIRST so they precede any submit-button span
+    // in DOM order; with the submit button carrying tabindex="0", that puts
+    // it at the end of the natural tab order — username -> password -> button.
+    for (inputs.items) |entry| {
+        const inner_left = entry.x + 1;
+        const inner_top = entry.y + 1;
+        const inner_width = if (entry.width > 2) entry.width - 2 else 0;
+
+        try out.appendSlice(allocator, "<input type=\"");
+        try out.appendSlice(allocator, if (entry.is_password) "password" else "text");
+        try out.appendSlice(allocator, "\" data-focus-id=\"");
+        var id_buf: [32]u8 = undefined;
+        try out.appendSlice(allocator, try std.fmt.bufPrint(&id_buf, "{d}", .{entry.focus_id}));
+        if (entry.ti.options.name.len > 0) {
+            try out.appendSlice(allocator, "\" name=\"");
+            try appendEscapedHtml(allocator, &out, entry.ti.options.name);
+        }
+        try out.appendSlice(allocator, "\" value=\"");
+        var value_buf: std.ArrayList(u8) = .empty;
+        defer value_buf.deinit(allocator);
+        for (entry.ti.content.items) |cp| {
+            try value_buf.appendSlice(allocator, cp);
+        }
+        try appendEscapedHtml(allocator, &out, value_buf.items);
+        try out.appendSlice(allocator, "\" style=\"left:");
+        var pos_buf: [64]u8 = undefined;
+        try out.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, "{d}ch;top:{d}em;width:{d}ch;height:1em", .{ inner_left, inner_top, inner_width }));
+        try out.appendSlice(allocator, "\">");
+    }
 
     for (0..grid.size.height) |y| {
         // wrap runs of cells belonging to a focusable widget in a span tagged
@@ -272,8 +431,14 @@ pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget) ![]const u8 
             if (cell_id != current_id) {
                 if (current_id != null) try out.appendSlice(allocator, "</span>");
                 if (cell_id) |id| {
-                    var buf: [64]u8 = undefined;
-                    const tag = try std.fmt.bufPrint(&buf, "<span class=\"clickable\" data-focus-id=\"{}\">", .{id});
+                    const kind = if (root_focus.children.get(id)) |entry| entry.focus.kind else .container;
+                    var buf: [256]u8 = undefined;
+                    // tabindex="0" on submit buttons puts them in the browser's
+                    // natural Tab order alongside the inputs above.
+                    const tag = if (kind == .submit_button)
+                        try std.fmt.bufPrint(&buf, "<span class=\"clickable\" data-focus-id=\"{d}\" data-action=\"submit\" data-url=\"{s}\" tabindex=\"0\">", .{ id, submit_url })
+                    else
+                        try std.fmt.bufPrint(&buf, "<span class=\"clickable\" data-focus-id=\"{d}\">", .{id});
                     try out.appendSlice(allocator, tag);
                 }
                 current_id = cell_id;
@@ -312,4 +477,80 @@ fn appendEscapedHtml(allocator: std.mem.Allocator, out: *std.ArrayList(u8), inpu
             else => try out.append(allocator, ch),
         }
     }
+}
+
+// --- helpers --------------------------------------------------------------
+
+fn openHaxyMoment(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    repo: *rp.Repo(.xit, repo_opts),
+) !rp.Repo(.xit, repo_opts).DB.HashMap(.read_only) {
+    const DB = rp.Repo(.xit, repo_opts).DB;
+    const history = try DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
+    const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+    const moment = try DB.HashMap(.read_only).init(moment_cursor);
+    const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
+    var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+    _ = try last_object_id_cursor.readBytes(&last_object_id);
+    const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+    const haxy = try DB.ArrayList(.read_only).init(haxy_cursor);
+    const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
+    const haxy_moments = try DB.HashMap(.read_only).init(haxy_moments_cursor);
+    const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
+    return try DB.HashMap(.read_only).init(haxy_moment_cursor);
+}
+
+fn getCookieValue(request: *std.http.Server.Request, name: []const u8) ?[]const u8 {
+    var iter = request.iterateHeaders();
+    while (iter.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "cookie")) continue;
+        var pairs = std.mem.splitScalar(u8, header.value, ';');
+        while (pairs.next()) |pair| {
+            const trimmed = std.mem.trim(u8, pair, " \t");
+            const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
+            if (std.mem.eql(u8, trimmed[0..eq], name)) {
+                return trimmed[eq + 1 ..];
+            }
+        }
+    }
+    return null;
+}
+
+fn decodeHexAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
+    if (hex.len % 2 != 0) return error.InvalidHex;
+    const bytes = try allocator.alloc(u8, hex.len / 2);
+    errdefer allocator.free(bytes);
+    _ = std.fmt.hexToBytes(bytes, hex) catch return error.InvalidHex;
+    return bytes;
+}
+
+fn parseFormField(allocator: std.mem.Allocator, body: []const u8, key: []const u8) !?[]u8 {
+    var iter = std.mem.splitScalar(u8, body, '&');
+    while (iter.next()) |pair| {
+        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+        if (std.mem.eql(u8, pair[0..eq], key)) {
+            return try decodeFormValue(allocator, pair[eq + 1 ..]);
+        }
+    }
+    return null;
+}
+
+fn decodeFormValue(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var i: usize = 0;
+    while (i < encoded.len) : (i += 1) {
+        switch (encoded[i]) {
+            '+' => try out.append(allocator, ' '),
+            '%' => {
+                if (i + 2 >= encoded.len) return error.InvalidPercentEncoding;
+                const hi = std.fmt.charToDigit(encoded[i + 1], 16) catch return error.InvalidPercentEncoding;
+                const lo = std.fmt.charToDigit(encoded[i + 2], 16) catch return error.InvalidPercentEncoding;
+                try out.append(allocator, hi * 16 + lo);
+                i += 2;
+            },
+            else => try out.append(allocator, encoded[i]),
+        }
+    }
+    return try out.toOwnedSlice(allocator);
 }

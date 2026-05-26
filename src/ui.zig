@@ -1,5 +1,6 @@
 const std = @import("std");
 const xit = @import("xit");
+const rp = xit.repo;
 const xitui = xit.xitui;
 const term = xitui.terminal;
 const wgt = xitui.widget;
@@ -9,14 +10,25 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const evt = @import("./event.zig");
 
+pub const canonical_repo_opts: rp.RepoOpts(.xit) = .{};
+pub const DB = rp.Repo(.xit, canonical_repo_opts).DB;
+
 pub const Home = @import("./ui/Home.zig");
 
 pub const Page = union(enum) {
     home: Home,
 };
 
-pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page) !void {
-    var root = try initRoot(allocator, page);
+// per-connection mutable state. each SSH session / web session / local TUI
+// run gets its own
+pub const Session = struct {
+    user_id: ?[]const u8 = null,
+    arena: ?*std.heap.ArenaAllocator = null,
+    haxy_moment: ?DB.HashMap(.read_only) = null,
+};
+
+pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page, session: *Session) !void {
+    var root = try initRoot(allocator, page, session);
     defer root.deinit();
 
     var terminal = try term.Terminal.init(io, allocator);
@@ -52,11 +64,6 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page) !void {
     }
 }
 
-// route a single decoded key into the widget tree, handling 'q'-to-quit and
-// mouse-click focus traversal along the way. shared between the tty event
-// loop (ui.run) and the SSH session event loop in serve_ssh.zig.
-// `terminal` is whatever terminal type the caller is driving — it must
-// expose requestQuit().
 pub fn inputKey(root: *Widget, key: inp.Key, terminal: anytype) !void {
     switch (key) {
         .codepoint => |cp| if (cp == 'q') terminal.requestQuit() else try root.input(key, root.getFocus()),
@@ -75,6 +82,10 @@ pub fn inputKey(root: *Widget, key: inp.Key, terminal: anytype) !void {
                         break;
                     }
                 }
+                // forward the press into the widget tree so buttons (and any
+                // future click-aware widgets) can react. widgets that don't
+                // care about presses ignore it.
+                try root.input(key, root.getFocus());
             } else {
                 try root.input(key, root.getFocus());
             }
@@ -83,9 +94,9 @@ pub fn inputKey(root: *Widget, key: inp.Key, terminal: anytype) !void {
     }
 }
 
-pub fn initRoot(allocator: std.mem.Allocator, page: *const Page) !Widget {
+pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Session) !Widget {
     var root: Widget = switch (page.*) {
-        .home => |*p| .{ .home = try Home.View.init(allocator, p) },
+        .home => |*p| .{ .home = try Home.View.init(allocator, p, session) },
     };
     errdefer root.deinit();
 
@@ -104,13 +115,18 @@ pub const Widget = union(enum) {
     text: wgt.Text(Widget),
     box: wgt.Box(Widget),
     text_box: wgt.TextBox(Widget),
+    text_input: wgt.TextInput(Widget),
     scroll: wgt.Scroll(Widget),
     stack: wgt.Stack(Widget),
     selectable_list: SelectableList,
+    spacer: Spacer,
+    center: Center,
     home: Home.View,
     home_header: Home.Header.View,
     home_users: Home.Users.View,
     home_repos: Home.Repos.View,
+    home_auth_tab: Home.Header.AuthTab.View,
+    home_auth: Home.Auth.View,
 
     pub fn deinit(self: *Widget) void {
         switch (self.*) {
@@ -314,5 +330,149 @@ pub const SelectableList = struct {
         if (inner_box.children.values()[index].rect) |rect| {
             self.scroll.scrollToRect(rect);
         }
+    }
+};
+
+// an invisible widget that fills the horizontal space granted by its parent.
+// used inside Box(horiz) with a min_size so the box reserves space for the
+// children that follow, pushing them to the right.
+pub const Spacer = struct {
+    allocator: std.mem.Allocator,
+    focus: Focus,
+    grid: ?Grid,
+
+    pub fn init(allocator: std.mem.Allocator) Spacer {
+        return .{
+            .allocator = allocator,
+            .focus = Focus.init(allocator, .container),
+            .grid = null,
+        };
+    }
+
+    pub fn deinit(self: *Spacer) void {
+        self.focus.deinit();
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+    }
+
+    pub fn build(self: *Spacer, constraint: layout.Constraint, root_focus: *Focus) !void {
+        _ = root_focus;
+        self.clearGrid();
+        const width = constraint.max_size.width orelse return;
+        if (width == 0) return;
+        self.grid = try Grid.init(self.allocator, .{ .width = width, .height = 1 });
+    }
+
+    pub fn input(self: *Spacer, key: inp.Key, root_focus: *Focus) !void {
+        _ = self;
+        _ = key;
+        _ = root_focus;
+    }
+
+    pub fn clearGrid(self: *Spacer) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+    }
+
+    pub fn getGrid(self: Spacer) ?Grid {
+        return self.grid;
+    }
+
+    pub fn getFocus(self: *Spacer) *Focus {
+        return &self.focus;
+    }
+};
+
+// a single-child wrapper that builds the child at its natural size and
+// positions its grid in the middle of the area granted by the parent
+pub const Center = struct {
+    allocator: std.mem.Allocator,
+    focus: Focus,
+    grid: ?Grid,
+    child: *Widget,
+    direction: Direction,
+
+    pub const Direction = enum { both, horiz, vert };
+
+    pub fn init(allocator: std.mem.Allocator, child_widget: Widget, direction: Direction) !Center {
+        const child = try allocator.create(Widget);
+        errdefer allocator.destroy(child);
+        child.* = child_widget;
+        return .{
+            .allocator = allocator,
+            .focus = Focus.init(allocator, .container),
+            .grid = null,
+            .child = child,
+            .direction = direction,
+        };
+    }
+
+    pub fn deinit(self: *Center) void {
+        self.focus.deinit();
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        self.child.deinit();
+        self.allocator.destroy(self.child);
+    }
+
+    pub fn build(self: *Center, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+        self.getFocus().clear();
+
+        // build the child without forcing it to fill min_size; it sizes
+        // itself to its content within the available max.
+        try self.child.build(.{
+            .min_size = .{ .width = null, .height = null },
+            .max_size = constraint.max_size,
+        }, root_focus);
+
+        const child_grid = self.child.getGrid() orelse return;
+
+        const width = constraint.max_size.width orelse child_grid.size.width;
+        const height = constraint.max_size.height orelse child_grid.size.height;
+        if (width == 0 or height == 0) return;
+
+        const offset_x: usize = if (self.direction == .horiz or self.direction == .both)
+            (width -| child_grid.size.width) / 2
+        else
+            0;
+        const offset_y: usize = if (self.direction == .vert or self.direction == .both)
+            (height -| child_grid.size.height) / 2
+        else
+            0;
+
+        var grid = try Grid.init(self.allocator, .{ .width = width, .height = height });
+        errdefer grid.deinit();
+        try grid.drawGrid(child_grid, offset_x, offset_y);
+        try self.getFocus().addChild(self.child.getFocus(), child_grid.size, offset_x, offset_y);
+        self.getFocus().child_id = self.child.getFocus().id;
+
+        self.grid = grid;
+    }
+
+    pub fn input(self: *Center, key: inp.Key, root_focus: *Focus) !void {
+        try self.child.input(key, root_focus);
+    }
+
+    pub fn clearGrid(self: *Center) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        self.child.clearGrid();
+    }
+
+    pub fn getGrid(self: Center) ?Grid {
+        return self.grid;
+    }
+
+    pub fn getFocus(self: *Center) *Focus {
+        return &self.focus;
     }
 };

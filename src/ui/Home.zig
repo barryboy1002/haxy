@@ -13,10 +13,13 @@ const Focus = xitui.focus.Focus;
 pub const Users = @import("./Home/Users.zig");
 pub const Repos = @import("./Home/Repos.zig");
 pub const Header = @import("./Home/Header.zig");
+pub const Auth = @import("./Home/Auth.zig");
 
 header: Header,
 users: Users,
 repos: Repos,
+auth: Auth,
+user_id: ?[]const u8 = null,
 
 const Self = @This();
 
@@ -24,6 +27,7 @@ pub fn init(
     comptime repo_opts: rp.RepoOpts(.xit),
     arena: *std.heap.ArenaAllocator,
     repo: *rp.Repo(.xit, repo_opts),
+    session: *ui.Session,
 ) !Self {
     const DB = rp.Repo(.xit, repo_opts).DB;
 
@@ -45,27 +49,39 @@ pub fn init(
     const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
     const haxy_moment = try DB.HashMap(.read_only).init(haxy_moment_cursor);
 
+    // hand the cursor + arena off to the session so Login (and any future
+    // page that needs DB access at input time) can use them on demand.
+    session.arena = arena;
+    session.haxy_moment = haxy_moment;
+
     return .{
         .header = Header.init(),
         .users = try Users.init(repo_opts, arena, haxy_moment),
         .repos = try Repos.init(repo_opts, arena, haxy_moment),
+        .auth = Auth.init(),
+        .user_id = session.user_id,
     };
 }
 
 pub const View = struct {
     box: wgt.Box(ui.Widget),
     data: *const Self,
+    session: *ui.Session,
 
     const header_index: usize = 0;
     const stack_index: usize = 1;
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self) !View {
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer box.deinit();
 
+        // build the header first so we can grab the users-tab focus id and
+        // hand it to login/logout
+        var users_tab_id: usize = undefined;
         {
-            var header_view = try Header.View.init(allocator, &data.header);
+            var header_view = try Header.View.init(allocator, &data.header, session);
             errdefer header_view.deinit();
+            users_tab_id = header_view.tab_ids[0];
             try box.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .home_header = header_view }, .rect = null, .min_size = null });
         }
 
@@ -85,12 +101,19 @@ pub const View = struct {
                 try stack.children.put(stack.allocator, repos_view.getFocus().id, .{ .home_repos = repos_view });
             }
 
+            {
+                var auth_view = try Auth.View.init(allocator, &data.auth, session, users_tab_id);
+                errdefer auth_view.deinit();
+                try stack.children.put(stack.allocator, auth_view.getFocus().id, .{ .home_auth = auth_view });
+            }
+
             try box.children.put(allocator, stack.getFocus().id, .{ .widget = .{ .stack = stack }, .rect = null, .min_size = null });
         }
 
         var self = View{
             .box = box,
             .data = data,
+            .session = session,
         };
         self.getFocus().child_id = box.children.keys()[header_index];
         return self;
@@ -104,6 +127,8 @@ pub const View = struct {
         self.clearGrid();
         const header = &self.box.children.values()[header_index].widget.home_header;
         const stack = &self.box.children.values()[stack_index].widget.stack;
+
+        // each header tab maps 1:1 to a stack child by position
         if (header.getSelectedIndex()) |index| {
             stack.getFocus().child_id = stack.children.keys()[index];
         }
@@ -116,8 +141,6 @@ pub const View = struct {
                 const child = &self.box.children.values()[current_index].widget;
                 var index = current_index;
 
-                // arrow up/down (and scroll wheel) move focus between the
-                // header and the stack below it, matching radargit's GitUI.
                 const Direction = enum { up, down, none };
                 const direction: Direction = switch (key) {
                     .arrow_up => .up,
@@ -140,6 +163,7 @@ pub const View = struct {
                                     const at_top = switch (selected_widget.*) {
                                         .home_users => |*v| v.getSelectedIndex() == 0,
                                         .home_repos => |*v| v.getSelectedIndex() == 0,
+                                        .home_auth => |*v| v.getSelectedIndex() == 0,
                                         else => false,
                                     };
                                     if (at_top) {

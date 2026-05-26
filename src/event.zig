@@ -301,7 +301,7 @@ pub fn consumeInTransaction(
             _ = try std.fmt.hexToBytes(&current_event_id, &event_with_id.id);
 
             switch (event_with_id.event) {
-                .user => |event_maybe| try User.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe),
+                .user => |event_maybe| try User.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe, &arena),
                 .repo => |event_maybe| try Repo.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe, &arena),
                 .issue => |event_maybe| try Issue.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe),
             }
