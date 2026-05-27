@@ -141,7 +141,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
     // algorithm in each slot that the *client* prefers and the server also
     // offers is selected. Both raw KEXINITs are hashed into the exchange
     // hash so tampering is caught at signature verification time.
-    const client_kex_init = try proto.buildKexInit(io, allocator, &proto.our_kex_algos, &proto.our_host_key_algos, &proto.our_ciphers);
+    const client_kex_init = try proto.buildKexInit(io, allocator, &.{"curve25519-sha256"}, &proto.our_host_key_algos, &proto.our_ciphers);
     defer allocator.free(client_kex_init);
     try proto.writePlainPacket(io, cw, client_kex_init);
 
@@ -199,7 +199,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
 
     // Recompute H independently. If the server lied about any input the
     // signature won't verify against the trusted host key.
-    const h = try proto.computeExchangeHash(allocator, v_c, v_s, client_kex_init, server_kex_init, k_s, &client_eph.public_key, &server_eph_pub, &k);
+    const h = try proto.computeExchangeHash(allocator, v_c, v_s, client_kex_init, server_kex_init, k_s, &client_eph.public_key, &server_eph_pub, &k, false);
 
     // Verify the host signature on H.
     {
@@ -229,7 +229,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
     }
 
     var keys: proto.SessionKeys = undefined;
-    try proto.deriveSessionKeys(allocator, &k, &h, &h, &keys);
+    try proto.deriveSessionKeys(allocator, &k, &h, &h, &keys, false);
     // KEXINIT/KEX_ECDH_INIT/NEWKEYS were seqno 0/1/2; first encrypted is 3.
     var cs_cipher = proto.Cipher.init(&keys.cs_enc, 3);
     var sc_cipher = proto.Cipher.init(&keys.sc_enc, 3);
@@ -478,7 +478,7 @@ test "auth + channel layer failure modes" {
         const v_s = try allocator.dupe(u8, v_s_trimmed);
         defer allocator.free(v_s);
 
-        const ckex = try proto.buildKexInit(io, allocator, &proto.our_kex_algos, &proto.our_host_key_algos, &proto.our_ciphers);
+        const ckex = try proto.buildKexInit(io, allocator, &.{"curve25519-sha256"}, &proto.our_host_key_algos, &proto.our_ciphers);
         defer allocator.free(ckex);
         try proto.writePlainPacket(io, cw, ckex);
         const skex = try proto.readPlainPacket(allocator, cr);
@@ -504,7 +504,7 @@ test "auth + channel layer failure modes" {
         const sig_blob = try proto.takeStringField(allocator, &rr, 1024);
         defer allocator.free(sig_blob);
         const k = try X25519.scalarmult(eph.secret_key, server_pub);
-        const exchange = try proto.computeExchangeHash(allocator, client_version, v_s, ckex, skex, k_s, &eph.public_key, &server_pub, &k);
+        const exchange = try proto.computeExchangeHash(allocator, client_version, v_s, ckex, skex, k_s, &eph.public_key, &server_pub, &k, false);
 
         try proto.writePlainPacket(io, cw, &[_]u8{proto.SSH_MSG_NEWKEYS});
         {
@@ -514,7 +514,7 @@ test "auth + channel layer failure modes" {
         }
 
         var keys: proto.SessionKeys = undefined;
-        try proto.deriveSessionKeys(allocator, &k, &exchange, &exchange, &keys);
+        try proto.deriveSessionKeys(allocator, &k, &exchange, &exchange, &keys, false);
         cs = proto.Cipher.init(&keys.cs_enc, 3);
         sc = proto.Cipher.init(&keys.sc_enc, 3);
         session_id = exchange;

@@ -690,7 +690,11 @@ fn nameListContainsAny(haystack: []const u8, our_options: []const []const u8) bo
 // KEXINIT (RFC 4253 §7.1)
 // ---------------------------------------------------------------------------
 
-pub const our_kex_algos = [_][]const u8{ "curve25519-sha256", "curve25519-sha256@libssh.org" };
+pub const our_kex_algos = [_][]const u8{ "mlkem768x25519-sha256", "curve25519-sha256", "curve25519-sha256@libssh.org" };
+
+const MLKem768 = std.crypto.kem.ml_kem.MLKem768;
+const hybrid_client_blob_len = MLKem768.PublicKey.encoded_length + X25519.public_length; // 1216
+const hybrid_server_blob_len = MLKem768.ciphertext_length + X25519.public_length; // 1120
 pub const our_host_key_algos = [_][]const u8{"ssh-ed25519"};
 pub const our_ciphers = [_][]const u8{"chacha20-poly1305@openssh.com"};
 const our_macs = [_][]const u8{}; // none — implicit in the AEAD cipher
@@ -808,26 +812,68 @@ fn runKex(
     var parsed = try parseClientKexInit(allocator, client_kex_init);
     defer parsed.deinit(allocator);
 
-    if (!nameListContainsAny(parsed.kex_algos, &our_kex_algos)) return error.NoCommonKexAlgorithm;
+    // pick the first kex algo in the client's preference list that we also
+    // support (RFC 4253 §7.1.3).
+    const kex_algo = blk: {
+        var iter = std.mem.splitScalar(u8, parsed.kex_algos, ',');
+        while (iter.next()) |name| {
+            for (our_kex_algos) |opt| {
+                if (std.mem.eql(u8, name, opt)) break :blk opt;
+            }
+        }
+        return error.NoCommonKexAlgorithm;
+    };
     if (!nameListContainsAny(parsed.host_key_algos, &our_host_key_algos)) return error.NoCommonHostKeyAlgorithm;
     if (!nameListContainsAny(parsed.cs_cipher, &our_ciphers)) return error.NoCommonCipher;
     if (!nameListContainsAny(parsed.sc_cipher, &our_ciphers)) return error.NoCommonCipher;
+    const hybrid = std.mem.eql(u8, kex_algo, "mlkem768x25519-sha256");
 
-    // receive KEX_ECDH_INIT — client's ephemeral curve25519 pubkey
+    // receive KEX_ECDH_INIT (mlkem768x25519 reuses message code 30 — same
+    // wire shape, only the string size differs).
     const ecdh_init = try readPlainPacket(allocator, reader);
     defer allocator.free(ecdh_init);
     if (ecdh_init.len < 1 or ecdh_init[0] != SSH_MSG_KEX_ECDH_INIT) return error.UnexpectedMessage;
 
     var ecdh_init_reader = std.Io.Reader.fixed(ecdh_init[1..]);
-    const client_ephemeral_alloc = try takeStringField(allocator, &ecdh_init_reader, X25519.public_length);
-    defer allocator.free(client_ephemeral_alloc);
-    if (client_ephemeral_alloc.len != X25519.public_length) return error.InvalidEphemeralKey;
-    var client_ephemeral: [X25519.public_length]u8 = undefined;
-    @memcpy(&client_ephemeral, client_ephemeral_alloc);
+    const expected_client_len: u32 = if (hybrid) hybrid_client_blob_len else X25519.public_length;
+    const client_blob = try takeStringField(allocator, &ecdh_init_reader, expected_client_len);
+    defer allocator.free(client_blob);
+    if (client_blob.len != expected_client_len) return error.InvalidEphemeralKey;
 
-    // our ephemeral keypair + shared secret
-    const server_ephemeral_kp = X25519.KeyPair.generate(io);
-    const shared_secret = try X25519.scalarmult(server_ephemeral_kp.secret_key, client_ephemeral);
+    // derive server reply blob (S_REPLY) + shared secret K.
+    //   ECDH: server_blob = X25519 server pub (32B); K = X25519(s, c_pub).
+    //   hybrid: server_blob = MLKEM ciphertext (1088B) || X25519 server pub (32B);
+    //           K = SHA-256(K_MLKEM || K_X25519).
+    var server_blob: []u8 = undefined;
+    var k: []u8 = undefined;
+    {
+        const x25519_offset: usize = if (hybrid) MLKem768.PublicKey.encoded_length else 0;
+        var x25519_client_pub: [X25519.public_length]u8 = undefined;
+        @memcpy(&x25519_client_pub, client_blob[x25519_offset..]);
+        const server_kp = X25519.KeyPair.generate(io);
+        const x25519_shared = try X25519.scalarmult(server_kp.secret_key, x25519_client_pub);
+
+        if (hybrid) {
+            var pq_pub_bytes: [MLKem768.PublicKey.encoded_length]u8 = undefined;
+            @memcpy(&pq_pub_bytes, client_blob[0..MLKem768.PublicKey.encoded_length]);
+            const pq_pub = try MLKem768.PublicKey.fromBytes(&pq_pub_bytes);
+            const encap = pq_pub.encaps(io);
+
+            server_blob = try allocator.alloc(u8, hybrid_server_blob_len);
+            @memcpy(server_blob[0..MLKem768.ciphertext_length], &encap.ciphertext);
+            @memcpy(server_blob[MLKem768.ciphertext_length..], &server_kp.public_key);
+
+            var h = Sha256.init(.{});
+            h.update(&encap.shared_secret);
+            h.update(&x25519_shared);
+            k = try allocator.dupe(u8, &h.finalResult());
+        } else {
+            server_blob = try allocator.dupe(u8, &server_kp.public_key);
+            k = try allocator.dupe(u8, &x25519_shared);
+        }
+    }
+    defer allocator.free(server_blob);
+    defer allocator.free(k);
 
     // build host key blob (K_S)
     var host_key_blob: std.ArrayList(u8) = .empty;
@@ -842,9 +888,10 @@ fn runKex(
         client_kex_init,
         server_kex_init,
         host_key_blob.items,
-        &client_ephemeral,
-        &server_ephemeral_kp.public_key,
-        &shared_secret,
+        client_blob,
+        server_blob,
+        k,
+        hybrid,
     );
 
     // sign H with the host key, format as ssh signature blob
@@ -852,12 +899,12 @@ fn runKex(
     defer signature_blob.deinit(allocator);
     try host_key.appendSignatureBlob(&signature_blob, allocator, &exchange_hash);
 
-    // build & send KEX_ECDH_REPLY
+    // build & send KEX_ECDH_REPLY (msg code 31 reused as KEX_HYBRID_REPLY)
     var reply: std.ArrayList(u8) = .empty;
     defer reply.deinit(allocator);
     try reply.append(allocator, SSH_MSG_KEX_ECDH_REPLY);
     try writeStringField(&reply, allocator, host_key_blob.items);
-    try writeStringField(&reply, allocator, &server_ephemeral_kp.public_key);
+    try writeStringField(&reply, allocator, server_blob);
     try writeStringField(&reply, allocator, signature_blob.items);
     try writePlainPacket(io, writer, reply.items);
 
@@ -870,10 +917,10 @@ fn runKex(
     if (peer_newkeys.len < 1 or peer_newkeys[0] != SSH_MSG_NEWKEYS) return error.UnexpectedMessage;
 
     // derive session keys per RFC 4253 §7.2. session_id == H for the first
-    // KEX. K is encoded as mpint in each derivation input. only the encrypt
-    // keys are needed for chacha20-poly1305 (no separate MAC/IV).
+    // KEX. only the encrypt keys are needed for chacha20-poly1305 (no
+    // separate MAC/IV).
     var keys: SessionKeys = undefined;
-    try deriveSessionKeys(allocator, &shared_secret, &exchange_hash, &exchange_hash, &keys);
+    try deriveSessionKeys(allocator, k, &exchange_hash, &exchange_hash, &keys, hybrid);
 
     return .{
         .cs_key = keys.cs_enc,
@@ -896,6 +943,9 @@ pub fn computeExchangeHash(
     client_ephemeral: []const u8,
     server_ephemeral: []const u8,
     shared_secret: []const u8,
+    /// curve25519-sha256 encodes K as mpint; mlkem768x25519-sha256 encodes it
+    /// as a plain SSH string (length-prefixed bytes).
+    k_is_string: bool,
 ) ![Sha256.digest_length]u8 {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
@@ -907,7 +957,11 @@ pub fn computeExchangeHash(
     try writeStringField(&buf, allocator, host_key_blob);
     try writeStringField(&buf, allocator, client_ephemeral);
     try writeStringField(&buf, allocator, server_ephemeral);
-    try writeMpint(&buf, allocator, shared_secret);
+    if (k_is_string) {
+        try writeStringField(&buf, allocator, shared_secret);
+    } else {
+        try writeMpint(&buf, allocator, shared_secret);
+    }
 
     var hasher = Sha256.init(.{});
     hasher.update(buf.items);
@@ -934,11 +988,17 @@ pub fn deriveSessionKeys(
     exchange_hash: []const u8,
     session_id: []const u8,
     out: *SessionKeys,
+    /// see computeExchangeHash — must match the KEX algorithm's K encoding.
+    k_is_string: bool,
 ) !void {
     // pre-build the K || H prefix once; reused for every derivation
     var prefix: std.ArrayList(u8) = .empty;
     defer prefix.deinit(allocator);
-    try writeMpint(&prefix, allocator, shared_secret);
+    if (k_is_string) {
+        try writeStringField(&prefix, allocator, shared_secret);
+    } else {
+        try writeMpint(&prefix, allocator, shared_secret);
+    }
     try prefix.appendSlice(allocator, exchange_hash);
 
     try deriveKey(allocator, prefix.items, 'A', session_id, &out.cs_iv);
