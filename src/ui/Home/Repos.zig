@@ -41,12 +41,12 @@ pub fn init(
 }
 
 pub const View = struct {
-    list: ui.SelectableList,
+    list: ui.FlowBox.Scroll,
     data: *const Self,
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self) !View {
         var self = blk: {
-            var list = try ui.SelectableList.init(allocator);
+            var list = try ui.FlowBox.Scroll.init(allocator, .{});
             errdefer list.deinit(allocator);
 
             break :blk View{

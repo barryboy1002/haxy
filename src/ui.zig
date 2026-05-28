@@ -191,7 +191,7 @@ pub const Widget = union(enum) {
     text_input: wgt.TextInput(Widget),
     scroll: wgt.Scroll(Widget),
     stack: wgt.Stack(Widget),
-    selectable_list: SelectableList,
+    flow_box: FlowBox,
     spacer: Spacer,
     center: Center,
     home: Home.View,
@@ -238,54 +238,55 @@ pub const Widget = union(enum) {
     }
 };
 
-// a scrollable list of selectable single-line items. content is replaced
-// via setItems, which dupes the strings into the widget's own allocation.
-pub const SelectableList = struct {
-    scroll: wgt.Scroll(Widget),
+pub const FlowBox = struct {
+    focus: Focus,
+    grid: ?Grid,
+    text_boxes: std.ArrayList(wgt.TextBox(Widget)),
     lines: std.ArrayList([]const u8),
+    // column count from the last build — FlowBox.Scroll.input uses it so arrow
+    // up/down can step by a row's worth of items.
+    last_cols: usize,
+    options: Options,
 
-    pub fn init(allocator: std.mem.Allocator) !SelectableList {
-        var self = blk: {
-            var inner_box = wgt.Box(Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .vert });
-            errdefer inner_box.deinit(allocator);
+    const border_rows: usize = 2;
 
-            var scroll = try wgt.Scroll(Widget).init(allocator, .{ .box = inner_box }, .vert);
-            errdefer scroll.deinit(allocator);
+    pub const Options = struct {
+        cell_width: usize = 40,
+        cell_height: usize = 3,
+    };
 
-            break :blk SelectableList{
-                .scroll = scroll,
-                .lines = .empty,
-            };
+    pub fn init(options: Options) FlowBox {
+        return .{
+            .focus = Focus.init(.container),
+            .grid = null,
+            .text_boxes = .empty,
+            .lines = .empty,
+            .last_cols = 1,
+            .options = options,
         };
-        errdefer self.deinit(allocator);
-        return self;
     }
 
-    pub fn deinit(self: *SelectableList, allocator: std.mem.Allocator) void {
-        self.scroll.deinit(allocator);
+    pub fn deinit(self: *FlowBox, allocator: std.mem.Allocator) void {
+        self.focus.deinit(allocator);
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        for (self.text_boxes.items) |*tb| tb.deinit(allocator);
+        self.text_boxes.deinit(allocator);
         for (self.lines.items) |line| allocator.free(line);
         self.lines.deinit(allocator);
     }
 
-    pub fn setItems(self: *SelectableList, allocator: std.mem.Allocator, items: []const []const u8) !void {
-        const inner_box = &self.scroll.child.box;
-
-        for (inner_box.children.values()) |*child| {
-            child.widget.deinit(allocator);
-        }
-        inner_box.children.clearAndFree(allocator);
+    pub fn setItems(self: *FlowBox, allocator: std.mem.Allocator, items: []const []const u8) !void {
+        for (self.text_boxes.items) |*tb| tb.deinit(allocator);
+        self.text_boxes.clearAndFree(allocator);
 
         for (self.lines.items) |line| allocator.free(line);
         self.lines.clearAndFree(allocator);
 
-        self.scroll.x = 0;
-        self.scroll.y = 0;
-        // keep the focus tree in sync with the widget tree so setFocus can
-        // descend even when the pane isn't laid out this build (e.g. narrow
-        // terminal where only the focused pane fits). build's clear+addChild
-        // would do this otherwise, but it gets skipped for unbuilt panes.
-        inner_box.getFocus().clear();
-        inner_box.getFocus().child_id = null;
+        self.focus.clear();
+        self.focus.child_id = null;
 
         for (items) |item| {
             const line = try allocator.dupe(u8, item);
@@ -294,112 +295,207 @@ pub const SelectableList = struct {
                 try self.lines.append(allocator, line);
             }
 
-            var text_box = try wgt.TextBox(Widget).init(allocator, line, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox(Widget).init(allocator, line, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .word });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().focusable = true;
-            try inner_box.children.put(allocator, text_box.getFocus().id, .{ .widget = .{ .text_box = text_box }, .rect = null, .min_size = null });
-            try inner_box.getFocus().addChild(allocator, text_box.getFocus(), .{ .width = 0, .height = 0 }, 0, 0);
+            try self.text_boxes.append(allocator, text_box);
         }
 
-        if (inner_box.children.count() > 0) {
-            inner_box.getFocus().child_id = inner_box.children.keys()[0];
+        if (self.text_boxes.items.len > 0) {
+            self.focus.child_id = self.text_boxes.items[0].getFocus().id;
         }
     }
 
-    pub fn build(self: *SelectableList, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+    pub fn build(self: *FlowBox, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
-        const children = &self.scroll.child.box.children;
-        for (children.keys(), children.values()) |id, *item| {
-            item.widget.text_box.options.border_style = if (self.getFocus().child_id == id) .single else .hidden;
+        self.focus.clear();
+
+        const cell_width = self.options.cell_width;
+        const max_width = constraint.max_size.width orelse cell_width;
+        const cols = if (cell_width == 0) 1 else @max(1, max_width / cell_width);
+        self.last_cols = cols;
+
+        const count = self.text_boxes.items.len;
+        if (count == 0) return;
+        const slot_height = self.options.cell_height + border_rows;
+        if (slot_height == 0) return;
+
+        // build at the slot size so every text box fits a single grid cell
+        for (self.text_boxes.items) |*tb| {
+            tb.options.border_style = if (self.focus.child_id == tb.getFocus().id) .single else .hidden;
+            try tb.build(allocator, .{
+                .min_size = .{ .width = cell_width, .height = null },
+                .max_size = .{ .width = cell_width, .height = slot_height },
+            }, root_focus);
         }
-        try self.scroll.build(allocator, constraint, root_focus);
+
+        const rows = (count + cols - 1) / cols;
+        const content_height = rows * slot_height;
+        const total_width = cols * cell_width;
+        if (total_width == 0 or content_height == 0) return;
+
+        var grid = try Grid.init(allocator, .{ .width = total_width, .height = content_height });
+        errdefer grid.deinit();
+
+        for (self.text_boxes.items, 0..) |*tb, i| {
+            const tb_grid = tb.getGrid() orelse continue;
+            const col = i % cols;
+            const row = i / cols;
+            const cell_x = col * cell_width;
+            const cell_y = row * slot_height;
+            try self.focus.addChild(allocator, tb.getFocus(), tb_grid.size, cell_x, cell_y);
+            try grid.drawGrid(tb_grid, cell_x, cell_y);
+        }
+
+        self.grid = grid;
     }
 
-    pub fn input(self: *SelectableList, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *FlowBox, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        _ = self;
         _ = allocator;
-        if (self.getFocus().child_id) |child_id| {
-            const children = &self.scroll.child.box.children;
-            if (children.getIndex(child_id)) |current_index| {
-                var index = current_index;
+        _ = key;
+        _ = root_focus;
+    }
 
-                switch (key) {
-                    .arrow_up => {
-                        index -|= 1;
-                    },
-                    .arrow_down => {
-                        if (index + 1 < children.count()) {
-                            index += 1;
-                        }
-                    },
-                    .home => {
-                        index = 0;
-                    },
-                    .end => {
-                        if (children.count() > 0) {
-                            index = children.count() - 1;
-                        }
-                    },
-                    .page_up => {
-                        if (self.getGrid()) |grid| {
-                            const half_count = (grid.size.height / 3) / 2;
-                            index -|= half_count;
-                        }
-                    },
-                    .page_down => {
-                        if (self.getGrid()) |grid| {
-                            if (children.count() > 0) {
-                                const half_count = (grid.size.height / 3) / 2;
-                                index = @min(index + half_count, children.count() - 1);
-                            }
-                        }
-                    },
-                    .mouse => |mouse| switch (mouse.action) {
-                        .scroll => |dir| switch (dir) {
-                            .up => index -|= 1,
-                            .down => if (index + 1 < children.count()) {
-                                index += 1;
-                            },
+    pub fn clearGrid(self: *FlowBox) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        for (self.text_boxes.items) |*tb| tb.clearGrid();
+    }
+
+    pub fn getGrid(self: FlowBox) ?Grid {
+        return self.grid;
+    }
+
+    pub fn getFocus(self: *FlowBox) *Focus {
+        return &self.focus;
+    }
+
+    pub fn cellRect(self: FlowBox, index: usize) ?layout.IRect {
+        if (self.last_cols == 0 or index >= self.text_boxes.items.len) return null;
+        const slot_height = self.options.cell_height + border_rows;
+        const col = index % self.last_cols;
+        const row = index / self.last_cols;
+        return .{
+            .x = @intCast(col * self.options.cell_width),
+            .y = @intCast(row * slot_height),
+            .size = .{ .width = self.options.cell_width, .height = slot_height },
+        };
+    }
+
+    pub fn indexOfFocusId(self: FlowBox, focus_id: usize) ?usize {
+        for (self.text_boxes.items, 0..) |tb, i| {
+            if (tb.box.focus.id == focus_id) return i;
+        }
+        return null;
+    }
+
+    pub const Scroll = struct {
+        scroll: wgt.Scroll(Widget),
+
+        pub fn init(allocator: std.mem.Allocator, options: FlowBox.Options) !Scroll {
+            var layout_inner = FlowBox.init(options);
+            errdefer layout_inner.deinit(allocator);
+            var scroll = try wgt.Scroll(Widget).init(allocator, .{ .flow_box = layout_inner }, .vert);
+            errdefer scroll.deinit(allocator);
+            return .{ .scroll = scroll };
+        }
+
+        pub fn deinit(self: *Scroll, allocator: std.mem.Allocator) void {
+            self.scroll.deinit(allocator);
+        }
+
+        pub fn setItems(self: *Scroll, allocator: std.mem.Allocator, items: []const []const u8) !void {
+            self.scroll.x = 0;
+            self.scroll.y = 0;
+            try self.inner().setItems(allocator, items);
+        }
+
+        pub fn build(self: *Scroll, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+            try self.scroll.build(allocator, constraint, root_focus);
+        }
+
+        pub fn input(self: *Scroll, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+            _ = allocator;
+            const in = self.inner();
+            const child_id = in.focus.child_id orelse return;
+            const current_index = in.indexOfFocusId(child_id) orelse return;
+            const count = in.text_boxes.items.len;
+            if (count == 0) return;
+            const cols = in.last_cols;
+            const slot_height = in.options.cell_height + FlowBox.border_rows;
+
+            var index = current_index;
+            switch (key) {
+                .arrow_up => index -|= cols,
+                .arrow_down => if (index + cols < count) {
+                    index += cols;
+                },
+                .arrow_left => index -|= 1,
+                .arrow_right => if (index + 1 < count) {
+                    index += 1;
+                },
+                .home => index = 0,
+                .end => index = count - 1,
+                .page_up => {
+                    if (self.scroll.grid) |grid| if (slot_height > 0) {
+                        const rows_per_page = grid.size.height / slot_height;
+                        index -|= rows_per_page * cols;
+                    };
+                },
+                .page_down => {
+                    if (self.scroll.grid) |grid| if (slot_height > 0) {
+                        const rows_per_page = grid.size.height / slot_height;
+                        index = @min(index + rows_per_page * cols, count - 1);
+                    };
+                },
+                // scroll wheel moves the focused cell by a full row so the
+                // viewport (via scrollToRect) follows in row-sized steps,
+                // matching how a scroll wheel feels in a grid view.
+                .mouse => |mouse| switch (mouse.action) {
+                    .scroll => |dir| switch (dir) {
+                        .up => index -|= cols,
+                        .down => if (index + cols < count) {
+                            index += cols;
                         },
-                        else => {},
                     },
                     else => {},
-                }
+                },
+                else => {},
+            }
 
-                if (index != current_index) {
-                    try root_focus.setFocus(children.keys()[index]);
-                    self.updateScroll(index);
+            if (index != current_index) {
+                try root_focus.setFocus(in.text_boxes.items[index].getFocus().id);
+                if (in.cellRect(index)) |rect| {
+                    self.scroll.scrollToRect(rect);
                 }
             }
         }
-    }
 
-    pub fn clearGrid(self: *SelectableList) void {
-        self.scroll.clearGrid();
-    }
-
-    pub fn getGrid(self: SelectableList) ?Grid {
-        return self.scroll.getGrid();
-    }
-
-    pub fn getFocus(self: *SelectableList) *Focus {
-        return self.scroll.getFocus();
-    }
-
-    pub fn getSelectedIndex(self: SelectableList) ?usize {
-        if (self.scroll.child.box.focus.child_id) |child_id| {
-            const children = &self.scroll.child.box.children;
-            return children.getIndex(child_id);
-        } else {
-            return null;
+        pub fn clearGrid(self: *Scroll) void {
+            self.scroll.clearGrid();
         }
-    }
 
-    fn updateScroll(self: *SelectableList, index: usize) void {
-        const inner_box = &self.scroll.child.box;
-        if (inner_box.children.values()[index].rect) |rect| {
-            self.scroll.scrollToRect(rect);
+        pub fn getGrid(self: Scroll) ?Grid {
+            return self.scroll.getGrid();
         }
-    }
+
+        pub fn getFocus(self: *Scroll) *Focus {
+            return self.scroll.getFocus();
+        }
+
+        pub fn getSelectedIndex(self: Scroll) ?usize {
+            const in = self.scroll.child.flow_box;
+            const child_id = in.focus.child_id orelse return null;
+            return in.indexOfFocusId(child_id);
+        }
+
+        fn inner(self: *Scroll) *FlowBox {
+            return &self.scroll.child.flow_box;
+        }
+    };
 };
 
 // an invisible widget that fills the horizontal space granted by its parent.
