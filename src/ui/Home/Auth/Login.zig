@@ -44,6 +44,8 @@ pub const View = struct {
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session, users_tab_id: usize) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
+        // marks this subtree as an HTML form scope for the web overlay
+        box.getFocus().kind = .{ .custom = "form:/login" };
 
         var nav_ids: [3]usize = undefined;
 

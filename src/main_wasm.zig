@@ -71,7 +71,7 @@ fn tick(min_height: u32, max_width: u32) !void {
     // leaves the live <form> alone — crucial since wiping it mid-click
     // would detach the submit button before the browser can dispatch the
     // form submission.
-    const overlay = try web.generateOverlay(allocator, root_ptr, &session);
+    const overlay = try web.generateOverlay(allocator, root_ptr);
     defer allocator.free(overlay);
     setOverlay(overlay);
 

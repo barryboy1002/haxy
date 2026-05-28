@@ -313,7 +313,7 @@ fn renderIndexHtml(
 
     const content = try generateHtml(allocator, &root, &session);
     defer allocator.free(content);
-    const overlay = try generateOverlay(allocator, &root, &session);
+    const overlay = try generateOverlay(allocator, &root);
     defer allocator.free(overlay);
 
     // serialize the snapshot so the wasm side can parse it back without
@@ -398,125 +398,90 @@ pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget, session: *co
     return try out.toOwnedSlice(allocator);
 }
 
-// emits the form overlay — a <form> wrapping the text inputs and submit
-// button, positioned absolutely over the matching grid cells
-pub fn generateOverlay(allocator: std.mem.Allocator, root: *ui.Widget, session: *const ui.Session) ![]const u8 {
+// emits the form overlay — one <form> per "form:<url>" focus subtree in the
+// widget tree, each wrapping the text inputs and submit button inside it,
+// positioned absolutely over the matching grid cells.
+pub fn generateOverlay(allocator: std.mem.Allocator, root: *ui.Widget) ![]const u8 {
     const root_focus = root.getFocus();
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
-    const InputEntry = struct {
-        focus_id: usize,
-        x: usize,
-        y: usize,
-        width: usize,
-        is_password: bool,
-        ti: *wgt.TextInput(ui.Widget),
-    };
-    const SubmitButton = struct {
-        focus_id: usize,
-        x: usize,
-        y: usize,
-        width: usize,
-        height: usize,
-    };
-    var inputs: std.ArrayList(InputEntry) = .empty;
-    defer inputs.deinit(allocator);
-    var submit: ?SubmitButton = null;
+    const form_prefix = "form:";
 
+    // Focus.children is an AutoArrayHashMap that preserves insertion order,
+    // which matches the order widgets were added in code
     var iter = root_focus.children.iterator();
     while (iter.next()) |entry| {
         const child = entry.value_ptr.*;
-        switch (child.focus.kind) {
-            .text_input, .text_input_password => {
-                try inputs.append(allocator, .{
-                    .focus_id = entry.key_ptr.*,
-                    .x = child.rect.x,
-                    .y = child.rect.y,
-                    .width = child.rect.size.width,
-                    .is_password = child.focus.kind == .text_input_password,
-                    .ti = @fieldParentPtr("focus", child.focus),
-                });
-            },
-            .custom => |custom| {
-                if (std.mem.eql(u8, "submit", custom)) {
-                    submit = .{
-                        .focus_id = entry.key_ptr.*,
-                        .x = child.rect.x,
-                        .y = child.rect.y,
-                        .width = child.rect.size.width,
-                        .height = child.rect.size.height,
-                    };
-                }
-            },
-            else => {},
+        const action_url = switch (child.focus.kind) {
+            .custom => |custom| if (std.mem.startsWith(u8, custom, form_prefix))
+                custom[form_prefix.len..]
+            else
+                continue,
+            else => continue,
+        };
+
+        try out.appendSlice(allocator, "<form action=\"");
+        try appendEscapedHtml(allocator, &out, action_url);
+        try out.appendSlice(allocator, "\" method=\"post\">");
+
+        // form.focus.children was populated by addChild, which flattens the
+        // whole subtree into one map — so descendants (inputs + the submit
+        // button) all appear here. positions on form.focus are relative to
+        // the form, so we look up absolute rects via root_focus for layout.
+        var inner_iter = child.focus.children.iterator();
+        while (inner_iter.next()) |inner_entry| {
+            const inner_id = inner_entry.key_ptr.*;
+            const root_child = root_focus.children.get(inner_id) orelse continue;
+            const r = root_child.rect;
+            switch (root_child.focus.kind) {
+                .text_input, .text_input_password => {
+                    const ti: *wgt.TextInput(ui.Widget) = @fieldParentPtr("focus", root_child.focus);
+                    const inner_left = r.x + 1;
+                    const inner_top = r.y + 1;
+                    const inner_width = if (r.size.width > 2) r.size.width - 2 else 0;
+
+                    try out.appendSlice(allocator, "<input type=\"");
+                    try out.appendSlice(allocator, if (root_child.focus.kind == .text_input_password) "password" else "text");
+                    try out.appendSlice(allocator, "\" data-focus-id=\"");
+                    var id_buf: [32]u8 = undefined;
+                    try out.appendSlice(allocator, try std.fmt.bufPrint(&id_buf, "{d}", .{inner_id}));
+                    if (ti.options.name.len > 0) {
+                        try out.appendSlice(allocator, "\" name=\"");
+                        try appendEscapedHtml(allocator, &out, ti.options.name);
+                    }
+                    // intentionally no `value` attribute: the browser tracks user input
+                    // natively, and including the wasm-side value here would make the
+                    // overlay HTML differ on every keystroke — that would trip the diff
+                    // in _setOverlay and rebuild the <input>, eating the user's caret.
+                    try out.appendSlice(allocator, "\" style=\"left:");
+                    var pos_buf: [64]u8 = undefined;
+                    try out.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, "{d}ch;top:{d}em;width:{d}ch;height:1em", .{ inner_left, inner_top, inner_width }));
+                    try out.appendSlice(allocator, "\">");
+                },
+                .custom => |custom| {
+                    if (std.mem.eql(u8, "submit", custom)) {
+                        // inside the dashed border the TUI cells draw around the button.
+                        const inner_left = r.x + 1;
+                        const inner_top = r.y + 1;
+                        const inner_width = if (r.size.width > 2) r.size.width - 2 else 0;
+                        const inner_height = if (r.size.height > 2) r.size.height - 2 else 0;
+                        try out.appendSlice(allocator, "<button type=\"submit\" data-focus-id=\"");
+                        var id_buf: [32]u8 = undefined;
+                        try out.appendSlice(allocator, try std.fmt.bufPrint(&id_buf, "{d}", .{inner_id}));
+                        try out.appendSlice(allocator, "\" style=\"left:");
+                        var pos_buf: [128]u8 = undefined;
+                        try out.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, "{d}ch;top:{d}em;width:{d}ch;height:{d}em", .{ inner_left, inner_top, inner_width, inner_height }));
+                        try out.appendSlice(allocator, "\"></button>");
+                    }
+                },
+                else => {},
+            }
         }
+
+        try out.appendSlice(allocator, "</form>");
     }
-
-    if (submit == null and inputs.items.len == 0) return try out.toOwnedSlice(allocator);
-
-    // top-to-bottom, left-to-right order so the natural tab cycle matches
-    // visual layout (username -> password -> submit button).
-    std.mem.sort(InputEntry, inputs.items, {}, struct {
-        fn lt(_: void, a: InputEntry, b: InputEntry) bool {
-            if (a.y != b.y) return a.y < b.y;
-            return a.x < b.x;
-        }
-    }.lt);
-
-    // only the auth page hosts a form right now; on any other page we
-    // emit nothing. on auth, the URL depends on whether there's already
-    // an active session.
-    const action_url: []const u8 = switch (session.data.current_page) {
-        .home_auth => if (session.data.user_id != null) "/logout" else "/login",
-        .home_users, .home_repos => return try out.toOwnedSlice(allocator),
-    };
-
-    try out.appendSlice(allocator, "<form action=\"");
-    try out.appendSlice(allocator, action_url);
-    try out.appendSlice(allocator, "\" method=\"post\">");
-
-    for (inputs.items) |entry| {
-        const inner_left = entry.x + 1;
-        const inner_top = entry.y + 1;
-        const inner_width = if (entry.width > 2) entry.width - 2 else 0;
-
-        try out.appendSlice(allocator, "<input type=\"");
-        try out.appendSlice(allocator, if (entry.is_password) "password" else "text");
-        try out.appendSlice(allocator, "\" data-focus-id=\"");
-        var id_buf: [32]u8 = undefined;
-        try out.appendSlice(allocator, try std.fmt.bufPrint(&id_buf, "{d}", .{entry.focus_id}));
-        if (entry.ti.options.name.len > 0) {
-            try out.appendSlice(allocator, "\" name=\"");
-            try appendEscapedHtml(allocator, &out, entry.ti.options.name);
-        }
-        // intentionally no `value` attribute: the browser tracks user input
-        // natively, and including the wasm-side value here would make the
-        // overlay HTML differ on every keystroke — that would trip the diff
-        // in _setOverlay and rebuild the <input>, eating the user's caret.
-        try out.appendSlice(allocator, "\" style=\"left:");
-        var pos_buf: [64]u8 = undefined;
-        try out.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, "{d}ch;top:{d}em;width:{d}ch;height:1em", .{ inner_left, inner_top, inner_width }));
-        try out.appendSlice(allocator, "\">");
-    }
-
-    if (submit) |btn| {
-        // inside the dashed border the TUI cells draw around the button.
-        const inner_left = btn.x + 1;
-        const inner_top = btn.y + 1;
-        const inner_width = if (btn.width > 2) btn.width - 2 else 0;
-        const inner_height = if (btn.height > 2) btn.height - 2 else 0;
-        try out.appendSlice(allocator, "<button type=\"submit\" data-focus-id=\"");
-        var id_buf: [32]u8 = undefined;
-        try out.appendSlice(allocator, try std.fmt.bufPrint(&id_buf, "{d}", .{btn.focus_id}));
-        try out.appendSlice(allocator, "\" style=\"left:");
-        var pos_buf: [128]u8 = undefined;
-        try out.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, "{d}ch;top:{d}em;width:{d}ch;height:{d}em", .{ inner_left, inner_top, inner_width, inner_height }));
-        try out.appendSlice(allocator, "\"></button>");
-    }
-
-    try out.appendSlice(allocator, "</form>");
 
     return try out.toOwnedSlice(allocator);
 }
