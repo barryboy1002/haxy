@@ -37,6 +37,17 @@ pub const View = struct {
 
         var tab_ids: [3]usize = undefined;
 
+        // spacer
+        {
+            var text = wgt.Text(ui.Widget).init(" ");
+            errdefer text.deinit(allocator);
+            try box.children.put(allocator, text.getFocus().id, .{
+                .widget = .{ .text = text },
+                .rect = null,
+                .min_size = .{ .width = 1, .height = null },
+            });
+        }
+
         // title sits to the left of the tabs
         {
             var title_view = try ui.Title.View.init(allocator, &data.title);
@@ -48,7 +59,7 @@ pub const View = struct {
             });
         }
 
-        // gap between title and the users tab
+        // spacer
         {
             var text = wgt.Text(ui.Widget).init(" ");
             errdefer text.deinit(allocator);
