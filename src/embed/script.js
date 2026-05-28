@@ -122,9 +122,15 @@ WebAssembly.instantiateStreaming(fetch("haxy.wasm"), importObject).then(async (r
         // when a form element (text input or submit button) owns focus,
         // the browser handles typing, Enter-to-submit, and Tab natively.
         // we only forward keys into the TUI when focus is elsewhere.
+        // exception: arrow up/down on an input unfocuses it and forwards
+        // the event so the TUI can move focus between widgets.
         if (document.activeElement) {
             const tag = document.activeElement.tagName;
-            if (tag === "INPUT" || tag === "BUTTON") return;
+            if (tag === "INPUT" && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+                document.activeElement.blur();
+            } else if (tag === "INPUT" || tag === "BUTTON") {
+                return;
+            }
         }
         if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End"].includes(event.key)) {
             event.preventDefault();
