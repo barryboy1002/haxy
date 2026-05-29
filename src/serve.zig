@@ -468,9 +468,9 @@ fn decodeAndValidateRepoPath(allocator: std.mem.Allocator, encoded: []const u8) 
     errdefer allocator.free(mutable);
     const decoded = std.Uri.percentDecodeInPlace(mutable);
 
-    var iter = std.mem.splitScalar(u8, decoded, '/');
-    while (iter.next()) |segment| {
-        if (segment.len == 0 or std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "..")) {
+    var iter = std.fs.path.componentIterator(decoded);
+    while (iter.next()) |component| {
+        if (component.name.len == 0 or std.mem.eql(u8, component.name, ".") or std.mem.eql(u8, component.name, "..")) {
             return error.InvalidRepoPath;
         }
     }
