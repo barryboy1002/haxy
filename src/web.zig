@@ -7,6 +7,7 @@ const ui = @import("./ui.zig");
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const Focus = xitui.focus.Focus;
+const Grid = xitui.grid.Grid;
 
 const cookie_name = "haxy_user";
 // flash cookie for surfacing the outcome of the most recent /login POST.
@@ -366,14 +367,15 @@ fn logError(err: *std.Io.Writer, comptime fmt: []const u8, args: anytype) void {
     err.flush() catch {};
 }
 
-// emits the TUI grid cells (one <span> run per focusable widget)
+// emits the TUI grid cells as static HTML
 pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget) ![]const u8 {
     const grid = root.getGrid() orelse return error.MissingGrid;
     const root_focus = root.getFocus();
 
     const Tag = union(enum) {
-        span,
-        a: []const u8,
+        span, // clickable focusable cell
+        a: []const u8, // clickable focusable link
+        plain, // non-focusable, colored
 
         const a_prefix = "a:";
 
@@ -384,27 +386,36 @@ pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget) ![]const u8 
             return .span;
         }
 
-        fn writeOpenTag(self: @This(), alloc: std.mem.Allocator, out: *std.ArrayList(u8), id: usize) !void {
+        fn writeOpenTag(self: @This(), alloc: std.mem.Allocator, out: *std.ArrayList(u8), id: usize, style_attr: []const u8) !void {
+            var id_buf: [32]u8 = undefined;
             switch (self) {
                 .span => {
-                    var buf: [128]u8 = undefined;
-                    const open = try std.fmt.bufPrint(&buf, "<span class=\"clickable\" data-focus-id=\"{d}\">", .{id});
-                    try out.appendSlice(alloc, open);
+                    try out.appendSlice(alloc, "<span class=\"clickable\" data-focus-id=\"");
+                    try out.appendSlice(alloc, try std.fmt.bufPrint(&id_buf, "{d}", .{id}));
+                    try out.appendSlice(alloc, "\"");
+                    try out.appendSlice(alloc, style_attr);
+                    try out.appendSlice(alloc, ">");
                 },
                 .a => |href| {
                     try out.appendSlice(alloc, "<a class=\"clickable\" data-focus-id=\"");
-                    var id_buf: [32]u8 = undefined;
                     try out.appendSlice(alloc, try std.fmt.bufPrint(&id_buf, "{d}", .{id}));
                     try out.appendSlice(alloc, "\" href=\"");
                     try appendEscapedHtml(alloc, out, href);
-                    try out.appendSlice(alloc, "\">");
+                    try out.appendSlice(alloc, "\"");
+                    try out.appendSlice(alloc, style_attr);
+                    try out.appendSlice(alloc, ">");
+                },
+                .plain => {
+                    try out.appendSlice(alloc, "<span");
+                    try out.appendSlice(alloc, style_attr);
+                    try out.appendSlice(alloc, ">");
                 },
             }
         }
 
         fn closeTag(self: @This()) []const u8 {
             return switch (self) {
-                .span => "</span>",
+                .span, .plain => "</span>",
                 .a => "</a>",
             };
         }
@@ -414,30 +425,46 @@ pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget) ![]const u8 
     errdefer out.deinit(allocator);
 
     for (0..grid.size.height) |y| {
-        var current_id_maybe: ?usize = null;
-        var current_tag_maybe: ?Tag = null;
+        var cur_id: ?usize = null;
+        var cur_fg: ?Grid.Color = null;
+        var cur_bg: ?Grid.Color = null;
+        var open_tag: ?Tag = null;
+        var first = true;
         for (0..grid.size.width) |x| {
+            const cell = grid.cells.items[try grid.cells.at(.{ y, x })];
             const cell_id = cellFocusId(root_focus, x, y);
-            if (cell_id != current_id_maybe) {
-                if (current_tag_maybe) |current_tag| try out.appendSlice(allocator, current_tag.closeTag());
-                current_tag_maybe = null;
+            const fg = cell.style.fg;
+            const bg = cell.style.bg;
 
+            if (first or cell_id != cur_id or !colorEql(fg, cur_fg) or !colorEql(bg, cur_bg)) {
+                if (open_tag) |t| try out.appendSlice(allocator, t.closeTag());
+
+                var new_tag: ?Tag = null;
                 if (cell_id) |id| {
-                    current_tag_maybe = if (root_focus.children.get(id)) |child| switch (child.focus.kind) {
-                        .custom => |custom| .init(custom),
-                        else => .span,
-                    } else null;
-
-                    if (current_tag_maybe) |current_tag| {
-                        try current_tag.writeOpenTag(allocator, &out, id);
+                    if (root_focus.children.get(id)) |child| {
+                        new_tag = switch (child.focus.kind) {
+                            .custom => |custom| Tag.init(custom),
+                            else => .span,
+                        };
                     }
                 }
-                current_id_maybe = cell_id;
+                if (new_tag == null and (fg != null or bg != null)) new_tag = .plain;
+
+                if (new_tag) |t| {
+                    var style_buf: [64]u8 = undefined;
+                    try t.writeOpenTag(allocator, &out, cell_id orelse 0, styleAttr(&style_buf, fg, bg));
+                }
+
+                open_tag = new_tag;
+                cur_id = cell_id;
+                cur_fg = fg;
+                cur_bg = bg;
+                first = false;
             }
-            const rune = grid.cells.items[try grid.cells.at(.{ y, x })].rune orelse " ";
-            try appendEscapedHtml(allocator, &out, rune);
+
+            try appendEscapedHtml(allocator, &out, cell.rune orelse " ");
         }
-        if (current_tag_maybe) |current_tag| try out.appendSlice(allocator, current_tag.closeTag());
+        if (open_tag) |t| try out.appendSlice(allocator, t.closeTag());
         try out.append(allocator, '\n');
     }
 
@@ -530,6 +557,32 @@ pub fn generateOverlay(allocator: std.mem.Allocator, root: *ui.Widget) ![]const 
     }
 
     return try out.toOwnedSlice(allocator);
+}
+
+fn colorEql(a: ?Grid.Color, b: ?Grid.Color) bool {
+    if (a) |av| return if (b) |bv| av.eql(bv) else false;
+    return b == null;
+}
+
+// builds an HTML ` style="color:#rrggbb;background-color:#rrggbb"` attribute
+// from a cell's fg/bg into `buf`, omitting whichever color is unset. returns an
+// empty slice when neither is set.
+fn styleAttr(buf: []u8, fg: ?Grid.Color, bg: ?Grid.Color) []const u8 {
+    if (fg == null and bg == null) return buf[0..0];
+    const prefix = " style=\"";
+    @memcpy(buf[0..prefix.len], prefix);
+    var i: usize = prefix.len;
+    if (fg) |c| {
+        const s = std.fmt.bufPrint(buf[i..], "color:#{x:0>2}{x:0>2}{x:0>2};", .{ c.r, c.g, c.b }) catch return buf[0..0];
+        i += s.len;
+    }
+    if (bg) |c| {
+        const s = std.fmt.bufPrint(buf[i..], "background-color:#{x:0>2}{x:0>2}{x:0>2};", .{ c.r, c.g, c.b }) catch return buf[0..0];
+        i += s.len;
+    }
+    buf[i] = '"';
+    i += 1;
+    return buf[0..i];
 }
 
 fn cellFocusId(focus: *Focus, x: usize, y: usize) ?usize {

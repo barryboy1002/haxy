@@ -32,21 +32,10 @@ pub const View = struct {
     const auth_tab_min_width: usize = @as(usize, "logout".len) + 2;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .horiz });
+        var box = wgt.Box(ui.Widget).init(.{ .border_style = .hidden, .rounded_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         var tab_ids: [3]usize = undefined;
-
-        // spacer
-        {
-            var text = wgt.Text(ui.Widget).init(" ");
-            errdefer text.deinit(allocator);
-            try box.children.put(allocator, text.getFocus().id, .{
-                .widget = .{ .text = text },
-                .rect = null,
-                .min_size = .{ .width = 1, .height = null },
-            });
-        }
 
         // title sits to the left of the tabs
         {

@@ -169,9 +169,13 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, termi
 }
 
 pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Session) !Widget {
-    var root: Widget = switch (page.*) {
+    const page_widget: Widget = switch (page.*) {
         .home => |*p| .{ .home = try .init(allocator, p, session) },
     };
+
+    const demon_art = @embedFile("embed/demon.ans");
+
+    var root = Widget{ .background = try AnsiBackground.init(allocator, page_widget, demon_art) };
     errdefer root.deinit(allocator);
 
     try root.build(allocator, .{
@@ -195,6 +199,8 @@ pub const Widget = union(enum) {
     flow_box: FlowBox,
     spacer: Spacer,
     center: Center,
+    ansi_art: AnsiArt,
+    background: AnsiBackground,
     home: Home.View,
     title: Title.View,
     home_header: Home.Header.View,
@@ -642,5 +648,298 @@ pub const Center = struct {
 
     pub fn getFocus(self: *Center) *Focus {
         return &self.focus;
+    }
+};
+
+// renders truecolor ANSI art
+pub const AnsiArt = struct {
+    focus: Focus,
+    grid: ?Grid,
+    content: []const u8,
+
+    pub fn init(content: []const u8) AnsiArt {
+        return .{
+            .focus = Focus.init(.container),
+            .grid = null,
+            .content = content,
+        };
+    }
+
+    pub fn deinit(self: *AnsiArt, allocator: std.mem.Allocator) void {
+        self.focus.deinit(allocator);
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+    }
+
+    pub fn build(self: *AnsiArt, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        _ = root_focus;
+        self.clearGrid();
+
+        // parse into rows of cells, then copy into a rectangular grid
+        var rows: std.ArrayList(std.ArrayList(Grid.Cell)) = .empty;
+        defer {
+            for (rows.items) |*row| row.deinit(allocator);
+            rows.deinit(allocator);
+        }
+        var row: std.ArrayList(Grid.Cell) = .empty;
+        errdefer row.deinit(allocator);
+
+        var style: Grid.Style = .{};
+        var width: usize = 0;
+        const content = self.content;
+        var i: usize = 0;
+        while (i < content.len) {
+            const byte = content[i];
+            if (byte == '\n') {
+                width = @max(width, row.items.len);
+                try rows.append(allocator, row);
+                row = .empty;
+                i += 1;
+            } else if (byte == 0x1B and i + 1 < content.len and content[i + 1] == '[') {
+                // CSI: scan to the final byte (0x40..0x7E); apply it if it's 'm'
+                var j = i + 2;
+                while (j < content.len and !(content[j] >= 0x40 and content[j] <= 0x7E)) j += 1;
+                if (j >= content.len) {
+                    i = content.len; // malformed trailing escape; stop
+                } else {
+                    if (content[j] == 'm') applySgr(&style, content[i + 2 .. j]);
+                    i = j + 1;
+                }
+            } else {
+                const len = std.unicode.utf8ByteSequenceLength(byte) catch 1;
+                const end = @min(content.len, i + len);
+                const rune = content[i..end];
+                const transparent = end - i == 1 and rune[0] == ' ' and
+                    style.fg == null and style.bg == null and !style.inverted;
+                try row.append(allocator, .{
+                    .rune = if (transparent) null else rune,
+                    .style = style,
+                });
+                i = end;
+            }
+        }
+        // a trailing row with content but no closing newline
+        if (row.items.len > 0) {
+            width = @max(width, row.items.len);
+            try rows.append(allocator, row);
+        } else {
+            row.deinit(allocator);
+        }
+        row = .empty; // ownership moved into rows (or freed); keep errdefer safe
+
+        const height = rows.items.len;
+        if (width == 0 or height == 0) return;
+
+        const clamped_w = @min(width, constraint.max_size.width orelse width);
+        const clamped_h = @min(height, constraint.max_size.height orelse height);
+
+        var grid = try Grid.init(allocator, .{ .width = clamped_w, .height = clamped_h });
+        errdefer grid.deinit();
+        for (rows.items[0..clamped_h], 0..) |r, y| {
+            const n = @min(r.items.len, clamped_w);
+            for (r.items[0..n], 0..) |cell, x| {
+                grid.cells.items[try grid.cells.at(.{ y, x })] = cell;
+            }
+        }
+        self.grid = grid;
+    }
+
+    pub fn input(self: *AnsiArt, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        _ = self;
+        _ = allocator;
+        _ = key;
+        _ = root_focus;
+    }
+
+    pub fn clearGrid(self: *AnsiArt) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+    }
+
+    pub fn getGrid(self: AnsiArt) ?Grid {
+        return self.grid;
+    }
+
+    pub fn getFocus(self: *AnsiArt) *Focus {
+        return &self.focus;
+    }
+
+    fn applySgr(style: *Grid.Style, params: []const u8) void {
+        var nums: [16]u32 = undefined;
+        var n: usize = 0;
+        var it = std.mem.splitScalar(u8, params, ';');
+        while (it.next()) |tok| {
+            if (n >= nums.len) break;
+            // an empty parameter (e.g. bare "\x1b[m") means 0
+            nums[n] = std.fmt.parseInt(u32, tok, 10) catch 0;
+            n += 1;
+        }
+        if (n == 0) {
+            style.* = .{};
+            return;
+        }
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            switch (nums[i]) {
+                0 => style.* = .{},
+                7 => style.inverted = true,
+                27 => style.inverted = false,
+                39 => style.fg = null,
+                49 => style.bg = null,
+                38, 48 => {
+                    // truecolor form: 38;2;r;g;b — anything else is ignored
+                    if (i + 4 < n and nums[i + 1] == 2) {
+                        const c = Grid.Color{
+                            .r = @truncate(nums[i + 2]),
+                            .g = @truncate(nums[i + 3]),
+                            .b = @truncate(nums[i + 4]),
+                        };
+                        if (nums[i] == 38) style.fg = c else style.bg = c;
+                        i += 4;
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+};
+
+// a full-screen wrapper that renders ANSI art behind whatever page it wraps
+pub const AnsiBackground = struct {
+    grid: ?Grid,
+    child: *Widget,
+    art: AnsiArt,
+
+    pub fn init(allocator: std.mem.Allocator, child_widget: Widget, art_content: []const u8) !AnsiBackground {
+        var cw = child_widget;
+        const child = allocator.create(Widget) catch |e| {
+            cw.deinit(allocator);
+            return e;
+        };
+        child.* = cw;
+        return .{ .grid = null, .child = child, .art = AnsiArt.init(art_content) };
+    }
+
+    pub fn deinit(self: *AnsiBackground, allocator: std.mem.Allocator) void {
+        if (self.grid) |*grid| grid.deinit();
+        self.art.deinit(allocator);
+        self.child.deinit(allocator);
+        allocator.destroy(self.child);
+    }
+
+    pub fn build(self: *AnsiBackground, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+
+        // make the wrapped page fill the whole available area
+        try self.child.build(allocator, .{
+            .min_size = .{
+                .width = constraint.max_size.width orelse constraint.min_size.width,
+                .height = constraint.max_size.height orelse constraint.min_size.height,
+            },
+            .max_size = constraint.max_size,
+        }, root_focus);
+
+        if (self.child.getGrid()) |fg| {
+            self.grid = try artBehind(allocator, fg, &self.art, .top_right, root_focus);
+        }
+    }
+
+    pub fn input(self: *AnsiBackground, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        try self.child.input(allocator, key, root_focus);
+    }
+
+    pub fn clearGrid(self: *AnsiBackground) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        self.child.clearGrid();
+        self.art.clearGrid();
+    }
+
+    pub fn getGrid(self: AnsiBackground) ?Grid {
+        return self.grid orelse self.child.getGrid();
+    }
+
+    pub fn getFocus(self: *AnsiBackground) *Focus {
+        return self.child.getFocus();
+    }
+
+    // which top corner the art hugs.
+    const ArtAnchor = enum { top_left, top_right };
+
+    // a foreground cell counts as blank if it's empty or a bare space without styling
+    fn cellIsBlank(cell: Grid.Cell) bool {
+        if (cell.rune) |rune| {
+            return std.mem.eql(u8, rune, " ") and
+                cell.style.fg == null and cell.style.bg == null and !cell.style.inverted;
+        }
+        return true;
+    }
+
+    // a single representative color for an art cell
+    fn artCellColor(style: Grid.Style) ?Grid.Color {
+        const f = style.fg orelse return style.bg;
+        const b = style.bg orelse return f;
+        return .{
+            .r = @intCast((@as(u16, f.r) + b.r) / 2),
+            .g = @intCast((@as(u16, f.g) + b.g) / 2),
+            .b = @intCast((@as(u16, f.b) + b.b) / 2),
+        };
+    }
+
+    // behind a visible glyph the art color is dimmed to this fraction of its
+    // brightness so light terminal text stays legible on top of it
+    const glyph_bg_brightness = 45; // percent
+
+    // a glyph sitting over the art also gets its foreground pinned to this color
+    // (unless it set its own), so the text stays legible
+    const glyph_fg_over_art = Grid.Color{ .r = 235, .g = 235, .b = 235 };
+
+    fn dimColor(color: ?Grid.Color) ?Grid.Color {
+        const c = color orelse return null;
+        return .{
+            .r = @intCast(@as(u16, c.r) * glyph_bg_brightness / 100),
+            .g = @intCast(@as(u16, c.g) * glyph_bg_brightness / 100),
+            .b = @intCast(@as(u16, c.b) * glyph_bg_brightness / 100),
+        };
+    }
+
+    // composites ANSI art behind a foreground grid
+    fn artBehind(allocator: std.mem.Allocator, foreground: Grid, art: *AnsiArt, anchor: ArtAnchor, root_focus: *Focus) !Grid {
+        art.clearGrid();
+        try art.build(allocator, .{
+            .min_size = .{ .width = null, .height = null },
+            .max_size = .{ .width = foreground.size.width, .height = foreground.size.height },
+        }, root_focus);
+
+        var out = try Grid.initFromGrid(allocator, foreground, foreground.size, 0, 0);
+        errdefer out.deinit();
+
+        if (art.getGrid()) |art_grid| {
+            const anchor_x = switch (anchor) {
+                .top_left => 0,
+                .top_right => foreground.size.width -| art_grid.size.width,
+            };
+            for (0..art_grid.size.height) |y| {
+                for (0..art_grid.size.width) |x| {
+                    const src = art_grid.cells.items[try art_grid.cells.at(.{ y, x })];
+                    if (src.rune == null) continue;
+                    const idx = out.cells.at(.{ y, anchor_x + x }) catch continue;
+                    const dst = &out.cells.items[idx];
+                    if (cellIsBlank(dst.*)) {
+                        dst.* = src;
+                    } else if (dst.style.bg == null) {
+                        dst.style.bg = dimColor(artCellColor(src.style));
+                        if (dst.style.fg == null) dst.style.fg = glyph_fg_over_art;
+                    }
+                }
+            }
+        }
+        return out;
     }
 };
