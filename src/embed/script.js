@@ -102,7 +102,7 @@ function sendTextInputValue(focusId, value) {
 }
 
 function sendEnter(form) {
-    const btn = form.querySelector("[data-focus-id]");
+    const btn = form.querySelector("button[type=submit][data-focus-id]");
     if (!btn) return;
     wasmInstance.exports._onMouseClick(Number(btn.dataset.focusId));
     wasmInstance.exports._onKeyDown(13);
