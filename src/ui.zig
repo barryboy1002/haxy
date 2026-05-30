@@ -25,6 +25,7 @@ pub const Page = union(enum) {
 pub const RoutablePage = enum {
     home_users,
     home_repos,
+    home_ansi,
     home_auth,
 
     pub const default: RoutablePage = .home_users;
@@ -33,6 +34,7 @@ pub const RoutablePage = enum {
         return switch (self) {
             .home_users => "/users",
             .home_repos => "/repos",
+            .home_ansi => "/ansi",
             .home_auth => "/auth",
         };
     }
@@ -41,6 +43,7 @@ pub const RoutablePage = enum {
         if (std.mem.eql(u8, path, "/")) return default;
         if (std.mem.eql(u8, path, "/users")) return .home_users;
         if (std.mem.eql(u8, path, "/repos")) return .home_repos;
+        if (std.mem.eql(u8, path, "/ansi")) return .home_ansi;
         if (std.mem.eql(u8, path, "/auth")) return .home_auth;
         return null;
     }
@@ -58,6 +61,8 @@ pub const Session = struct {
         // a transient outcome to surface from the last /login POST attempt
         login_failure: ?Home.Auth.Login.Failure = null,
         current_page: RoutablePage = .default,
+        // whether to render the ANSI art backdrop
+        enable_ansi: bool = false,
     };
 
     pub fn init(
@@ -175,7 +180,7 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
 
     const demon_art = @embedFile("embed/demon.ans");
 
-    var root = Widget{ .background = try AnsiBackground.init(allocator, page_widget, demon_art) };
+    var root = Widget{ .background = try AnsiBackground.init(allocator, page_widget, demon_art, session) };
     errdefer root.deinit(allocator);
 
     try root.build(allocator, .{
@@ -207,6 +212,7 @@ pub const Widget = union(enum) {
     home_users: Home.Users.View,
     home_repos: Home.Repos.View,
     home_auth_tab: Home.Header.AuthTab.View,
+    home_ansi: Home.Ansi.View,
     home_auth: Home.Auth.View,
 
     pub fn deinit(self: *Widget, allocator: std.mem.Allocator) void {
@@ -813,15 +819,16 @@ pub const AnsiBackground = struct {
     grid: ?Grid,
     child: *Widget,
     art: AnsiArt,
+    session: *Session,
 
-    pub fn init(allocator: std.mem.Allocator, child_widget: Widget, art_content: []const u8) !AnsiBackground {
+    pub fn init(allocator: std.mem.Allocator, child_widget: Widget, art_content: []const u8, session: *Session) !AnsiBackground {
         var cw = child_widget;
         const child = allocator.create(Widget) catch |e| {
             cw.deinit(allocator);
             return e;
         };
         child.* = cw;
-        return .{ .grid = null, .child = child, .art = AnsiArt.init(art_content) };
+        return .{ .grid = null, .child = child, .art = AnsiArt.init(art_content), .session = session };
     }
 
     pub fn deinit(self: *AnsiBackground, allocator: std.mem.Allocator) void {
@@ -843,8 +850,10 @@ pub const AnsiBackground = struct {
             .max_size = constraint.max_size,
         }, root_focus);
 
-        if (self.child.getGrid()) |fg| {
-            self.grid = try artBehind(allocator, fg, &self.art, .top_right, root_focus);
+        if (self.session.data.enable_ansi) {
+            if (self.child.getGrid()) |fg| {
+                self.grid = try artBehind(allocator, fg, &self.art, .top_right, root_focus);
+            }
         }
     }
 

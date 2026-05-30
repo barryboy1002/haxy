@@ -12,11 +12,13 @@ const Focus = xitui.focus.Focus;
 pub const Users = @import("./Home/Users.zig");
 pub const Repos = @import("./Home/Repos.zig");
 pub const Header = @import("./Home/Header.zig");
+pub const Ansi = @import("./Home/Ansi.zig");
 pub const Auth = @import("./Home/Auth.zig");
 
 header: Header,
 users: Users,
 repos: Repos,
+ansi: Ansi,
 auth: Auth,
 
 const Self = @This();
@@ -30,6 +32,7 @@ pub fn init(
         .header = try Header.init(arena),
         .users = try Users.init(repo_opts, arena, haxy_moment),
         .repos = try Repos.init(repo_opts, arena, haxy_moment),
+        .ansi = Ansi.init(),
         .auth = Auth.init(),
     };
 }
@@ -73,6 +76,12 @@ pub const View = struct {
             }
 
             {
+                var ansi_view = try Ansi.View.init(allocator, &data.ansi, session);
+                errdefer ansi_view.deinit(allocator);
+                try stack.children.put(allocator, ansi_view.getFocus().id, .{ .home_ansi = ansi_view });
+            }
+
+            {
                 var auth_view = try Auth.View.init(allocator, &data.auth, session, users_tab_id);
                 errdefer auth_view.deinit(allocator);
                 try stack.children.put(allocator, auth_view.getFocus().id, .{ .home_auth = auth_view });
@@ -105,7 +114,8 @@ pub const View = struct {
             self.session.data.current_page = switch (index) {
                 0 => .home_users,
                 1 => .home_repos,
-                2 => .home_auth,
+                2 => .home_ansi,
+                3 => .home_auth,
                 else => .home_users,
             };
         }
@@ -140,6 +150,7 @@ pub const View = struct {
                                     const at_top = switch (selected_widget.*) {
                                         .home_users => |*v| v.getSelectedIndex() == 0,
                                         .home_repos => |*v| v.getSelectedIndex() == 0,
+                                        .home_ansi => |*v| v.getSelectedIndex() == 0,
                                         .home_auth => |*v| v.getSelectedIndex() == 0,
                                         else => false,
                                     };

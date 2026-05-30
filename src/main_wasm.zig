@@ -106,7 +106,17 @@ fn onKeyDown(key_code: u32) !void {
 
 fn onMouseClick(focus_id: usize) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
-    try root_ptr.getFocus().setFocus(focus_id);
+    const root_focus = root_ptr.getFocus();
+    try root_focus.setFocus(focus_id);
+    // forward a left press into the widget tree for plain in-tree clickables
+    if (root_focus.children.get(focus_id)) |child| {
+        const r = child.rect;
+        try root_ptr.input(allocator, .{ .mouse = .{
+            .x = r.x,
+            .y = r.y,
+            .action = .{ .press = .left },
+        } }, root_focus);
+    }
 }
 
 fn consoleLog(arg: []const u8) void {

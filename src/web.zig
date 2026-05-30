@@ -149,6 +149,9 @@ fn handleRequest(
     if (method == .POST and std.mem.eql(u8, path, "/logout")) {
         return handleLogout(request, session_store);
     }
+    if (method == .POST and std.mem.eql(u8, path, "/ansi")) {
+        return handleAnsi(request);
+    }
 
     const get_or_head = method == .GET or method == .HEAD;
     if (!get_or_head) {
@@ -191,6 +194,7 @@ fn handleRequest(
             .user_id = user_id,
             .login_failure = login_failure,
             .current_page = current_page,
+            // enable_ansi is intentionally left at its default
         });
         defer allocator.free(html);
         // expire the flash cookie on the way out so a refresh doesn't keep
@@ -296,6 +300,21 @@ fn handleLogout(request: *std.http.Server.Request, session_store: SessionStore) 
         .extra_headers = &.{
             .{ .name = "location", .value = ui.RoutablePage.url(.home_auth) },
             .{ .name = "set-cookie", .value = cookie_name ++ "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" },
+        },
+    });
+}
+
+fn handleAnsi(request: *std.http.Server.Request) !void {
+    // TODO: persist the flip in the logged-in user's server-side session so it
+    // survives this redirect and subsequent GETs.
+    //
+    // like logout, this is a bodyless POST, so close the connection rather than
+    // letting the keep-alive path try to discard a body that isn't framed.
+    try request.respond("", .{
+        .status = .see_other,
+        .keep_alive = false,
+        .extra_headers = &.{
+            .{ .name = "location", .value = ui.RoutablePage.url(.home_ansi) },
         },
     });
 }

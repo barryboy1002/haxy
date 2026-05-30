@@ -25,9 +25,10 @@ pub fn init(arena: *std.heap.ArenaAllocator) !Self {
 pub const View = struct {
     box: wgt.Box(ui.Widget),
     data: *const Self,
-    tab_ids: [3]usize,
+    tab_ids: [4]usize,
 
-    const auth_tab_index: usize = 2;
+    const ansi_tab_index: usize = 2;
+    const auth_tab_index: usize = 3;
     // the auth slot must fit either "login" or "logout"
     const auth_tab_min_width: usize = @as(usize, "logout".len) + 2;
 
@@ -35,7 +36,7 @@ pub const View = struct {
         var box = wgt.Box(ui.Widget).init(.{ .border_style = .hidden, .rounded_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
-        var tab_ids: [3]usize = undefined;
+        var tab_ids: [4]usize = undefined;
 
         // title sits to the left of the tabs
         {
@@ -59,10 +60,10 @@ pub const View = struct {
             });
         }
 
-        // fixed tabs: users, repos
+        // fixed tabs
         for (
-            [_][]const u8{ "users", "repos" },
-            [_][]const u8{ "a:/users", "a:/repos" },
+            [_][]const u8{ "users", "repos", "ANSI" },
+            [_][]const u8{ "a:/users", "a:/repos", "a:/ansi" },
             0..,
         ) |name, focus_name, i| {
             var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
@@ -108,7 +109,8 @@ pub const View = struct {
             switch (session.data.current_page) {
                 .home_users => 0,
                 .home_repos => 1,
-                .home_auth => 2,
+                .home_ansi => ansi_tab_index,
+                .home_auth => auth_tab_index,
             }
         ];
         return self;

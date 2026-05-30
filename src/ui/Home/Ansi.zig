@@ -1,0 +1,120 @@
+const std = @import("std");
+const ui = @import("../../ui.zig");
+const xit = @import("xit");
+const xitui = xit.xitui;
+const wgt = xitui.widget;
+const layout = xitui.layout;
+const inp = xitui.input;
+const Grid = xitui.grid.Grid;
+const Focus = xitui.focus.Focus;
+
+const Self = @This();
+
+const label_on = "turn off ANSI art";
+const label_off = "turn on ANSI art";
+
+pub fn init() Self {
+    return .{};
+}
+
+pub const View = struct {
+    center: ui.Center,
+    data: *const Self,
+    session: *ui.Session,
+    button_id: usize,
+
+    const button_index: usize = 0;
+
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+        // only logged-in users get a real HTML form to POST to the server
+        const logged_in = session.data.user_id != null;
+
+        var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .vert });
+        errdefer box.deinit(allocator);
+        // marks this subtree as an HTML form scope for the web overlay
+        if (logged_in) box.getFocus().kind = .{ .custom = "form:/ansi" };
+
+        var button_id: usize = undefined;
+        {
+            var button = try wgt.TextBox(ui.Widget).init(allocator, labelFor(session), .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+            errdefer button.deinit(allocator);
+            button.getFocus().focusable = true;
+            // the renderer distinguishes plain clickables from buttons that
+            // should POST to a server route by this kind.
+            if (logged_in) button.getFocus().kind = .{ .custom = "submit" };
+            button_id = button.getFocus().id;
+            try box.children.put(allocator, button.getFocus().id, .{
+                .widget = .{ .text_box = button },
+                .rect = null,
+                .min_size = null,
+            });
+        }
+
+        box.getFocus().child_id = button_id;
+
+        return .{
+            .center = try ui.Center.init(allocator, .{ .box = box }, .both),
+            .data = data,
+            .session = session,
+            .button_id = button_id,
+        };
+    }
+
+    pub fn deinit(self: *View, allocator: std.mem.Allocator) void {
+        self.center.deinit(allocator);
+    }
+
+    pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        const box = &self.center.child.box;
+        if (box.children.values().len > 0) {
+            const button = &box.children.values()[button_index].widget.text_box;
+            button.box.children.values()[0].widget.text.content = labelFor(self.session);
+        }
+        try self.center.build(allocator, constraint, root_focus);
+    }
+
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        _ = allocator;
+        switch (key) {
+            .enter => self.toggle(),
+            .mouse => |mouse| {
+                if (mouse.action == .press and mouse.action.press == .left) {
+                    if (root_focus.children.get(self.button_id)) |entry| {
+                        const r = entry.rect;
+                        if (mouse.x >= r.x and mouse.y >= r.y and
+                            mouse.x < r.x + r.size.width and mouse.y < r.y + r.size.height)
+                        {
+                            self.toggle();
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn toggle(self: *View) void {
+        self.session.data.enable_ansi = !self.session.data.enable_ansi;
+    }
+
+    pub fn clearGrid(self: *View) void {
+        self.center.clearGrid();
+    }
+
+    pub fn getGrid(self: View) ?Grid {
+        return self.center.getGrid();
+    }
+
+    pub fn getFocus(self: *View) *Focus {
+        return self.center.getFocus();
+    }
+
+    pub fn getSelectedIndex(self: View) ?usize {
+        _ = self;
+        return 0;
+    }
+};
+
+fn labelFor(session: *const ui.Session) []const u8 {
+    return if (session.data.enable_ansi) label_on else label_off;
+}
