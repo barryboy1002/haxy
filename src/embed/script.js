@@ -87,7 +87,7 @@ const importObject = {
             overlay.innerHTML = html;
         },
         _focusInput: function (id) {
-            const target = overlay.querySelector(`input[data-focus-id="${id}"]`);
+            const target = overlay.querySelector(`[data-focus-id="${id}"]`);
             if (target && document.activeElement !== target) target.focus();
         },
     },
@@ -98,6 +98,14 @@ function sendTextInputValue(focusId, value) {
     const ptr = wasmInstance.exports._alloc(bytes.length);
     new Uint8Array(wasmInstance.exports.memory.buffer, ptr, bytes.length).set(bytes);
     wasmInstance.exports._setTextInputValue(focusId, ptr, bytes.length);
+    wasmInstance.exports._tick(minRows(), maxCols());
+}
+
+function sendEnter(form) {
+    const btn = form.querySelector("[data-focus-id]");
+    if (!btn) return;
+    wasmInstance.exports._onMouseClick(Number(btn.dataset.focusId));
+    wasmInstance.exports._onKeyDown(13);
     wasmInstance.exports._tick(minRows(), maxCols());
 }
 
@@ -126,9 +134,16 @@ WebAssembly.instantiateStreaming(fetch("haxy.wasm"), importObject).then(async (r
         // the event so the TUI can move focus between widgets.
         if (document.activeElement) {
             const tag = document.activeElement.tagName;
+            const isArrow = event.key === "ArrowUp" || event.key === "ArrowDown" ||
+                event.key === "ArrowLeft" || event.key === "ArrowRight";
             if (tag === "INPUT" && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+                // up/down moves between widgets; left/right stay in the input
+                document.activeElement.blur();
+            } else if (tag === "BUTTON" && isArrow) {
+                // arrows navigate away from a focused submit button
                 document.activeElement.blur();
             } else if (tag === "INPUT" || tag === "BUTTON") {
+                // Enter (submit), typing, Tab — handled natively by the browser
                 return;
             }
         }

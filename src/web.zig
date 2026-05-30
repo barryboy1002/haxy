@@ -1,7 +1,6 @@
 const std = @import("std");
 const xit = @import("xit");
 const rp = xit.repo;
-const hash = xit.hash;
 const evt = @import("./event.zig");
 const ui = @import("./ui.zig");
 const xitui = xit.xitui;
@@ -150,7 +149,7 @@ fn handleRequest(
         return handleLogout(request, session_store);
     }
     if (method == .POST and std.mem.eql(u8, path, "/ansi")) {
-        return handleAnsi(request);
+        return handleAnsi(io, request, allocator, admin_repo_path, session_store);
     }
 
     const get_or_head = method == .GET or method == .HEAD;
@@ -190,11 +189,12 @@ fn handleRequest(
                     null
             else
                 null;
+        // enable_ansi is omitted here on purpose: Session.init fills it in from
+        // the logged-in user's event, falling back to false when anonymous.
         const html = try renderIndexHtml(io, allocator, admin_repo_path, .{
             .user_id = user_id,
             .login_failure = login_failure,
             .current_page = current_page,
-            // enable_ansi is intentionally left at its default
         });
         defer allocator.free(html);
         // expire the flash cookie on the way out so a refresh doesn't keep
@@ -248,7 +248,7 @@ fn handleLogin(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const haxy_moment = try openHaxyMoment(repo_opts, &repo);
+    const haxy_moment = try evt.currentMoment(repo_opts, &repo);
     const result = try evt.User.verifyCredentials(Repo.DB, repo_opts.hash, haxy_moment, &arena, username, password);
 
     switch (result) {
@@ -304,10 +304,25 @@ fn handleLogout(request: *std.http.Server.Request, session_store: SessionStore) 
     });
 }
 
-fn handleAnsi(request: *std.http.Server.Request) !void {
-    // TODO: persist the flip in the logged-in user's server-side session so it
-    // survives this redirect and subsequent GETs.
-    //
+fn handleAnsi(
+    io: std.Io,
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    admin_repo_path: []const u8,
+    session_store: SessionStore,
+) !void {
+    var user_id: [evt.event_id_size]u8 = undefined;
+    if (getCookieValue(request, cookie_name)) |token| {
+        if (session_store.lookup(token, &user_id)) {
+            const repo_opts: rp.RepoOpts(.xit) = .{};
+            const Repo = rp.Repo(.xit, repo_opts);
+            var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
+            defer repo.deinit(io, allocator);
+
+            try evt.User.toggleAnsi(repo_opts, io, allocator, &repo, &user_id);
+        }
+    }
+
     // like logout, this is a bodyless POST, so close the connection rather than
     // letting the keep-alive path try to discard a body that isn't framed.
     try request.respond("", .{
@@ -529,7 +544,10 @@ pub fn generateOverlay(allocator: std.mem.Allocator, root: *ui.Widget) ![]const 
 
         try out.appendSlice(allocator, "<form action=\"");
         try appendEscapedHtml(allocator, &out, action_url);
-        try out.appendSlice(allocator, "\" method=\"post\">");
+        try out.appendSlice(allocator, "\" method=\"post\"");
+        // an empty action must not POST — block it and send the input to the TUI instead
+        if (action_url.len == 0) try out.appendSlice(allocator, " onsubmit=\"event.preventDefault();sendEnter(this);\"");
+        try out.appendSlice(allocator, ">");
 
         // form.focus.children was populated by addChild, which flattens the
         // whole subtree into one map — so descendants (inputs + the submit
@@ -644,25 +662,6 @@ fn appendEscapedHtml(allocator: std.mem.Allocator, out: *std.ArrayList(u8), inpu
 }
 
 // --- helpers --------------------------------------------------------------
-
-fn openHaxyMoment(
-    comptime repo_opts: rp.RepoOpts(.xit),
-    repo: *rp.Repo(.xit, repo_opts),
-) !rp.Repo(.xit, repo_opts).DB.HashMap(.read_only) {
-    const DB = rp.Repo(.xit, repo_opts).DB;
-    const history = try DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-    const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-    const moment = try DB.HashMap(.read_only).init(moment_cursor);
-    const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-    var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-    _ = try last_object_id_cursor.readBytes(&last_object_id);
-    const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-    const haxy = try DB.ArrayList(.read_only).init(haxy_cursor);
-    const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-    const haxy_moments = try DB.HashMap(.read_only).init(haxy_moments_cursor);
-    const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-    return try DB.HashMap(.read_only).init(haxy_moment_cursor);
-}
 
 fn getCookieValue(request: *std.http.Server.Request, name: []const u8) ?[]const u8 {
     var iter = request.iterateHeaders();

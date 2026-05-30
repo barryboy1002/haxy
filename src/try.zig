@@ -43,10 +43,13 @@ pub fn main(init: std.process.Init) !void {
     const work_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server", "admin" });
     defer allocator.free(work_path);
 
-    const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
+    const repo_opts: rp.RepoOpts(.xit) = .{};
     const Repo = rp.Repo(.xit, repo_opts);
     var repo = try Repo.init(io, allocator, .{ .path = work_path });
     defer repo.deinit(io, allocator);
+
+    try repo.addConfig(io, allocator, .{ .name = "user.name", .value = "haxy" });
+    try repo.addConfig(io, allocator, .{ .name = "user.email", .value = "admin@haxy" });
 
     var session: ui.Session = undefined;
 
@@ -169,23 +172,8 @@ pub fn main(init: std.process.Init) !void {
             };
         }
 
-        // insert users and repos as commits in the repo
-        {
-            var json: std.Io.Writer.Allocating = .init(allocator);
-            defer json.deinit();
-
-            for (events_to_consume) |event| {
-                json.clearRetainingCapacity();
-
-                try std.json.Stringify.value(event, .{}, &json.writer);
-
-                // commit the event into a special branch
-                _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
-            }
-        }
-
-        // consume events into the database
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        // commit the seed events and consume them into the database
+        try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
         session = try ui.Session.init(repo_opts, &page_arena, &repo, .{});
         break :blk .{ .home = try .init(repo_opts, &page_arena, session.haxy_moment orelse unreachable) };

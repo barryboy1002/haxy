@@ -27,11 +27,6 @@ pub const View = struct {
     data: *const Self,
     tab_ids: [4]usize,
 
-    const ansi_tab_index: usize = 2;
-    const auth_tab_index: usize = 3;
-    // the auth slot must fit either "login" or "logout"
-    const auth_tab_min_width: usize = @as(usize, "logout".len) + 2;
-
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var box = wgt.Box(ui.Widget).init(.{ .border_style = .hidden, .rounded_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
@@ -60,45 +55,48 @@ pub const View = struct {
             });
         }
 
-        // fixed tabs
+        // tabs
+        var tab_index: usize = 0;
         for (
-            [_][]const u8{ "users", "repos", "ANSI" },
-            [_][]const u8{ "a:/users", "a:/repos", "a:/ansi" },
-            0..,
-        ) |name, focus_name, i| {
-            var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
-            errdefer text_box.deinit(allocator);
-            text_box.getFocus().focusable = true;
-            text_box.getFocus().kind = .{ .custom = focus_name };
-            tab_ids[i] = text_box.getFocus().id;
-            try box.children.put(allocator, text_box.getFocus().id, .{
-                .widget = .{ .text_box = text_box },
-                .rect = null,
-                .min_size = .{ .width = name.len + 2, .height = null },
-            });
-        }
-
-        // spacer pushes the auth tab to the right
-        {
-            var spacer = ui.Spacer.init();
-            errdefer spacer.deinit(allocator);
-            try box.children.put(allocator, spacer.getFocus().id, .{
-                .widget = .{ .spacer = spacer },
-                .rect = null,
-                .min_size = .{ .width = 1, .height = null },
-            });
-        }
-
-        // auth tab — knows how to swap its own label based on session
-        {
-            var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
-            errdefer auth_tab.deinit(allocator);
-            tab_ids[auth_tab_index] = auth_tab.getFocus().id;
-            try box.children.put(allocator, auth_tab.getFocus().id, .{
-                .widget = .{ .home_auth_tab = auth_tab },
-                .rect = null,
-                .min_size = .{ .width = auth_tab_min_width, .height = null },
-            });
+            [_][]const u8{ "users", "repos", "", "ANSI art", "" },
+            [_][]const u8{ "a:/users", "a:/repos", "", "a:/ansi", "a:/auth" },
+        ) |name, focus_name| {
+            // spacer
+            if (focus_name.len == 0) {
+                var spacer = ui.Spacer.init();
+                errdefer spacer.deinit(allocator);
+                try box.children.put(allocator, spacer.getFocus().id, .{
+                    .widget = .{ .spacer = spacer },
+                    .rect = null,
+                    .min_size = .{ .width = 1, .height = null },
+                });
+            }
+            // auth
+            else if (std.mem.eql(u8, "a:/auth", focus_name)) {
+                var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
+                errdefer auth_tab.deinit(allocator);
+                tab_ids[tab_index] = auth_tab.getFocus().id;
+                tab_index += 1;
+                try box.children.put(allocator, auth_tab.getFocus().id, .{
+                    .widget = .{ .home_auth_tab = auth_tab },
+                    .rect = null,
+                    .min_size = .{ .width = AuthTab.min_width, .height = null },
+                });
+            }
+            // other tabs
+            else {
+                var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+                errdefer text_box.deinit(allocator);
+                text_box.getFocus().focusable = true;
+                text_box.getFocus().kind = .{ .custom = focus_name };
+                tab_ids[tab_index] = text_box.getFocus().id;
+                tab_index += 1;
+                try box.children.put(allocator, text_box.getFocus().id, .{
+                    .widget = .{ .text_box = text_box },
+                    .rect = null,
+                    .min_size = .{ .width = name.len + 2, .height = null },
+                });
+            }
         }
 
         var self = View{ .box = box, .data = data, .tab_ids = tab_ids };
@@ -109,8 +107,8 @@ pub const View = struct {
             switch (session.data.current_page) {
                 .home_users => 0,
                 .home_repos => 1,
-                .home_ansi => ansi_tab_index,
-                .home_auth => auth_tab_index,
+                .home_ansi => 2,
+                .home_auth => 3,
             }
         ];
         return self;

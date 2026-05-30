@@ -26,13 +26,11 @@ pub const View = struct {
     const button_index: usize = 0;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        // only logged-in users get a real HTML form to POST to the server
         const logged_in = session.data.user_id != null;
 
         var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
-        // marks this subtree as an HTML form scope for the web overlay
-        if (logged_in) box.getFocus().kind = .{ .custom = "form:/ansi" };
+        box.getFocus().kind = .{ .custom = if (logged_in) "form:/ansi" else "form:" };
 
         var button_id: usize = undefined;
         {
@@ -41,7 +39,7 @@ pub const View = struct {
             button.getFocus().focusable = true;
             // the renderer distinguishes plain clickables from buttons that
             // should POST to a server route by this kind.
-            if (logged_in) button.getFocus().kind = .{ .custom = "submit" };
+            button.getFocus().kind = .{ .custom = "submit" };
             button_id = button.getFocus().id;
             try box.children.put(allocator, button.getFocus().id, .{
                 .widget = .{ .text_box = button },
@@ -76,7 +74,7 @@ pub const View = struct {
     pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
         _ = allocator;
         switch (key) {
-            .enter => self.toggle(),
+            .enter => try self.toggle(),
             .mouse => |mouse| {
                 if (mouse.action == .press and mouse.action.press == .left) {
                     if (root_focus.children.get(self.button_id)) |entry| {
@@ -84,7 +82,7 @@ pub const View = struct {
                         if (mouse.x >= r.x and mouse.y >= r.y and
                             mouse.x < r.x + r.size.width and mouse.y < r.y + r.size.height)
                         {
-                            self.toggle();
+                            try self.toggle();
                         }
                     }
                 }
@@ -93,8 +91,9 @@ pub const View = struct {
         }
     }
 
-    fn toggle(self: *View) void {
-        self.session.data.enable_ansi = !self.session.data.enable_ansi;
+    // enqueue the toggle; the host drains it (applying + persisting) this frame.
+    fn toggle(self: *View) !void {
+        try self.session.push(.toggle_ansi);
     }
 
     pub fn clearGrid(self: *View) void {

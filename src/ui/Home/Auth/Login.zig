@@ -250,13 +250,16 @@ pub const View = struct {
                 self.session.data.user_id = user_id_stable;
                 self.session.data.login_failure = null;
 
+                // adopt the user's persisted prefs
+                try self.session.loadUserPrefs();
+
                 // wipe the entered credentials so they don't linger if the
-                // user returns to this page after logging out.
+                // user returns to this page after logging out
                 username_input.clear(allocator);
                 password_input.clear(allocator);
 
                 // jump focus back to the users tab — the login button we
-                // just pressed is about to be hidden by the tab-label swap.
+                // just pressed is about to be hidden by the tab-label swap
                 try root_focus.setFocus(self.users_tab_id);
             },
         }

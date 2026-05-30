@@ -41,6 +41,11 @@ fn init(json: []const u8, min_height: u32, max_width: u32) !void {
 
 fn tick(min_height: u32, max_width: u32) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
+
+    // apply actions queued during input. the wasm path has no repo, so this is
+    // in-memory only; logged-in web persistence goes through the /ansi POST.
+    session.applyPending();
+
     try root_ptr.build(allocator, .{
         // min_height lets the TUI fill the viewport when its content is
         // short; max height stays null so taller content extends downward
@@ -75,12 +80,15 @@ fn tick(min_height: u32, max_width: u32) !void {
     defer allocator.free(overlay);
     setOverlay(overlay);
 
-    // if focused widget is a TextInput, focus on the HTML element
+    // browser-focus the focused overlay control (text input or submit button)
+    // so the browser handles typing and Enter-to-submit natively. without this
+    // the submit button never gets focus and Enter falls through to the wasm.
     const root_focus = root_ptr.getFocus();
     if (root_focus.grandchild_id) |gid| {
         if (root_focus.children.get(gid)) |child| {
             switch (child.focus.kind) {
                 .text_input, .text_input_password => _focusInput(@intCast(gid)),
+                .custom => |custom| if (std.mem.eql(u8, custom, "submit")) _focusInput(@intCast(gid)),
                 else => {},
             }
         }
@@ -106,17 +114,7 @@ fn onKeyDown(key_code: u32) !void {
 
 fn onMouseClick(focus_id: usize) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
-    const root_focus = root_ptr.getFocus();
-    try root_focus.setFocus(focus_id);
-    // forward a left press into the widget tree for plain in-tree clickables
-    if (root_focus.children.get(focus_id)) |child| {
-        const r = child.rect;
-        try root_ptr.input(allocator, .{ .mouse = .{
-            .x = r.x,
-            .y = r.y,
-            .action = .{ .press = .left },
-        } }, root_focus);
-    }
+    try root_ptr.getFocus().setFocus(focus_id);
 }
 
 fn consoleLog(arg: []const u8) void {

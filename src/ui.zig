@@ -1,7 +1,6 @@
 const std = @import("std");
 const xit = @import("xit");
 const rp = xit.repo;
-const hash = xit.hash;
 const xitui = xit.xitui;
 const term = xitui.terminal;
 const wgt = xitui.widget;
@@ -55,6 +54,7 @@ pub const Session = struct {
     data: Data = .{}, // serializable data sent down to web client
     arena: *std.heap.ArenaAllocator,
     haxy_moment: ?DB.HashMap(.read_only) = null, // db cursor (null on the wasm side)
+    pending: std.ArrayList(Action) = .empty, // actions queued by widgets this frame
 
     pub const Data = struct {
         user_id: ?[]const u8 = null,
@@ -71,31 +71,86 @@ pub const Session = struct {
         repo: *rp.Repo(.xit, repo_opts),
         data: Data,
     ) !Session {
-        const RepoDB = rp.Repo(.xit, repo_opts).DB;
-
-        const history = try RepoDB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try RepoDB.HashMap(.read_only).init(moment_cursor);
-
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try RepoDB.ArrayList(.read_only).init(haxy_cursor);
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try RepoDB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try RepoDB.HashMap(.read_only).init(haxy_moment_cursor);
-
-        return .{
+        var session = Session{
             .data = data,
             .arena = arena,
-            .haxy_moment = haxy_moment,
+            .haxy_moment = try evt.currentMoment(repo_opts, repo),
         };
+        try session.loadUserPrefs();
+        return session;
+    }
+
+    // load the logged-in user's persisted preferences from the db
+    pub fn loadUserPrefs(self: *Session) !void {
+        const user_id = self.data.user_id orelse return;
+        const moment = self.haxy_moment orelse return;
+        if (try evt.User.readById(DB, canonical_repo_opts.hash, moment, self.arena, user_id)) |user| {
+            self.data.enable_ansi = user.enable_ansi;
+        }
+    }
+
+    // queue an action for the host to drain this frame.
+    pub fn push(self: *Session, action: Action) !void {
+        try self.pending.append(self.arena.allocator(), action);
+    }
+
+    // apply a single action's in-memory effect only (no persistence).
+    pub fn apply(self: *Session, action: Action) void {
+        switch (action) {
+            .toggle_ansi => self.data.enable_ansi = !self.data.enable_ansi,
+        }
+    }
+
+    // drain queued actions, applying only their in-memory effect. used on the
+    // wasm path, which has no repo to persist to (and only anonymous toggles
+    // reach it anyway).
+    pub fn applyPending(self: *Session) void {
+        for (self.pending.items) |action| self.apply(action);
+        self.pending.clearRetainingCapacity();
+    }
+};
+
+// a user-initiated state change. widgets enqueue these on the Session during
+// input instead of mutating state or touching the DB themselves; the host
+// drains them each frame (see dispatchPending / applyPending). this keeps DB
+// side effects out of the widget tree and gives every render path one place to
+// turn a UI action into a state change + event.
+pub const Action = union(enum) {
+    toggle_ansi,
+
+    // apply this action and, when it maps to persistent state and the session
+    // is logged in, emit the corresponding event. the single place that knows
+    // how a UI action becomes a DB write.
+    pub fn dispatch(
+        self: Action,
+        comptime repo_opts: rp.RepoOpts(.xit),
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        repo: *rp.Repo(.xit, repo_opts),
+        session: *Session,
+    ) !void {
+        session.apply(self);
+        switch (self) {
+            .toggle_ansi => if (session.data.user_id) |user_id| {
+                try evt.User.toggleAnsi(repo_opts, io, allocator, repo, user_id);
+            },
+        }
+    }
+
+    // drain the session's queued actions through dispatch. always clears the
+    // queue, even if a dispatch fails, so a single bad write isn't retried
+    // every frame.
+    pub fn dispatchPending(
+        comptime repo_opts: rp.RepoOpts(.xit),
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        repo: *rp.Repo(.xit, repo_opts),
+        session: *Session,
+    ) !void {
+        defer session.pending.clearRetainingCapacity();
+        for (session.pending.items) |action| {
+            try action.dispatch(repo_opts, io, allocator, repo, session);
+        }
     }
 };
 
@@ -135,6 +190,9 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page, session:
             try inputKey(allocator, &root, key, &terminal);
             blocking = false;
         }
+
+        // local run has no repo to persist to, so just apply in-memory
+        session.applyPending();
 
         try root.build(allocator, .{
             .min_size = .{ .width = null, .height = null },

@@ -12,6 +12,9 @@ pub const Issue = @import("event/Issue.zig");
 
 pub const event_id_size: usize = 32;
 
+// the branch haxy events are committed to before being consumed
+pub const events_ref: rf.Ref = .{ .kind = .head, .name = "haxy/meta" };
+
 pub const EventKind = enum {
     user,
     repo,
@@ -317,6 +320,47 @@ pub fn consumeInTransaction(
     if (last_object_id_maybe) |*last_object_id| {
         try state.extra.moment.put(hash.hashInt(repo_opts.hash, "haxy-last-object-id"), .{ .bytes = last_object_id });
     }
+}
+
+pub fn currentMoment(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    repo: *rp.Repo(.xit, repo_opts),
+) !rp.Repo(.xit, repo_opts).DB.HashMap(.read_only) {
+    const DB = rp.Repo(.xit, repo_opts).DB;
+    const history = try DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
+    const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
+    const moment = try DB.HashMap(.read_only).init(moment_cursor);
+    const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
+    var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
+    _ = try last_object_id_cursor.readBytes(&last_object_id);
+    const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
+    const haxy = try DB.ArrayList(.read_only).init(haxy_cursor);
+    const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
+    const haxy_moments = try DB.HashMap(.read_only).init(haxy_moments_cursor);
+    const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
+    return try DB.HashMap(.read_only).init(haxy_moment_cursor);
+}
+
+// commit each event as a JSON message on the events branch, then consume them
+// into the database
+pub fn commitAndConsume(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo: *rp.Repo(.xit, repo_opts),
+    ref: rf.Ref,
+    events: []const EventWithId,
+) !void {
+    var json: std.Io.Writer.Allocating = .init(allocator);
+    defer json.deinit();
+
+    for (events) |event| {
+        json.clearRetainingCapacity();
+        try std.json.Stringify.value(event, .{}, &json.writer);
+        _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, ref);
+    }
+
+    try consume(repo_opts, io, allocator, repo, ref);
 }
 
 //

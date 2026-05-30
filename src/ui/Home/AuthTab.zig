@@ -10,6 +10,8 @@ const Focus = xitui.focus.Focus;
 
 const Self = @This();
 
+pub const min_width: usize = "logout".len + 2;
+
 pub fn init() Self {
     return .{};
 }

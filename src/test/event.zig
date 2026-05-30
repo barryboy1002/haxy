@@ -116,27 +116,7 @@ test "rebase" {
     {
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(1, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of issues
         const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
@@ -171,43 +151,8 @@ test "rebase" {
         },
     };
 
-    {
-        var json: std.Io.Writer.Allocating = .init(allocator);
-        defer json.deinit();
-
-        for (events_to_consume2) |event| {
-            json.clearRetainingCapacity();
-
-            try std.json.Stringify.value(event, .{}, &json.writer);
-
-            // commit the event into a special branch
-            _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
-        }
-    }
-
-    //
-    // consume events into the database
-    //
-
-    {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
-
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(2, try haxy.count());
-    }
+    // commit and consume the new event
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume2);
 
     //
     // rebase the branch so it no longer includes the edit event
@@ -252,27 +197,7 @@ test "rebase" {
     {
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(2, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of issues
         const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
@@ -331,27 +256,7 @@ test "rebase" {
     {
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(1, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of issues
         const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
@@ -461,27 +366,7 @@ test "merge" {
     {
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(1, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of issues
         const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
@@ -583,27 +468,7 @@ test "merge" {
     {
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(2, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of issues
         const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
@@ -669,27 +534,7 @@ test "merge" {
     {
         try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
 
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(1, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of issues
         const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse return error.NotFound;
@@ -862,52 +707,11 @@ test "user and repo" {
         },
     };
 
-    //
-    // insert users and repos as commits in the repo
-    //
+    // commit and consume the seed events
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume);
 
     {
-        var json: std.Io.Writer.Allocating = .init(allocator);
-        defer json.deinit();
-
-        for (events_to_consume) |event| {
-            json.clearRetainingCapacity();
-
-            try std.json.Stringify.value(event, .{}, &json.writer);
-
-            // commit the event into a special branch
-            _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
-        }
-    }
-
-    //
-    // consume events into the database
-    //
-
-    {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
-
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(1, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of users
         const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->user")) orelse return error.NotFound;
@@ -956,48 +760,11 @@ test "user and repo" {
         },
     };
 
-    {
-        var json: std.Io.Writer.Allocating = .init(allocator);
-        defer json.deinit();
-
-        for (events_to_consume2) |event| {
-            json.clearRetainingCapacity();
-
-            try std.json.Stringify.value(event, .{}, &json.writer);
-
-            // commit the event into a special branch
-            _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
-        }
-    }
-
-    //
-    // consume the removal into the database
-    //
+    // commit and consume the removal
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume2);
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
-
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(2, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of repos
         const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->repo")) orelse return error.NotFound;
@@ -1027,48 +794,11 @@ test "user and repo" {
         },
     };
 
-    {
-        var json: std.Io.Writer.Allocating = .init(allocator);
-        defer json.deinit();
-
-        for (events_to_consume3) |event| {
-            json.clearRetainingCapacity();
-
-            try std.json.Stringify.value(event, .{}, &json.writer);
-
-            // commit the event into a special branch
-            _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
-        }
-    }
-
-    //
-    // consume the user removal into the database
-    //
+    // commit and consume the removal
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume3);
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
-
-        const history = try Repo.DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
-
-        // read the moment we just created
-        const moment_cursor = try history.getCursor(-1) orelse return error.NotFound;
-        const moment = try Repo.DB.HashMap(.read_only).init(moment_cursor);
-
-        // get the last object id
-        const last_object_id_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy-last-object-id")) orelse return error.NotFound;
-        var last_object_id: [hash.byteLen(repo_opts.hash)]u8 = undefined;
-        _ = try last_object_id_cursor.readBytes(&last_object_id);
-
-        const haxy_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, "haxy")) orelse return error.NotFound;
-        const haxy = try Repo.DB.ArrayList(.read_only).init(haxy_cursor);
-
-        try std.testing.expectEqual(3, try haxy.count());
-
-        const haxy_moments_cursor = try haxy.getCursor(-1) orelse return error.NotFound;
-        const haxy_moments = try Repo.DB.HashMap(.read_only).init(haxy_moments_cursor);
-
-        const haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &last_object_id)) orelse return error.NotFound;
-        const haxy_moment = try Repo.DB.HashMap(.read_only).init(haxy_moment_cursor);
+        const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
         // get the map of users
         const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->user")) orelse return error.NotFound;
@@ -1077,3 +807,4 @@ test "user and repo" {
         try std.testing.expect(null == try event_id_to_user.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)));
     }
 }
+

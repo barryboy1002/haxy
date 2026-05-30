@@ -38,6 +38,21 @@ pub const SessionHandler = struct {
 };
 
 fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySize) !void {
+    // runTui owns the terminal, whose deinit restores the client's screen and
+    // runs as the function unwinds — so any error it returns leaves the TUI torn
+    // down and we can surface the failure on the restored screen before exiting.
+    runTui(handler, sess, pty) catch |err| {
+        std.debug.print("ssh tui session failed: {s}\n", .{@errorName(err)});
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "haxy ssh: {s}\r\n", .{@errorName(err)}) catch "haxy ssh: internal error\r\n";
+        sess.writeBytes(msg) catch {};
+        try sess.exit(1);
+        return;
+    };
+    try sess.exit(0);
+}
+
+fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySize) !void {
     const allocator = sess.allocator;
     const io = sess.io;
 
@@ -64,62 +79,62 @@ fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh
     var root = try ui.initRoot(allocator, &page, &ui_session);
     defer root.deinit(allocator);
 
-    // terminal and its writer adapter live in a nested block so the deinit
-    // (which writes leave-alt / show-cursor / disable-mouse to the channel)
-    // fires BEFORE sess.exit closes the channel. otherwise the client's
-    // terminal is left in alt-screen mode after disconnect.
-    {
-        var session_writer_buf: [8192]u8 = undefined;
-        var session_writer = ssh.SessionWriter.init(sess, &session_writer_buf);
+    var session_writer_buf: [8192]u8 = undefined;
+    var session_writer = ssh.SessionWriter.init(sess, &session_writer_buf);
 
-        var terminal = try StreamTerminal.init(allocator, &session_writer.interface, .{
-            .width = effective_pty.width_cells,
-            .height = effective_pty.height_cells,
-        });
-        defer terminal.deinit();
+    // the terminal's deinit writes leave-alt / show-cursor / disable-mouse and
+    // flushes, restoring the client's screen. as a function-scoped defer it runs
+    // before runTui returns — on the normal path and on any error — so the
+    // caller can write to the client afterward (and sess.exit can close cleanly).
+    var terminal = try StreamTerminal.init(allocator, &session_writer.interface, .{
+        .width = effective_pty.width_cells,
+        .height = effective_pty.height_cells,
+    });
+    defer terminal.deinit();
 
-        var last_size = Size{ .width = 0, .height = 0 };
-        var last_grid = try Grid.init(allocator, last_size);
-        defer last_grid.deinit();
+    var last_size = Size{ .width = 0, .height = 0 };
+    var last_grid = try Grid.init(allocator, last_size);
+    defer last_grid.deinit();
 
-        // initial render — user sees the page immediately
+    // initial render — user sees the page immediately
+    try root.build(allocator, .{
+        .min_size = .{ .width = null, .height = null },
+        .max_size = .{ .width = last_size.width, .height = last_size.height },
+    }, root.getFocus());
+    _ = try terminal.render(&root, &last_grid, &last_size);
+
+    // event loop. nextEvent blocks until something interesting arrives;
+    // for each event, rebuild the widget tree and re-render so the user
+    // sees the effect of their input on the same iteration.
+    while (!terminal.shouldQuit()) {
+        const event = try sess.nextEvent();
+        switch (event) {
+            .data => |payload| {
+                defer allocator.free(payload);
+                try terminal.writeBytes(payload);
+                while (terminal.popKey()) |key| {
+                    try ui.inputKey(allocator, &root, key, &terminal);
+                }
+            },
+            .resize => |sz| {
+                terminal.pushResize(.{ .width = sz.width_cells, .height = sz.height_cells });
+                while (terminal.popKey()) |key| {
+                    try ui.inputKey(allocator, &root, key, &terminal);
+                }
+            },
+            .close => terminal.requestQuit(),
+        }
+
+        // apply any actions the widgets queued this frame, persisting those
+        // that belong to a logged-in user
+        try ui.Action.dispatchPending(repo_opts, io, allocator, &repo, &ui_session);
+
         try root.build(allocator, .{
             .min_size = .{ .width = null, .height = null },
             .max_size = .{ .width = last_size.width, .height = last_size.height },
         }, root.getFocus());
         _ = try terminal.render(&root, &last_grid, &last_size);
-
-        // event loop. nextEvent blocks until something interesting arrives;
-        // for each event, rebuild the widget tree and re-render so the user
-        // sees the effect of their input on the same iteration.
-        while (!terminal.shouldQuit()) {
-            const event = try sess.nextEvent();
-            switch (event) {
-                .data => |payload| {
-                    defer allocator.free(payload);
-                    try terminal.writeBytes(payload);
-                    while (terminal.popKey()) |key| {
-                        try ui.inputKey(allocator, &root, key, &terminal);
-                    }
-                },
-                .resize => |sz| {
-                    terminal.pushResize(.{ .width = sz.width_cells, .height = sz.height_cells });
-                    while (terminal.popKey()) |key| {
-                        try ui.inputKey(allocator, &root, key, &terminal);
-                    }
-                },
-                .close => terminal.requestQuit(),
-            }
-
-            try root.build(allocator, .{
-                .min_size = .{ .width = null, .height = null },
-                .max_size = .{ .width = last_size.width, .height = last_size.height },
-            }, root.getFocus());
-            _ = try terminal.render(&root, &last_grid, &last_size);
-        }
     }
-
-    try sess.exit(0);
 }
 
 // ---------------------------------------------------------------------------

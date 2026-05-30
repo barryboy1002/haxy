@@ -1,6 +1,7 @@
 const std = @import("std");
 const evt = @import("../event.zig");
 const xit = @import("xit");
+const rp = xit.repo;
 const hash = xit.hash;
 const bcrypt = std.crypto.pwhash.bcrypt;
 
@@ -8,6 +9,7 @@ name: []const u8,
 display_name: []const u8,
 email: []const u8,
 password_hash: []const u8,
+enable_ansi: bool = false,
 
 pub fn consume(
     comptime DB: type,
@@ -107,4 +109,44 @@ pub fn verifyCredentials(
     };
 
     return .{ .success = user_id };
+}
+
+// read a user by event id via the event-id->user index, or null if the id
+// isn't a known user. field byte slices are allocated in `arena`.
+pub fn readById(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    haxy_moment: DB.HashMap(.read_only),
+    arena: *std.heap.ArenaAllocator,
+    user_id: []const u8,
+) !?@This() {
+    const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->user")) orelse return null;
+    const event_id_to_user = try DB.HashMap(.read_only).init(event_id_to_user_cursor);
+    const user_cursor = try event_id_to_user.getCursor(hash.hashInt(hash_kind, user_id)) orelse return null;
+    const user_map = try DB.HashMap(.read_only).init(user_cursor);
+    return try evt.read(@This(), DB, hash_kind, arena, user_map);
+}
+
+// flip a user's ANSI-art preference by re-emitting their User event with
+// enable_ansi negated. a no-op for an unknown user. `repo` must be writable.
+pub fn toggleAnsi(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo: *rp.Repo(.xit, repo_opts),
+    user_id: []const u8,
+) !void {
+    const DB = rp.Repo(.xit, repo_opts).DB;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const moment = try evt.currentMoment(repo_opts, repo);
+    const user = (try readById(DB, repo_opts.hash, moment, &arena, user_id)) orelse return;
+
+    var updated = user;
+    updated.enable_ansi = !user.enable_ansi;
+    try evt.commitAndConsume(repo_opts, io, allocator, repo, evt.events_ref, &[_]evt.EventWithId{.{
+        .id = std.fmt.bytesToHex(user_id[0..evt.event_id_size].*, .lower),
+        .event = .{ .user = updated },
+    }});
 }
