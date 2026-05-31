@@ -2,7 +2,6 @@ const std = @import("std");
 const evt = @import("../../event.zig");
 const ui = @import("../../ui.zig");
 const xit = @import("xit");
-const rp = xit.repo;
 const hash = xit.hash;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
@@ -16,22 +15,21 @@ repos: []const evt.Repo,
 const Self = @This();
 
 pub fn init(
-    comptime repo_opts: rp.RepoOpts(.xit),
     arena: *std.heap.ArenaAllocator,
-    haxy_moment: rp.Repo(.xit, repo_opts).DB.HashMap(.read_only),
+    haxy_moment: evt.AdminDB.HashMap(.read_only),
 ) !Self {
-    const DB = rp.Repo(.xit, repo_opts).DB;
+    const DB = evt.AdminDB;
 
     var repos: std.ArrayList(evt.Repo) = .empty;
 
-    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->repo")) orelse return error.NotFound;
+    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(evt.admin_repo_opts.hash, "event-id->repo")) orelse return error.NotFound;
     const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
 
     var repos_iter = try event_id_to_repo.iterator();
     while (try repos_iter.next()) |kv_cursor| {
         const kv = try kv_cursor.readKeyValuePair();
         const repo_map = try DB.HashMap(.read_only).init(kv.value_cursor);
-        const repo_event = try evt.read(evt.Repo, DB, repo_opts.hash, arena, repo_map);
+        const repo_event = try evt.read(evt.Repo, DB, evt.admin_repo_opts.hash, arena, repo_map);
         try repos.append(arena.allocator(), repo_event);
     }
 

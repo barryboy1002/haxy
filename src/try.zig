@@ -43,8 +43,7 @@ pub fn main(init: std.process.Init) !void {
     const work_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server", "admin" });
     defer allocator.free(work_path);
 
-    const repo_opts: rp.RepoOpts(.xit) = .{};
-    const Repo = rp.Repo(.xit, repo_opts);
+    const Repo = rp.Repo(.xit, evt.admin_repo_opts);
     var repo = try Repo.init(io, allocator, .{ .path = work_path });
     defer repo.deinit(io, allocator);
 
@@ -173,10 +172,10 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // commit the seed events and consume them into the database
-        try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
+        try evt.commitAndConsume(evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
-        session = try ui.Session.init(repo_opts, &page_arena, &repo, .{});
-        break :blk .{ .home = try .init(repo_opts, &page_arena, session.haxy_moment orelse unreachable) };
+        session = try ui.Session.init(&page_arena, &repo, .{});
+        break :blk .{ .home = try .init(&page_arena, session.haxy_moment orelse unreachable) };
     };
 
     // start the server

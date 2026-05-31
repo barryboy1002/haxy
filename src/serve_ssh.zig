@@ -11,6 +11,7 @@ const Grid = xitui.grid.Grid;
 const Size = xitui.layout.Size;
 const ui = @import("./ui.zig");
 const ssh = @import("./serve_ssh_protocol.zig");
+const evt = @import("./event.zig");
 
 pub const SessionHandler = struct {
     admin_repo_path: []const u8,
@@ -68,13 +69,12 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
-    const repo_opts: rp.RepoOpts(.xit) = .{};
-    const Repo = rp.Repo(.xit, repo_opts);
+    const Repo = rp.Repo(.xit, evt.admin_repo_opts);
     var repo = try Repo.open(io, allocator, .{ .path = handler.admin_repo_path });
     defer repo.deinit(io, allocator);
-    var ui_session = try ui.Session.init(repo_opts, &page_arena, &repo, .{});
+    var ui_session = try ui.Session.init(&page_arena, &repo, .{});
 
-    const page: ui.Page = .{ .home = try .init(repo_opts, &page_arena, ui_session.haxy_moment orelse unreachable) };
+    const page: ui.Page = .{ .home = try .init(&page_arena, ui_session.haxy_moment orelse unreachable) };
 
     var root = try ui.initRoot(allocator, &page, &ui_session);
     defer root.deinit(allocator);
@@ -125,9 +125,7 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
             .close => terminal.requestQuit(),
         }
 
-        // apply any actions the widgets queued this frame, persisting those
-        // that belong to a logged-in user
-        try ui.Action.dispatchPending(repo_opts, io, allocator, &repo, &ui_session);
+        try ui_session.applyAndWritePending(io, allocator, &repo);
 
         try root.build(allocator, .{
             .min_size = .{ .width = null, .height = null },
@@ -172,56 +170,71 @@ fn runGitSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, command:
         return;
     }
 
-    const repo_opts: rp.RepoOpts(.xit) = .{};
-    const Repo = rp.Repo(.xit, repo_opts);
     const create_if_missing = parsed.service == .receive_pack;
+    const any_repo_opts: rp.AnyRepoOpts(.xit) = .{};
 
-    var repo = openOrCreate(Repo, io, allocator, repo_path, create_if_missing) catch |err| switch (err) {
+    var any_repo = rp.AnyRepo(.xit, any_repo_opts).open(io, allocator, .{ .path = repo_path }) catch |err| switch (err) {
         error.RepoNotFound => {
-            try writeError(sess, "repo not found");
-            try sess.exit(1);
+            if (!create_if_missing) {
+                try writeError(sess, "repo not found");
+                try sess.exit(1);
+                return;
+            }
+            // nothing on disk to detect a hash from, so create with the
+            // default concrete options and serve that.
+            var repo = try createRepo(any_repo_opts.toRepoOpts(), io, allocator, repo_path);
+            defer repo.deinit(io, allocator);
+            try servePack(repo.self_repo_opts, &repo, sess, io, allocator, parsed.service);
+            try sess.exit(0);
             return;
         },
         else => |e| return e,
     };
-    defer repo.deinit(io, allocator);
+    defer any_repo.deinit(io, allocator);
 
-    // wrap the channel I/O in std.Io.Reader/Writer adapters so the repo's
-    // pack functions can consume them like any other stream.
+    switch (any_repo) {
+        inline else => |*repo| try servePack(repo.self_repo_opts, repo, sess, io, allocator, parsed.service),
+    }
+
+    try sess.exit(0);
+}
+
+fn createRepo(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo_path: []const u8,
+) !rp.Repo(.xit, repo_opts) {
+    var repo = try rp.Repo(.xit, repo_opts).init(io, allocator, .{ .path = repo_path });
+    errdefer repo.deinit(io, allocator);
+    try repo.addConfig(io, allocator, .{ .name = "http.receivepack", .value = "true" });
+    try repo.addConfig(io, allocator, .{ .name = "receive.denycurrentbranch", .value = "updateinstead" });
+    return repo;
+}
+
+// wrap the channel I/O in std.Io.Reader/Writer adapters so the repo's pack
+// functions can consume them like any other stream, then run the requested
+// service
+fn servePack(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    repo: *rp.Repo(.xit, repo_opts),
+    sess: *ssh.SessionCtx,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    service: GitService,
+) !void {
     var session_reader_buf: [4096]u8 = undefined;
     var session_writer_buf: [4096]u8 = undefined;
     var session_reader = ssh.SessionReader.init(sess, &session_reader_buf);
     var session_writer = ssh.SessionWriter.init(sess, &session_writer_buf);
 
-    switch (parsed.service) {
+    switch (service) {
         .upload_pack => try repo.uploadPack(io, allocator, &session_reader.interface, &session_writer.interface, .{}),
         .receive_pack => try repo.receivePack(io, allocator, &session_reader.interface, &session_writer.interface, .{}),
     }
 
     // flush whatever the pack op buffered into our writer adapter
     session_writer.interface.flush() catch {};
-
-    try sess.exit(0);
-}
-
-fn openOrCreate(
-    comptime Repo: type,
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    repo_path: []const u8,
-    create_if_missing: bool,
-) !Repo {
-    return Repo.open(io, allocator, .{ .path = repo_path }) catch |err| switch (err) {
-        error.RepoNotFound => {
-            if (!create_if_missing) return err;
-            var repo = try Repo.init(io, allocator, .{ .path = repo_path });
-            errdefer repo.deinit(io, allocator);
-            try repo.addConfig(io, allocator, .{ .name = "http.receivepack", .value = "true" });
-            try repo.addConfig(io, allocator, .{ .name = "receive.denycurrentbranch", .value = "updateinstead" });
-            return repo;
-        },
-        else => |e| return e,
-    };
 }
 
 fn parseGitCommand(allocator: std.mem.Allocator, command: []const u8) !ParsedGitCommand {

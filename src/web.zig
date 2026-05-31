@@ -240,16 +240,15 @@ fn handleLogin(
     const password = (try parseFormField(allocator, body, "password")) orelse try allocator.dupe(u8, "");
     defer allocator.free(password);
 
-    const repo_opts: rp.RepoOpts(.xit) = .{};
-    const Repo = rp.Repo(.xit, repo_opts);
+    const Repo = rp.Repo(.xit, evt.admin_repo_opts);
     var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
     defer repo.deinit(io, allocator);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const haxy_moment = try evt.currentMoment(repo_opts, &repo);
-    const result = try evt.User.verifyCredentials(Repo.DB, repo_opts.hash, haxy_moment, &arena, username, password);
+    const haxy_moment = try evt.currentMoment(evt.admin_repo_opts, &repo);
+    const result = try evt.User.verifyCredentials(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, &arena, username, password);
 
     switch (result) {
         .success => |user_id| {
@@ -314,12 +313,11 @@ fn handleAnsi(
     var user_id: [evt.event_id_size]u8 = undefined;
     if (getCookieValue(request, cookie_name)) |token| {
         if (session_store.lookup(token, &user_id)) {
-            const repo_opts: rp.RepoOpts(.xit) = .{};
-            const Repo = rp.Repo(.xit, repo_opts);
+            const Repo = rp.Repo(.xit, evt.admin_repo_opts);
             var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
             defer repo.deinit(io, allocator);
 
-            try evt.User.toggleAnsi(repo_opts, io, allocator, &repo, &user_id);
+            try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, &repo, &user_id);
         }
     }
 
@@ -343,17 +341,16 @@ fn renderIndexHtml(
     const template = (findEmbed("/index.html") orelse return error.MissingIndexAsset).body;
 
     // open the admin repo to read live user/repo data.
-    const repo_opts: rp.RepoOpts(.xit) = .{};
-    const Repo = rp.Repo(.xit, repo_opts);
+    const Repo = rp.Repo(.xit, evt.admin_repo_opts);
     var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
     defer repo.deinit(io, allocator);
     var page_arena = std.heap.ArenaAllocator.init(allocator);
     defer page_arena.deinit();
 
-    var session = try ui.Session.init(repo_opts, &page_arena, &repo, session_data);
+    var session = try ui.Session.init(&page_arena, &repo, session_data);
 
     const snapshot: ui.Snapshot = .{
-        .page = .{ .home = try .init(repo_opts, session.arena, session.haxy_moment orelse unreachable) },
+        .page = .{ .home = try .init(session.arena, session.haxy_moment orelse unreachable) },
         .session = session.data,
     };
     var root = try ui.initRoot(allocator, &snapshot.page, &session);

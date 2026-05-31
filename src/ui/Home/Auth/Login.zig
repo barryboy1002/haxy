@@ -15,9 +15,6 @@ const bcrypt = std.crypto.pwhash.bcrypt;
 
 const wasm = builtin.target.cpu.arch == .wasm32;
 
-const repo_opts = ui.canonical_repo_opts;
-const DB = ui.DB;
-
 const Self = @This();
 
 // classifies a failed /login attempt; null in session.data.login_failure means
@@ -234,7 +231,7 @@ pub const View = struct {
             return;
         };
 
-        const result = try evt.User.verifyCredentials(DB, repo_opts.hash, haxy_moment, self.session.arena, username, password);
+        const result = try evt.User.verifyCredentials(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, self.session.arena, username, password);
         switch (result) {
             .unknown_user => {
                 self.session.data.login_failure = .unknown_user;

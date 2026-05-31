@@ -10,14 +10,18 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const evt = @import("./event.zig");
 
-pub const canonical_repo_opts: rp.RepoOpts(.xit) = .{};
-pub const DB = rp.Repo(.xit, canonical_repo_opts).DB;
-
 pub const Home = @import("./ui/Home.zig");
 pub const Title = @import("./ui/Title.zig");
 
 pub const Page = union(enum) {
     home: Home,
+};
+
+// what the server hands to the client (and what main_wasm parses on _start).
+// keeps Page free of any per-request session state.
+pub const Snapshot = struct {
+    page: Page,
+    session: Session.Data = .{},
 };
 
 // a top-level "page" the user can navigate to
@@ -49,13 +53,16 @@ pub const RoutablePage = enum {
 };
 
 // per-connection mutable state. each SSH session / web session / local TUI
-// run gets its own
+// run gets its own.
 pub const Session = struct {
-    data: Data = .{}, // serializable data sent down to web client
+    data: Data = .{},
     arena: *std.heap.ArenaAllocator,
-    haxy_moment: ?DB.HashMap(.read_only) = null, // db cursor (null on the wasm side)
+    haxy_moment: ?evt.AdminDB.HashMap(.read_only) = null, // db cursor (null on the wasm side)
     pending: std.ArrayList(Action) = .empty, // actions queued by widgets this frame
 
+    const Self = @This();
+
+    // serializable data sent down to web client
     pub const Data = struct {
         user_id: ?[]const u8 = null,
         // a transient outcome to surface from the last /login POST attempt
@@ -65,100 +72,75 @@ pub const Session = struct {
         enable_ansi: bool = false,
     };
 
+    // a user-initiated state change. widgets enqueue these on the session during
+    // input instead of mutating state or touching the DB themselves; the host
+    // drains them each frame (see applyAndWritePending / applyPending). this keeps DB
+    // side effects out of the widget tree and gives every render path one place to
+    // turn a UI action into a state change + event.
+    pub const Action = union(enum) {
+        toggle_ansi,
+    };
+
     pub fn init(
-        comptime repo_opts: rp.RepoOpts(.xit),
         arena: *std.heap.ArenaAllocator,
-        repo: *rp.Repo(.xit, repo_opts),
+        repo: *rp.Repo(.xit, evt.admin_repo_opts),
         data: Data,
-    ) !Session {
-        var session = Session{
+    ) !Self {
+        var session = Self{
             .data = data,
             .arena = arena,
-            .haxy_moment = try evt.currentMoment(repo_opts, repo),
+            .haxy_moment = try evt.currentMoment(evt.admin_repo_opts, repo),
         };
         try session.loadUserPrefs();
         return session;
     }
 
     // load the logged-in user's persisted preferences from the db
-    pub fn loadUserPrefs(self: *Session) !void {
+    pub fn loadUserPrefs(self: *Self) !void {
         const user_id = self.data.user_id orelse return;
         const moment = self.haxy_moment orelse return;
-        if (try evt.User.readById(DB, canonical_repo_opts.hash, moment, self.arena, user_id)) |user| {
+        if (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, self.arena, user_id)) |user| {
             self.data.enable_ansi = user.enable_ansi;
         }
     }
 
     // queue an action for the host to drain this frame.
-    pub fn push(self: *Session, action: Action) !void {
+    pub fn push(self: *Self, action: Action) !void {
         try self.pending.append(self.arena.allocator(), action);
     }
 
     // apply a single action's in-memory effect only (no persistence).
-    pub fn apply(self: *Session, action: Action) void {
+    fn apply(self: *Self, action: Action) void {
         switch (action) {
             .toggle_ansi => self.data.enable_ansi = !self.data.enable_ansi,
         }
     }
 
-    // drain queued actions, applying only their in-memory effect. used on the
-    // wasm path, which has no repo to persist to (and only anonymous toggles
-    // reach it anyway).
-    pub fn applyPending(self: *Session) void {
+    // drain the session's queued actions by applying them to the session.
+    // used on the wasm path, which has no repo to persist to.
+    pub fn applyPending(self: *Self) void {
         for (self.pending.items) |action| self.apply(action);
         self.pending.clearRetainingCapacity();
     }
-};
 
-// a user-initiated state change. widgets enqueue these on the Session during
-// input instead of mutating state or touching the DB themselves; the host
-// drains them each frame (see dispatchPending / applyPending). this keeps DB
-// side effects out of the widget tree and gives every render path one place to
-// turn a UI action into a state change + event.
-pub const Action = union(enum) {
-    toggle_ansi,
-
-    // apply this action and, when it maps to persistent state and the session
-    // is logged in, emit the corresponding event. the single place that knows
-    // how a UI action becomes a DB write.
-    pub fn dispatch(
-        self: Action,
-        comptime repo_opts: rp.RepoOpts(.xit),
+    // drain the session's queued actions by applying them to the session and
+    // writing them to the db
+    pub fn applyAndWritePending(
+        self: *Self,
         io: std.Io,
         allocator: std.mem.Allocator,
-        repo: *rp.Repo(.xit, repo_opts),
-        session: *Session,
+        repo: *rp.Repo(.xit, evt.admin_repo_opts),
     ) !void {
-        session.apply(self);
-        switch (self) {
-            .toggle_ansi => if (session.data.user_id) |user_id| {
-                try evt.User.toggleAnsi(repo_opts, io, allocator, repo, user_id);
-            },
+        defer self.pending.clearRetainingCapacity();
+        for (self.pending.items) |action| {
+            self.apply(action);
+            switch (action) {
+                .toggle_ansi => if (self.data.user_id) |user_id| {
+                    try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, repo, user_id);
+                },
+            }
         }
     }
-
-    // drain the session's queued actions through dispatch. always clears the
-    // queue, even if a dispatch fails, so a single bad write isn't retried
-    // every frame.
-    pub fn dispatchPending(
-        comptime repo_opts: rp.RepoOpts(.xit),
-        io: std.Io,
-        allocator: std.mem.Allocator,
-        repo: *rp.Repo(.xit, repo_opts),
-        session: *Session,
-    ) !void {
-        defer session.pending.clearRetainingCapacity();
-        for (session.pending.items) |action| {
-            try action.dispatch(repo_opts, io, allocator, repo, session);
-        }
-    }
-};
-
-// what the server hands to the client (and what main_wasm parses on _start).
-// keeps Page free of any per-request session state.
-pub const Snapshot = struct {
-    page: Page,
-    session: Session.Data = .{},
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page, session: *Session) !void {

@@ -1,13 +1,13 @@
 const std = @import("std");
 const ui = @import("../ui.zig");
 const xit = @import("xit");
-const rp = xit.repo;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
 const inp = xitui.input;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
+const evt = @import("../event.zig");
 
 pub const Users = @import("./Home/Users.zig");
 pub const Repos = @import("./Home/Repos.zig");
@@ -24,14 +24,13 @@ auth: Auth,
 const Self = @This();
 
 pub fn init(
-    comptime repo_opts: rp.RepoOpts(.xit),
     arena: *std.heap.ArenaAllocator,
-    haxy_moment: rp.Repo(.xit, repo_opts).DB.HashMap(.read_only),
+    haxy_moment: evt.AdminDB.HashMap(.read_only),
 ) !Self {
     return .{
         .header = try Header.init(arena),
-        .users = try Users.init(repo_opts, arena, haxy_moment),
-        .repos = try Repos.init(repo_opts, arena, haxy_moment),
+        .users = try Users.init(arena, haxy_moment),
+        .repos = try Repos.init(arena, haxy_moment),
         .ansi = Ansi.init(),
         .auth = Auth.init(),
     };

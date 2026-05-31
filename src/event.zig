@@ -15,6 +15,13 @@ pub const event_id_size: usize = 32;
 // the branch haxy events are committed to before being consumed
 pub const events_ref: rf.Ref = .{ .kind = .head, .name = "haxy/meta" };
 
+// options + db type for *the admin repo* — the single event store that holds
+// users, repos, issues, etc. the functions below stay parameterized over
+// repo_opts because they also operate on individual repos in the repos dir,
+// which may use different options
+pub const admin_repo_opts: rp.RepoOpts(.xit) = .{};
+pub const AdminDB = rp.Repo(.xit, admin_repo_opts).DB;
+
 pub const EventKind = enum {
     user,
     repo,
@@ -341,8 +348,6 @@ pub fn currentMoment(
     return try DB.HashMap(.read_only).init(haxy_moment_cursor);
 }
 
-// commit each event as a JSON message on the events branch, then consume them
-// into the database
 pub fn commitAndConsume(
     comptime repo_opts: rp.RepoOpts(.xit),
     io: std.Io,
