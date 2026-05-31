@@ -90,6 +90,11 @@ const importObject = {
             const target = overlay.querySelector(`[data-focus-id="${id}"]`);
             if (target && document.activeElement !== target) target.focus();
         },
+        _navigate: function (ptr, len) {
+            // a real browser navigation to another top-level page (the wasm
+            // can't render it client-side without server data).
+            window.location.assign(readWasmString(ptr, len));
+        },
     },
 };
 

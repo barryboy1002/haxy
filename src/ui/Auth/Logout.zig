@@ -30,7 +30,10 @@ pub const View = struct {
         var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
         // marks this subtree as an HTML form scope for the web overlay
-        box.getFocus().kind = .{ .custom = "form:/logout" };
+        box.getFocus().kind = .{ .custom = switch (session.data.current_page) {
+            .user, .user_settings, .user_auth => |name| try std.fmt.allocPrint(session.arena.allocator(), "form:/user/{s}/logout", .{name}),
+            else => "form:/logout",
+        } };
 
         {
             var prompt = wgt.Text(ui.Widget).init("are you sure?");

@@ -62,7 +62,7 @@ pub const View = struct {
         for (data.repos, 0..) |repo, i| {
             lines[i] = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.name, repo.description });
         }
-        try self.list.setItems(allocator, lines);
+        try self.list.setItems(allocator, lines, null);
 
         return self;
     }

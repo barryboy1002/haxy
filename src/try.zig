@@ -175,7 +175,7 @@ pub fn main(init: std.process.Init) !void {
         try evt.commitAndConsume(evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
         session = try ui.Session.init(&page_arena, &repo, .{});
-        break :blk .{ .home = try .init(&page_arena, session.haxy_moment orelse unreachable) };
+        break :blk try ui.Page.init(&page_arena, session.haxy_moment orelse unreachable, session.data.current_page);
     };
 
     // start the server

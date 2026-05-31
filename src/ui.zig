@@ -11,10 +11,27 @@ const Focus = xitui.focus.Focus;
 const evt = @import("./event.zig");
 
 pub const Home = @import("./ui/Home.zig");
+pub const User = @import("./ui/User.zig");
 pub const Title = @import("./ui/Title.zig");
 
-pub const Page = union(enum) {
+pub const PageKind = enum {
+    home,
+    user,
+};
+
+pub const Page = union(PageKind) {
     home: Home,
+    user: User,
+
+    pub fn init(arena: *std.heap.ArenaAllocator, haxy_moment: evt.AdminDB.HashMap(.read_only), route: RoutablePage) !Page {
+        return switch (route.parent()) {
+            .home => .{ .home = try Home.init(arena, haxy_moment) },
+            .user => switch (route) {
+                .user, .user_settings, .user_auth => |name| .{ .user = try User.init(arena, haxy_moment, name) },
+                else => return error.UnexpectedRoute,
+            },
+        };
+    }
 };
 
 // what the server hands to the client (and what main_wasm parses on _start).
@@ -24,21 +41,47 @@ pub const Snapshot = struct {
     session: Session.Data = .{},
 };
 
-// a top-level "page" the user can navigate to
-pub const RoutablePage = enum {
+// a top-level "page" the user can navigate to. the user_* variants are the
+// tabs of a user page; they each carry the user's name and all map to the
+// .user parent page, so switching between them stays on that page (and just
+// updates the url) rather than navigating away.
+pub const RoutablePage = union(enum) {
     home_users,
     home_repos,
-    settings,
-    auth,
+    home_settings,
+    home_auth,
+    user: []const u8,
+    user_settings: []const u8,
+    user_auth: []const u8,
 
     pub const default: RoutablePage = .home_users;
 
-    pub fn url(self: RoutablePage) []const u8 {
+    const user_segment = "/user/";
+
+    pub fn url(comptime self: RoutablePage) []const u8 {
         return switch (self) {
             .home_users => "/users",
             .home_repos => "/repos",
-            .settings => "/settings",
-            .auth => "/auth",
+            .home_settings => "/settings",
+            .home_auth => "/auth",
+            // user routes carry a runtime name; build them with urlAlloc.
+            .user, .user_settings, .user_auth => @compileError("user routes are dynamic; use urlAlloc"),
+        };
+    }
+
+    pub fn urlAlloc(self: RoutablePage, arena: *std.heap.ArenaAllocator) ![]const u8 {
+        return switch (self) {
+            .user => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}", .{name}),
+            .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name}),
+            .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name}),
+            inline else => |_, tag| url(tag),
+        };
+    }
+
+    pub fn parent(self: RoutablePage) PageKind {
+        return switch (self) {
+            .home_users, .home_repos, .home_settings, .home_auth => .home,
+            .user, .user_settings, .user_auth => .user,
         };
     }
 
@@ -46,9 +89,64 @@ pub const RoutablePage = enum {
         if (std.mem.eql(u8, path, "/")) return default;
         if (std.mem.eql(u8, path, "/users")) return .home_users;
         if (std.mem.eql(u8, path, "/repos")) return .home_repos;
-        if (std.mem.eql(u8, path, "/settings")) return .settings;
-        if (std.mem.eql(u8, path, "/auth")) return .auth;
+        if (std.mem.eql(u8, path, "/settings")) return .home_settings;
+        if (std.mem.eql(u8, path, "/auth")) return .home_auth;
+        if (std.mem.startsWith(u8, path, user_segment)) {
+            const rest = path[user_segment.len..];
+            const slash = std.mem.indexOfScalar(u8, rest, '/');
+            const name = if (slash) |s| rest[0..s] else rest;
+            if (name.len == 0) return null;
+            if (slash) |s| {
+                const sub = rest[s + 1 ..];
+                if (std.mem.eql(u8, sub, "settings")) return .{ .user_settings = name };
+                if (std.mem.eql(u8, sub, "auth")) return .{ .user_auth = name };
+                return null; // unknown user sub-path
+            }
+            return .{ .user = name };
+        }
         return null;
+    }
+
+    pub fn eql(a: RoutablePage, b: RoutablePage) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+        return switch (a) {
+            .user => |a_name| std.mem.eql(u8, a_name, b.user),
+            .user_settings => |a_name| std.mem.eql(u8, a_name, b.user_settings),
+            .user_auth => |a_name| std.mem.eql(u8, a_name, b.user_auth),
+            else => true,
+        };
+    }
+
+    // serialize as { "kind": <tag>, "name"?: <user name> }. the default
+    // union(enum) codec doesn't round-trip here: Stringify emits a void
+    // variant as a bare tag string, but the parser expects an object — so the
+    // server->wasm Snapshot JSON would fail to parse.
+    pub fn jsonStringify(self: RoutablePage, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("kind");
+        try jw.write(@tagName(self));
+        switch (self) {
+            .user, .user_settings, .user_auth => |name| {
+                try jw.objectField("name");
+                try jw.write(name);
+            },
+            else => {},
+        }
+        try jw.endObject();
+    }
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !RoutablePage {
+        const Helper = struct { kind: std.meta.Tag(RoutablePage), name: ?[]const u8 = null };
+        const helper = try std.json.innerParse(Helper, allocator, source, options);
+        return switch (helper.kind) {
+            .home_users => .home_users,
+            .home_repos => .home_repos,
+            .home_settings => .home_settings,
+            .home_auth => .home_auth,
+            .user => .{ .user = helper.name orelse return error.MissingField },
+            .user_settings => .{ .user_settings = helper.name orelse return error.MissingField },
+            .user_auth => .{ .user_auth = helper.name orelse return error.MissingField },
+        };
     }
 };
 
@@ -59,6 +157,7 @@ pub const Session = struct {
     arena: *std.heap.ArenaAllocator,
     haxy_moment: ?evt.AdminDB.HashMap(.read_only) = null, // db cursor (null on the wasm side)
     pending: std.ArrayList(Action) = .empty, // actions queued by widgets this frame
+    nav_back: bool = false, // set by input (escape) to request the native TUI pop a page; see Nav
 
     const Self = @This();
 
@@ -141,11 +240,21 @@ pub const Session = struct {
             }
         }
     }
+
+    fn navigate(self: *Session, route: RoutablePage) !void {
+        const aa = self.arena.allocator();
+        self.data.current_page = switch (route) {
+            .user => |name| .{ .user = try aa.dupe(u8, name) },
+            .user_settings => |name| .{ .user_settings = try aa.dupe(u8, name) },
+            .user_auth => |name| .{ .user_auth = try aa.dupe(u8, name) },
+            else => route,
+        };
+    }
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page, session: *Session) !void {
-    var root = try initRoot(allocator, page, session);
-    defer root.deinit(allocator);
+    var nav = try Nav.init(allocator, page, session);
+    defer nav.deinit(allocator);
 
     var terminal = try term.Terminal.init(io, allocator);
     defer terminal.deinit(io);
@@ -155,7 +264,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page, session:
     defer last_grid.deinit();
 
     while (!terminal.shouldQuit()) {
-        const grid_changed = try terminal.render(&root, &last_grid, &last_size);
+        const grid_changed = try terminal.render(&nav.root, &last_grid, &last_size);
 
         // process any inputs.
         //
@@ -169,26 +278,43 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, page: *const Page, session:
         // there may be an animation that requires more looping.
         var blocking = !grid_changed;
         while (try terminal.readKey(io, blocking)) |key| {
-            try inputKey(allocator, &root, key, &terminal);
+            try inputKey(allocator, &nav.root, key, session);
             blocking = false;
         }
 
         // local run has no repo to persist to, so just apply in-memory
         session.applyPending();
 
-        try root.build(allocator, .{
+        // reconcile navigation: forward to a new page, or back on escape (and
+        // quit when there's nothing left to go back to).
+        if (!try nav.sync(allocator, session)) terminal.requestQuit();
+
+        try nav.root.build(allocator, .{
             .min_size = .{ .width = null, .height = null },
             .max_size = .{ .width = last_size.width, .height = last_size.height },
-        }, root.getFocus());
+        }, nav.root.getFocus());
     }
 }
 
-pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, terminal: anytype) !void {
+pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, session: *Session) !void {
     switch (key) {
-        .escape => terminal.requestQuit(),
+        // request a navigation pop; the host's Nav.sync goes back a page, or
+        // quits when there's no history left.
+        .escape => session.nav_back = true,
+        .enter => {
+            const root_focus = root.getFocus();
+            if (root_focus.grandchild_id) |gid| {
+                // follow a cross-page link
+                if (crossPageLink(root_focus, gid, session.data.current_page)) |route| {
+                    return session.navigate(route);
+                }
+            }
+            try root.input(allocator, key, root_focus);
+        },
         .mouse => |mouse| {
             if (mouse.action == .press and mouse.action.press == .left) {
                 const root_focus = root.getFocus();
+                var clicked: ?usize = null;
                 var iter = root_focus.children.iterator();
                 while (iter.next()) |entry| {
                     const child = entry.value_ptr.*;
@@ -197,9 +323,16 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, termi
                     if (mouse.x >= r.x and mouse.y >= r.y and
                         mouse.x < r.x + r.size.width and mouse.y < r.y + r.size.height)
                     {
-                        try root_focus.setFocus(entry.key_ptr.*);
+                        clicked = entry.key_ptr.*;
                         break;
                     }
+                }
+                if (clicked) |focus_id| {
+                    // follow a cross-page link
+                    if (crossPageLink(root_focus, focus_id, session.data.current_page)) |route| {
+                        return session.navigate(route);
+                    }
+                    try root_focus.setFocus(focus_id);
                 }
                 // forward the press into the widget tree so buttons (and any
                 // future click-aware widgets) can react. widgets that don't
@@ -213,9 +346,86 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, termi
     }
 }
 
+// if the focus target at focus_id is an `a:` link to a different top-level page
+// than `current`, return its route; otherwise null. lets a host turn a click /
+// enter on such a link into a navigation rather than a focus change.
+pub fn crossPageLink(root_focus: *Focus, focus_id: usize, current: RoutablePage) ?RoutablePage {
+    const child = root_focus.children.get(focus_id) orelse return null;
+    const custom = switch (child.focus.kind) {
+        .custom => |c| c,
+        else => return null,
+    };
+    const a_prefix = "a:";
+    if (!std.mem.startsWith(u8, custom, a_prefix)) return null;
+    const route = RoutablePage.fromUrl(custom[a_prefix.len..]) orelse return null;
+    if (route.parent() == current.parent()) return null;
+    return route;
+}
+
+// native-TUI navigation
+pub const Nav = struct {
+    root: Widget,
+    route: RoutablePage,
+    history: std.ArrayList(Entry),
+
+    const Entry = struct { root: Widget, route: RoutablePage };
+
+    // cap on retained back-history so chain can't grow memory without bound
+    const max_history: usize = 16;
+
+    pub fn init(allocator: std.mem.Allocator, page: *const Page, session: *Session) !Nav {
+        return .{
+            .root = try initRoot(allocator, page, session),
+            .route = session.data.current_page,
+            .history = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Nav, allocator: std.mem.Allocator) void {
+        self.root.deinit(allocator);
+        for (self.history.items) |*entry| entry.root.deinit(allocator);
+        self.history.deinit(allocator);
+    }
+
+    // reconcile the displayed root with the session's navigation state. returns
+    // false when escape was pressed with no history left, so the caller can quit.
+    // a forward nav (current_page moved to a different parent page) pushes the
+    // current root and builds the new page; a back request pops and restores the
+    // previous root. the new Page is allocated in the session arena so the widget
+    // tree's data pointers stay valid for the life of the session.
+    pub fn sync(self: *Nav, allocator: std.mem.Allocator, session: *Session) !bool {
+        if (session.nav_back) {
+            session.nav_back = false;
+            const entry = self.history.pop() orelse return false;
+            self.root.deinit(allocator);
+            self.root = entry.root;
+            self.route = entry.route;
+            session.data.current_page = entry.route;
+            return true;
+        }
+
+        if (session.data.current_page.parent() != self.route.parent()) {
+            const moment = session.haxy_moment orelse return true;
+            const page = try session.arena.allocator().create(Page);
+            page.* = try Page.init(session.arena, moment, session.data.current_page);
+            const new_root = try initRoot(allocator, page, session);
+            try self.history.append(allocator, .{ .root = self.root, .route = self.route });
+            // drop the oldest entry (freeing its widget tree) once we're over cap
+            if (self.history.items.len > max_history) {
+                var oldest = self.history.orderedRemove(0);
+                oldest.root.deinit(allocator);
+            }
+            self.root = new_root;
+            self.route = session.data.current_page;
+        }
+        return true;
+    }
+};
+
 pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Session) !Widget {
     const page_widget: Widget = switch (page.*) {
         .home => |*p| .{ .home = try .init(allocator, p, session) },
+        .user => |*p| .{ .user = try .init(allocator, p, session) },
     };
 
     const demon_art = @embedFile("embed/demon.ans");
@@ -224,7 +434,7 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
     errdefer root.deinit(allocator);
 
     try root.build(allocator, .{
-        .min_size = .{ .width = null, .height = null },
+        .min_size = .{ .width = null, .height = 40 },
         .max_size = .{ .width = 80, .height = null },
     }, root.getFocus());
     if (root.getFocus().child_id) |child_id| {
@@ -242,18 +452,21 @@ pub const Widget = union(enum) {
     scroll: wgt.Scroll(Widget),
     stack: wgt.Stack(Widget),
     flow_box: FlowBox,
+    flow_box_scroll: FlowBox.Scroll,
     spacer: Spacer,
     center: Center,
     ansi_art: AnsiArt,
     background: AnsiBackground,
     home: Home.View,
+    user: User.View,
     title: Title.View,
     home_header: Home.Header.View,
+    user_header: User.Header.View,
     home_users: Home.Users.View,
     home_repos: Home.Repos.View,
     auth_tab: Home.Header.AuthTab.View,
-    settings: Home.Settings.View,
-    auth: Home.Auth.View,
+    home_settings: Home.Settings.View,
+    home_auth: Home.Auth.View,
 
     pub fn deinit(self: *Widget, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -296,7 +509,10 @@ pub const FlowBox = struct {
     focus: Focus,
     grid: ?Grid,
     text_boxes: std.ArrayList(wgt.TextBox(Widget)),
-    lines: std.ArrayList([]const u8),
+    // backs the per-item strings the text boxes borrow: each box's `content`
+    // and, for link items, its `.custom` focus kind (e.g. "a:/user/foo"). reset
+    // wholesale on each setItems so there's no per-string ownership to track.
+    arena: std.heap.ArenaAllocator,
     // column count from the last build — FlowBox.Scroll.input uses it so arrow
     // up/down can step by a row's worth of items.
     last_cols: usize,
@@ -309,12 +525,12 @@ pub const FlowBox = struct {
         cell_height: usize = 3,
     };
 
-    pub fn init(options: Options) FlowBox {
+    pub fn init(allocator: std.mem.Allocator, options: Options) FlowBox {
         return .{
             .focus = Focus.init(.container),
             .grid = null,
             .text_boxes = .empty,
-            .lines = .empty,
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .last_cols = 1,
             .options = options,
         };
@@ -328,30 +544,39 @@ pub const FlowBox = struct {
         }
         for (self.text_boxes.items) |*tb| tb.deinit(allocator);
         self.text_boxes.deinit(allocator);
-        for (self.lines.items) |line| allocator.free(line);
-        self.lines.deinit(allocator);
+        self.arena.deinit();
     }
 
-    pub fn setItems(self: *FlowBox, allocator: std.mem.Allocator, items: []const []const u8) !void {
+    // `links`, when given, is parallel to `items`: a non-empty entry sets that
+    // item's focus kind to `.{ .custom = link }` (e.g. "a:/user/foo"), which the
+    // web renderer turns into an anchor. pass null when items aren't links.
+    // both the item text and the link are copied into the arena, so the caller's
+    // slices needn't outlive this call.
+    pub fn setItems(self: *FlowBox, allocator: std.mem.Allocator, items: []const []const u8, links: ?[]const []const u8) !void {
         for (self.text_boxes.items) |*tb| tb.deinit(allocator);
         self.text_boxes.clearAndFree(allocator);
 
-        for (self.lines.items) |line| allocator.free(line);
-        self.lines.clearAndFree(allocator);
+        // the old text boxes (and their borrowed content/links) are gone now, so
+        // the arena that backed those strings can be reclaimed.
+        _ = self.arena.reset(.retain_capacity);
+        const aa = self.arena.allocator();
 
         self.focus.clear();
         self.focus.child_id = null;
 
-        for (items) |item| {
-            const line = try allocator.dupe(u8, item);
-            {
-                errdefer allocator.free(line);
-                try self.lines.append(allocator, line);
-            }
+        for (items, 0..) |item, i| {
+            const line = try aa.dupe(u8, item);
 
             var text_box = try wgt.TextBox(Widget).init(allocator, line, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .word });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().focusable = true;
+
+            if (links) |link_items| {
+                if (i < link_items.len and link_items[i].len > 0) {
+                    text_box.getFocus().kind = .{ .custom = try aa.dupe(u8, link_items[i]) };
+                }
+            }
+
             try self.text_boxes.append(allocator, text_box);
         }
 
@@ -450,7 +675,7 @@ pub const FlowBox = struct {
         scroll: wgt.Scroll(Widget),
 
         pub fn init(allocator: std.mem.Allocator, options: FlowBox.Options) !Scroll {
-            var layout_inner = FlowBox.init(options);
+            var layout_inner = FlowBox.init(allocator, options);
             errdefer layout_inner.deinit(allocator);
             var scroll = try wgt.Scroll(Widget).init(allocator, .{ .flow_box = layout_inner }, .vert);
             errdefer scroll.deinit(allocator);
@@ -461,10 +686,10 @@ pub const FlowBox = struct {
             self.scroll.deinit(allocator);
         }
 
-        pub fn setItems(self: *Scroll, allocator: std.mem.Allocator, items: []const []const u8) !void {
+        pub fn setItems(self: *Scroll, allocator: std.mem.Allocator, items: []const []const u8, links: ?[]const []const u8) !void {
             self.scroll.x = 0;
             self.scroll.y = 0;
-            try self.inner().setItems(allocator, items);
+            try self.inner().setItems(allocator, items, links);
         }
 
         pub fn build(self: *Scroll, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {

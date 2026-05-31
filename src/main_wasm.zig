@@ -16,6 +16,10 @@ var last_pushed_page_maybe: ?ui.RoutablePage = null; // last current_page we tol
 
 fn init(json: []const u8, min_height: u32, max_width: u32) !void {
     _ = page_arena.reset(.free_all);
+    // the stored page can borrow a name slice from page_arena (a .user route),
+    // which we just freed — drop it so the next tick's eql never reads it and
+    // always pushes the fresh page's url.
+    last_pushed_page_maybe = null;
 
     // alloc_always so the parsed strings live entirely inside the arena
     // and don't borrow from the caller's json buffer.
@@ -59,10 +63,10 @@ fn tick(min_height: u32, max_width: u32) !void {
     // so the first tick after _init is a no-op even though we always send
     // something through.
     const current_page = session.data.current_page;
-    const should_push = if (last_pushed_page_maybe) |lp| lp != current_page else true;
+    const should_push = if (last_pushed_page_maybe) |lp| !lp.eql(current_page) else true;
     if (should_push) {
         last_pushed_page_maybe = current_page;
-        const url = current_page.url();
+        const url = try current_page.urlAlloc(&page_arena);
         _pushState(url.ptr, @intCast(url.len));
     }
 
@@ -109,11 +113,29 @@ fn onKeyDown(key_code: u32) !void {
         40 => .arrow_down,
         else => return,
     };
+
+    if (key == .enter) {
+        if (root_ptr.getFocus().grandchild_id) |gid| {
+            // follow a cross-page link
+            if (ui.crossPageLink(root_ptr.getFocus(), gid, session.data.current_page)) |route| {
+                const url = try route.urlAlloc(&page_arena);
+                navigate(url);
+                return;
+            }
+        }
+    }
+
     try root_ptr.input(allocator, key, root_ptr.getFocus());
 }
 
 fn onMouseClick(focus_id: usize) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
+    // follow a cross-page link
+    if (ui.crossPageLink(root_ptr.getFocus(), focus_id, session.data.current_page)) |route| {
+        const url = try route.urlAlloc(&page_arena);
+        navigate(url);
+        return;
+    }
     try root_ptr.getFocus().setFocus(focus_id);
 }
 
@@ -129,11 +151,16 @@ fn setOverlay(arg: []const u8) void {
     _setOverlay(arg.ptr, @intCast(arg.len));
 }
 
+fn navigate(arg: []const u8) void {
+    _navigate(arg.ptr, @intCast(arg.len));
+}
+
 extern fn _consoleLog(arg: [*]const u8, len: u32) void;
 extern fn _setHtml(arg: [*]const u8, len: u32) void;
 extern fn _setOverlay(arg: [*]const u8, len: u32) void;
 extern fn _pushState(arg: [*]const u8, len: u32) void;
 extern fn _focusInput(focus_id: u32) void;
+extern fn _navigate(arg: [*]const u8, len: u32) void;
 
 /// js calls this first to get a wasm pointer it can write the page json into.
 export fn _alloc(len: u32) ?[*]u8 {

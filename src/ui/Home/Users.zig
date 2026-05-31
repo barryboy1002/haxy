@@ -10,7 +10,7 @@ const inp = xitui.input;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
-users: []const evt.User,
+users: []const evt.User.Safe,
 
 const Self = @This();
 
@@ -20,7 +20,7 @@ pub fn init(
 ) !Self {
     const DB = evt.AdminDB;
 
-    var users: std.ArrayList(evt.User) = .empty;
+    var users: std.ArrayList(evt.User.Safe) = .empty;
 
     const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(evt.admin_repo_opts.hash, "event-id->user")) orelse return error.NotFound;
     const event_id_to_user = try DB.HashMap(.read_only).init(event_id_to_user_cursor);
@@ -30,7 +30,7 @@ pub fn init(
         const kv = try kv_cursor.readKeyValuePair();
         const user_map = try DB.HashMap(.read_only).init(kv.value_cursor);
         const user_event = try evt.read(evt.User, DB, evt.admin_repo_opts.hash, arena, user_map);
-        try users.append(arena.allocator(), user_event);
+        try users.append(arena.allocator(), evt.User.Safe.init(user_event));
     }
 
     return .{
@@ -59,10 +59,14 @@ pub const View = struct {
         const aa = arena.allocator();
 
         const lines = try aa.alloc([]const u8, data.users.len);
+        const links = try aa.alloc([]const u8, data.users.len);
         for (data.users, 0..) |user, i| {
             lines[i] = try std.fmt.allocPrint(aa, "{s} ({s})", .{ user.name, user.display_name });
+            // clicking a user opens their page; the "a:" prefix makes the web
+            // renderer emit an <a href="/user/foo"> anchor.
+            links[i] = try std.fmt.allocPrint(aa, "a:/user/{s}", .{user.name});
         }
-        try self.list.setItems(allocator, lines);
+        try self.list.setItems(allocator, lines, links);
 
         return self;
     }

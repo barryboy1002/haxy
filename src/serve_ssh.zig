@@ -74,10 +74,10 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     defer repo.deinit(io, allocator);
     var ui_session = try ui.Session.init(&page_arena, &repo, .{});
 
-    const page: ui.Page = .{ .home = try .init(&page_arena, ui_session.haxy_moment orelse unreachable) };
+    const page: ui.Page = try ui.Page.init(&page_arena, ui_session.haxy_moment orelse unreachable, ui_session.data.current_page);
 
-    var root = try ui.initRoot(allocator, &page, &ui_session);
-    defer root.deinit(allocator);
+    var nav = try ui.Nav.init(allocator, &page, &ui_session);
+    defer nav.deinit(allocator);
 
     var session_writer_buf: [8192]u8 = undefined;
     var session_writer = ssh.SessionWriter.init(sess, &session_writer_buf);
@@ -97,11 +97,11 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     defer last_grid.deinit();
 
     // initial render — user sees the page immediately
-    try root.build(allocator, .{
+    try nav.root.build(allocator, .{
         .min_size = .{ .width = null, .height = null },
         .max_size = .{ .width = last_size.width, .height = last_size.height },
-    }, root.getFocus());
-    _ = try terminal.render(&root, &last_grid, &last_size);
+    }, nav.root.getFocus());
+    _ = try terminal.render(&nav.root, &last_grid, &last_size);
 
     // event loop. nextEvent blocks until something interesting arrives;
     // for each event, rebuild the widget tree and re-render so the user
@@ -113,13 +113,13 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
                 defer allocator.free(payload);
                 try terminal.writeBytes(payload);
                 while (terminal.popKey()) |key| {
-                    try ui.inputKey(allocator, &root, key, &terminal);
+                    try ui.inputKey(allocator, &nav.root, key, &ui_session);
                 }
             },
             .resize => |sz| {
                 terminal.pushResize(.{ .width = sz.width_cells, .height = sz.height_cells });
                 while (terminal.popKey()) |key| {
-                    try ui.inputKey(allocator, &root, key, &terminal);
+                    try ui.inputKey(allocator, &nav.root, key, &ui_session);
                 }
             },
             .close => terminal.requestQuit(),
@@ -127,11 +127,15 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
 
         try ui_session.applyAndWritePending(io, allocator, &repo);
 
-        try root.build(allocator, .{
+        // reconcile navigation: forward to a new page, or back on escape (and
+        // quit when there's nothing left to go back to).
+        if (!try nav.sync(allocator, &ui_session)) terminal.requestQuit();
+
+        try nav.root.build(allocator, .{
             .min_size = .{ .width = null, .height = null },
             .max_size = .{ .width = last_size.width, .height = last_size.height },
-        }, root.getFocus());
-        _ = try terminal.render(&root, &last_grid, &last_size);
+        }, nav.root.getFocus());
+        _ = try terminal.render(&nav.root, &last_grid, &last_size);
     }
 }
 

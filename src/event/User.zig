@@ -11,6 +11,18 @@ email: []const u8,
 password_hash: []const u8,
 enable_ansi: bool = false,
 
+const Self = @This();
+
+// the subset of a user that's safe to hand to clients
+pub const Safe = struct {
+    name: []const u8,
+    display_name: []const u8,
+
+    pub fn init(user: Self) Safe {
+        return .{ .name = user.name, .display_name = user.display_name };
+    }
+};
+
 pub fn consume(
     comptime DB: type,
     comptime hash_kind: hash.HashKind,

@@ -807,4 +807,3 @@ test "user and repo" {
         try std.testing.expect(null == try event_id_to_user.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)));
     }
 }
-

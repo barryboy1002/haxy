@@ -1,23 +1,22 @@
 const std = @import("std");
+const evt = @import("../event.zig");
 const ui = @import("../ui.zig");
 const xit = @import("xit");
+const hash = xit.hash;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
 const inp = xitui.input;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
-const evt = @import("../event.zig");
 
-pub const Users = @import("./Home/Users.zig");
-pub const Repos = @import("./Home/Repos.zig");
-pub const Header = @import("./Home/Header.zig");
+pub const Header = @import("./User/Header.zig");
 pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 
 header: Header,
-users: Users,
-repos: Repos,
+user: evt.User.Safe,
+repos: []const evt.Repo,
 settings: Settings,
 auth: Auth,
 
@@ -26,11 +25,50 @@ const Self = @This();
 pub fn init(
     arena: *std.heap.ArenaAllocator,
     haxy_moment: evt.AdminDB.HashMap(.read_only),
+    name: []const u8,
 ) !Self {
+    const DB = evt.AdminDB;
+    const hash_kind = evt.admin_repo_opts.hash;
+
+    // a route identifies a user by name; resolve it to the user's event id via
+    // the name->user-id index, which everything below keys off of.
+    const name_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "name->user-id")) orelse return error.NotFound;
+    const name_to_user_id = try DB.HashMap(.read_only).init(name_to_user_id_cursor);
+    const user_id_cursor = try name_to_user_id.getCursor(hash.hashInt(hash_kind, name)) orelse return error.NotFound;
+    var user_id_buf: [evt.event_id_size]u8 = undefined;
+    _ = try user_id_cursor.readBytes(&user_id_buf);
+    const user_id: []const u8 = &user_id_buf;
+
+    const user = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, user_id)) orelse return error.NotFound;
+
+    var repos: std.ArrayList(evt.Repo) = .empty;
+
+    // the user-id->repos index maps each user to the set of repo event ids they
+    // own; it only exists once a repo has been consumed, so a user with no repos
+    // simply yields an empty list.
+    if (try haxy_moment.getCursor(hash.hashInt(hash_kind, "user-id->repos"))) |user_id_to_repos_cursor| {
+        const user_id_to_repos = try DB.HashMap(.read_only).init(user_id_to_repos_cursor);
+        if (try user_id_to_repos.getCursor(hash.hashInt(hash_kind, user_id))) |user_repos_cursor| {
+            const user_repos = try DB.CountedHashSet(.read_only).init(user_repos_cursor);
+
+            const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return error.NotFound;
+            const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
+
+            var repos_iter = try user_repos.iterator();
+            while (try repos_iter.next()) |kv_cursor| {
+                const kv = try kv_cursor.readKeyValuePair();
+                const repo_cursor = try event_id_to_repo.getCursor(kv.hash) orelse continue;
+                const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
+                const repo_event = try evt.read(evt.Repo, DB, hash_kind, arena, repo_map);
+                try repos.append(arena.allocator(), repo_event);
+            }
+        }
+    }
+
     return .{
-        .header = try Header.init(arena),
-        .users = try Users.init(arena, haxy_moment),
-        .repos = try Repos.init(arena, haxy_moment),
+        .header = try Header.init(arena, user.name),
+        .user = evt.User.Safe.init(user),
+        .repos = repos.items,
         .settings = Settings.init(),
         .auth = Auth.init(),
     };
@@ -48,30 +86,36 @@ pub const View = struct {
         var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
 
-        // build the header first so we can grab the users-tab focus id and
-        // hand it to login/logout
-        var users_tab_id: usize = undefined;
+        // build the header first so we can grab the repos-tab id for the auth
+        // view (it focuses there after login).
+        var repos_tab_id: usize = undefined;
         {
             var header_view = try Header.View.init(allocator, &data.header, session);
             errdefer header_view.deinit(allocator);
-            users_tab_id = header_view.tab_ids[0];
-            try box.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .home_header = header_view }, .rect = null, .min_size = null });
+            repos_tab_id = header_view.tab_ids[0];
+            try box.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .user_header = header_view }, .rect = null, .min_size = null });
         }
 
         {
             var stack = wgt.Stack(ui.Widget).init();
             errdefer stack.deinit(allocator);
 
+            // repos list — the default tab
             {
-                var users_view = try Users.View.init(allocator, &data.users);
-                errdefer users_view.deinit(allocator);
-                try stack.children.put(allocator, users_view.getFocus().id, .{ .home_users = users_view });
-            }
+                var list = try ui.FlowBox.Scroll.init(allocator, .{});
+                errdefer list.deinit(allocator);
 
-            {
-                var repos_view = try Repos.View.init(allocator, &data.repos);
-                errdefer repos_view.deinit(allocator);
-                try stack.children.put(allocator, repos_view.getFocus().id, .{ .home_repos = repos_view });
+                var arena = std.heap.ArenaAllocator.init(allocator);
+                defer arena.deinit();
+                const aa = arena.allocator();
+
+                const lines = try aa.alloc([]const u8, data.repos.len);
+                for (data.repos, 0..) |repo, i| {
+                    lines[i] = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.name, repo.description });
+                }
+                try list.setItems(allocator, lines, null);
+
+                try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
             }
 
             {
@@ -81,7 +125,7 @@ pub const View = struct {
             }
 
             {
-                var auth_view = try Auth.View.init(allocator, &data.auth, session, users_tab_id);
+                var auth_view = try Auth.View.init(allocator, &data.auth, session, repos_tab_id);
                 errdefer auth_view.deinit(allocator);
                 try stack.children.put(allocator, auth_view.getFocus().id, .{ .home_auth = auth_view });
             }
@@ -89,11 +133,7 @@ pub const View = struct {
             try box.children.put(allocator, stack.getFocus().id, .{ .widget = .{ .stack = stack }, .rect = null, .min_size = null });
         }
 
-        var self = View{
-            .box = box,
-            .data = data,
-            .session = session,
-        };
+        var self = View{ .box = box, .data = data, .session = session };
         self.getFocus().child_id = box.children.keys()[header_index];
         return self;
     }
@@ -104,18 +144,20 @@ pub const View = struct {
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
-        const header = &self.box.children.values()[header_index].widget.home_header;
+        const header = &self.box.children.values()[header_index].widget.user_header;
         const stack = &self.box.children.values()[stack_index].widget.stack;
 
-        // each header tab maps 1:1 to a stack child by position
+        // each header tab maps 1:1 to a stack child by position. mirror the
+        // selection into current_page so the host can push the matching url;
+        // all user tabs share the .user parent, so this stays on the page
+        // rather than navigating.
         if (header.getSelectedIndex()) |index| {
             stack.getFocus().child_id = stack.children.keys()[index];
+            const name = self.data.user.name;
             self.session.data.current_page = switch (index) {
-                0 => .home_users,
-                1 => .home_repos,
-                2 => .home_settings,
-                3 => .home_auth,
-                else => .home_users,
+                1 => .{ .user_settings = name },
+                2 => .{ .user_auth = name },
+                else => .{ .user = name },
             };
         }
         try self.box.build(allocator, constraint, root_focus);
@@ -141,14 +183,13 @@ pub const View = struct {
                 switch (direction) {
                     .up => {
                         switch (child.*) {
-                            .home_header => {
+                            .user_header => {
                                 try child.input(allocator, key, root_focus);
                             },
                             .stack => {
                                 if (child.stack.getSelected()) |selected_widget| {
                                     const at_top = switch (selected_widget.*) {
-                                        .home_users => |*v| v.getSelectedIndex() == 0,
-                                        .home_repos => |*v| v.getSelectedIndex() == 0,
+                                        .flow_box_scroll => |*v| v.getSelectedIndex() == 0,
                                         .home_settings => |*v| v.getSelectedIndex() == 0,
                                         .home_auth => |*v| v.getSelectedIndex() == 0,
                                         else => false,
@@ -165,7 +206,7 @@ pub const View = struct {
                     },
                     .down => {
                         switch (child.*) {
-                            .home_header => {
+                            .user_header => {
                                 index = stack_index;
                             },
                             .stack => {

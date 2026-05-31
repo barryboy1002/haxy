@@ -10,14 +10,16 @@ const Focus = xitui.focus.Focus;
 
 pub const AuthTab = @import("./../AuthTab.zig");
 
+name: []const u8,
 title: ui.Title,
 auth_tab: AuthTab,
 
 const Self = @This();
 
-pub fn init(arena: *std.heap.ArenaAllocator) !Self {
+pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8) !Self {
     return .{
-        .title = try ui.Title.init(arena, "haxy"),
+        .name = name,
+        .title = try ui.Title.init(arena, name),
         .auth_tab = AuthTab.init(),
     };
 }
@@ -25,18 +27,20 @@ pub fn init(arena: *std.heap.ArenaAllocator) !Self {
 pub const View = struct {
     box: wgt.Box(ui.Widget),
     data: *const Self,
-    tab_ids: [4]usize,
+    tab_ids: [3]usize,
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var box = wgt.Box(ui.Widget).init(.{ .border_style = .hidden, .rounded_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
-        var tab_ids: [4]usize = undefined;
+        var tab_ids: [3]usize = undefined;
 
         // title sits to the left of the tabs
         {
             var title_view = try ui.Title.View.init(allocator, &data.title);
             errdefer title_view.deinit(allocator);
+            title_view.getFocus().focusable = true;
+            title_view.getFocus().kind = .{ .custom = "a:/" };
             try box.children.put(allocator, title_view.getFocus().id, .{
                 .widget = .{ .title = title_view },
                 .rect = null,
@@ -55,58 +59,74 @@ pub const View = struct {
             });
         }
 
-        // tabs
-        var tab_index: usize = 0;
-        for (
-            [_][]const u8{ "users", "repos", "", "settings", "" },
-            [_][]const u8{ "a:/users", "a:/repos", "", "a:/settings", "a:/auth" },
-        ) |name, focus_name| {
-            // spacer
-            if (focus_name.len == 0) {
-                var spacer = ui.Spacer.init();
-                errdefer spacer.deinit(allocator);
-                try box.children.put(allocator, spacer.getFocus().id, .{
-                    .widget = .{ .spacer = spacer },
-                    .rect = null,
-                    .min_size = .{ .width = 1, .height = null },
-                });
-            }
-            // auth
-            else if (std.mem.eql(u8, "a:/auth", focus_name)) {
-                var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
-                errdefer auth_tab.deinit(allocator);
-                tab_ids[tab_index] = auth_tab.getFocus().id;
-                tab_index += 1;
-                try box.children.put(allocator, auth_tab.getFocus().id, .{
-                    .widget = .{ .auth_tab = auth_tab },
-                    .rect = null,
-                    .min_size = .{ .width = AuthTab.min_width, .height = null },
-                });
-            }
-            // other tabs
-            else {
-                var text_box = try wgt.TextBox(ui.Widget).init(allocator, name, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
-                errdefer text_box.deinit(allocator);
-                text_box.getFocus().focusable = true;
-                text_box.getFocus().kind = .{ .custom = focus_name };
-                tab_ids[tab_index] = text_box.getFocus().id;
-                tab_index += 1;
-                try box.children.put(allocator, text_box.getFocus().id, .{
-                    .widget = .{ .text_box = text_box },
-                    .rect = null,
-                    .min_size = .{ .width = name.len + 2, .height = null },
-                });
-            }
+        // every tab link is user-scoped so selecting one stays on this page —
+        // switching its stack and updating the url — instead of navigating to
+        // the global settings or auth pages. allocated in the session arena so
+        // the focus kinds that borrow them outlive this view.
+        const aa = session.arena.allocator();
+        const repos_link = try std.fmt.allocPrint(aa, "a:/user/{s}", .{data.name});
+        const settings_link = try std.fmt.allocPrint(aa, "a:/user/{s}/settings", .{data.name});
+        const auth_link = try std.fmt.allocPrint(aa, "a:/user/{s}/auth", .{data.name});
+
+        // repos tab
+        {
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, "repos", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().focusable = true;
+            text_box.getFocus().kind = .{ .custom = repos_link };
+            tab_ids[0] = text_box.getFocus().id;
+            try box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = "repos".len + 2, .height = null },
+            });
+        }
+
+        // spacer pushes settings + auth to the right
+        {
+            var spacer = ui.Spacer.init();
+            errdefer spacer.deinit(allocator);
+            try box.children.put(allocator, spacer.getFocus().id, .{
+                .widget = .{ .spacer = spacer },
+                .rect = null,
+                .min_size = .{ .width = 1, .height = null },
+            });
+        }
+
+        // settings tab
+        {
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, "settings", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().focusable = true;
+            text_box.getFocus().kind = .{ .custom = settings_link };
+            tab_ids[1] = text_box.getFocus().id;
+            try box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = "settings".len + 2, .height = null },
+            });
+        }
+
+        // auth tab (login / logout). AuthTab defaults to the global a:/auth link;
+        // repoint its instance at this user's auth route so it stays local too.
+        {
+            var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
+            errdefer auth_tab.deinit(allocator);
+            auth_tab.text_box.getFocus().kind = .{ .custom = auth_link };
+            tab_ids[2] = auth_tab.getFocus().id;
+            try box.children.put(allocator, auth_tab.getFocus().id, .{
+                .widget = .{ .auth_tab = auth_tab },
+                .rect = null,
+                .min_size = .{ .width = AuthTab.min_width, .height = null },
+            });
         }
 
         var self = View{ .box = box, .data = data, .tab_ids = tab_ids };
-        // initial selected tab
+        // open on the tab named by the current route
         self.getFocus().child_id = tab_ids[
             switch (session.data.current_page) {
-                .home_users => 0,
-                .home_repos => 1,
-                .home_settings => 2,
-                .home_auth => 3,
+                .user_settings => 1,
+                .user_auth => 2,
                 else => 0,
             }
         ];
@@ -119,6 +139,7 @@ pub const View = struct {
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
+        // only the selected tab shows its border
         for (self.box.children.keys(), self.box.children.values()) |id, *child| {
             const tb: ?*wgt.TextBox(ui.Widget) = switch (child.widget) {
                 .text_box => |*x| x,

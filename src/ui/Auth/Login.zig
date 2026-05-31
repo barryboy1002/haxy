@@ -32,17 +32,20 @@ pub const View = struct {
     nav_ids: [3]usize,
     // focus id of the header's "users" tab; on a successful submit we jump
     // focus there so the user isn't stranded on the login button.
-    users_tab_id: usize,
+    success_redirect_tab_id: usize,
 
     const username_index: usize = 0;
     const password_index: usize = 1;
     const button_index: usize = 2;
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session, users_tab_id: usize) !View {
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session, success_redirect_tab_id: usize) !View {
         var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
         // marks this subtree as an HTML form scope for the web overlay
-        box.getFocus().kind = .{ .custom = "form:/login" };
+        box.getFocus().kind = .{ .custom = switch (session.data.current_page) {
+            .user, .user_settings, .user_auth => |name| try std.fmt.allocPrint(session.arena.allocator(), "form:/user/{s}/login", .{name}),
+            else => "form:/login",
+        } };
 
         var nav_ids: [3]usize = undefined;
 
@@ -92,7 +95,7 @@ pub const View = struct {
             .data = data,
             .session = session,
             .nav_ids = nav_ids,
-            .users_tab_id = users_tab_id,
+            .success_redirect_tab_id = success_redirect_tab_id,
         };
     }
 
@@ -257,7 +260,7 @@ pub const View = struct {
 
                 // jump focus back to the users tab — the login button we
                 // just pressed is about to be hidden by the tab-label swap
-                try root_focus.setFocus(self.users_tab_id);
+                try root_focus.setFocus(self.success_redirect_tab_id);
             },
         }
     }

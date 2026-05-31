@@ -142,14 +142,17 @@ fn handleRequest(
     const uri = try std.Uri.parseAfterScheme("", request.head.target);
     const path = uri.path.percent_encoded;
 
-    if (method == .POST and std.mem.eql(u8, path, "/login")) {
-        return handleLogin(io, request, allocator, admin_repo_path, session_store);
+    // login/logout are page-scoped. the base (the path minus the trailing verb)
+    // is where we redirect afterward, so logging in keeps you on the page you
+    // were on instead of jumping to the home view.
+    if (method == .POST and std.mem.endsWith(u8, path, "/login")) {
+        return handleLogin(io, request, allocator, path[0 .. path.len - "/login".len], admin_repo_path, session_store);
     }
-    if (method == .POST and std.mem.eql(u8, path, "/logout")) {
-        return handleLogout(request, session_store);
+    if (method == .POST and std.mem.endsWith(u8, path, "/logout")) {
+        return handleLogout(request, path[0 .. path.len - "/logout".len], session_store);
     }
-    if (method == .POST and std.mem.eql(u8, path, "/ansi")) {
-        return handleAnsi(io, request, allocator, admin_repo_path, session_store);
+    if (method == .POST and std.mem.endsWith(u8, path, "/ansi")) {
+        return handleAnsi(io, request, allocator, path[0 .. path.len - "/ansi".len], admin_repo_path, session_store);
     }
 
     const get_or_head = method == .GET or method == .HEAD;
@@ -236,6 +239,7 @@ fn handleLogin(
     io: std.Io,
     request: *std.http.Server.Request,
     allocator: std.mem.Allocator,
+    base: []const u8,
     admin_repo_path: []const u8,
     session_store: SessionStore,
 ) !void {
@@ -259,6 +263,11 @@ fn handleLogin(
     const haxy_moment = try evt.currentMoment(evt.admin_repo_opts, &repo);
     const result = try evt.User.verifyCredentials(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, &arena, username, password);
 
+    // on success, return to the page the login came from (base, or "/" at the
+    // root); on failure, stay on its auth tab to surface the error.
+    const success_location: []const u8 = if (base.len == 0) "/" else base;
+    const failure_location = try std.fmt.allocPrint(arena.allocator(), "{s}/auth", .{base});
+
     switch (result) {
         .success => |user_id| {
             const token = try session_store.create(&user_id);
@@ -267,7 +276,7 @@ fn handleLogin(
             try request.respond("", .{
                 .status = .see_other,
                 .extra_headers = &.{
-                    .{ .name = "location", .value = ui.RoutablePage.url(.default) },
+                    .{ .name = "location", .value = success_location },
                     .{ .name = "set-cookie", .value = cookie },
                 },
             });
@@ -276,7 +285,7 @@ fn handleLogin(
             try request.respond("", .{
                 .status = .see_other,
                 .extra_headers = &.{
-                    .{ .name = "location", .value = ui.RoutablePage.url(.auth) },
+                    .{ .name = "location", .value = failure_location },
                     .{ .name = "set-cookie", .value = login_failure_cookie ++ "=unknown_user; Path=/; HttpOnly; SameSite=Strict" },
                 },
             });
@@ -285,7 +294,7 @@ fn handleLogin(
             try request.respond("", .{
                 .status = .see_other,
                 .extra_headers = &.{
-                    .{ .name = "location", .value = ui.RoutablePage.url(.auth) },
+                    .{ .name = "location", .value = failure_location },
                     .{ .name = "set-cookie", .value = login_failure_cookie ++ "=wrong_password; Path=/; HttpOnly; SameSite=Strict" },
                 },
             });
@@ -293,10 +302,12 @@ fn handleLogin(
     }
 }
 
-fn handleLogout(request: *std.http.Server.Request, session_store: SessionStore) !void {
+fn handleLogout(request: *std.http.Server.Request, base: []const u8, session_store: SessionStore) !void {
     // revoke the session server-side so the cookie is dead for anyone holding
     // a copy, not just this browser.
     if (getCookieValue(request, cookie_name)) |token| session_store.remove(token);
+    // return to the page the logout came from (base, or "/" at the root).
+    const location: []const u8 = if (base.len == 0) "/" else base;
     // close the connection instead of keeping it alive: we don't read the
     // request body, and respond()'s keep-alive path would otherwise try to
     // discard it — which asserts on a bodyless POST that carries no
@@ -306,7 +317,7 @@ fn handleLogout(request: *std.http.Server.Request, session_store: SessionStore) 
         .status = .see_other,
         .keep_alive = false,
         .extra_headers = &.{
-            .{ .name = "location", .value = ui.RoutablePage.url(.auth) },
+            .{ .name = "location", .value = location },
             .{ .name = "set-cookie", .value = cookie_name ++ "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" },
         },
     });
@@ -316,6 +327,7 @@ fn handleAnsi(
     io: std.Io,
     request: *std.http.Server.Request,
     allocator: std.mem.Allocator,
+    base: []const u8,
     admin_repo_path: []const u8,
     session_store: SessionStore,
 ) !void {
@@ -330,13 +342,17 @@ fn handleAnsi(
         }
     }
 
+    // return to the settings tab the toggle came from so the change is visible.
+    const location = try std.fmt.allocPrint(allocator, "{s}/settings", .{base});
+    defer allocator.free(location);
+
     // like logout, this is a bodyless POST, so close the connection rather than
     // letting the keep-alive path try to discard a body that isn't framed.
     try request.respond("", .{
         .status = .see_other,
         .keep_alive = false,
         .extra_headers = &.{
-            .{ .name = "location", .value = ui.RoutablePage.url(.settings) },
+            .{ .name = "location", .value = location },
         },
     });
 }
@@ -359,7 +375,7 @@ fn renderIndexHtml(
     var session = try ui.Session.init(&page_arena, &repo, session_data);
 
     const snapshot: ui.Snapshot = .{
-        .page = .{ .home = try .init(session.arena, session.haxy_moment orelse unreachable) },
+        .page = try ui.Page.init(session.arena, session.haxy_moment orelse unreachable, session.data.current_page),
         .session = session.data,
     };
     var root = try ui.initRoot(allocator, &snapshot.page, &session);
