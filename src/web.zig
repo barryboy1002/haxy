@@ -142,17 +142,22 @@ fn handleRequest(
     const uri = try std.Uri.parseAfterScheme("", request.head.target);
     const path = uri.path.percent_encoded;
 
-    // login/logout are page-scoped. the base (the path minus the trailing verb)
-    // is where we redirect afterward, so logging in keeps you on the page you
-    // were on instead of jumping to the home view.
-    if (method == .POST and std.mem.endsWith(u8, path, "/login")) {
-        return handleLogin(io, request, allocator, path[0 .. path.len - "/login".len], admin_repo_path, session_store);
-    }
-    if (method == .POST and std.mem.endsWith(u8, path, "/logout")) {
-        return handleLogout(request, path[0 .. path.len - "/logout".len], session_store);
-    }
-    if (method == .POST and std.mem.endsWith(u8, path, "/ansi")) {
-        return handleAnsi(io, request, allocator, path[0 .. path.len - "/ansi".len], admin_repo_path, session_store);
+    // POST routes can be scoped by any page, so they can redirect using
+    // the base of the URL. this allows logging in to keep you on the page
+    // you were on.
+    if (method == .POST) {
+        const PostRoute = enum { login, logout, ansi };
+        inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
+            const suffix = "/" ++ field.name;
+            if (std.mem.endsWith(u8, path, suffix)) {
+                const base = path[0 .. path.len - suffix.len];
+                return switch (@field(PostRoute, field.name)) {
+                    .login => handleLogin(io, request, allocator, base, admin_repo_path, session_store),
+                    .logout => handleLogout(request, base, session_store),
+                    .ansi => handleAnsi(io, request, allocator, base, admin_repo_path, session_store),
+                };
+            }
+        }
     }
 
     const get_or_head = method == .GET or method == .HEAD;
