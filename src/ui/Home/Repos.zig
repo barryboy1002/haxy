@@ -11,6 +11,7 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
 repos: []const evt.Repo,
+owner_names: []const []const u8,
 
 const Self = @This();
 
@@ -19,22 +20,28 @@ pub fn init(
     haxy_moment: evt.AdminDB.HashMap(.read_only),
 ) !Self {
     const DB = evt.AdminDB;
+    const hash_kind = evt.admin_repo_opts.hash;
 
     var repos: std.ArrayList(evt.Repo) = .empty;
+    var owner_names: std.ArrayList([]const u8) = .empty;
 
-    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(evt.admin_repo_opts.hash, "event-id->repo")) orelse return error.NotFound;
+    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return error.NotFound;
     const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
 
     var repos_iter = try event_id_to_repo.iterator();
     while (try repos_iter.next()) |kv_cursor| {
         const kv = try kv_cursor.readKeyValuePair();
         const repo_map = try DB.HashMap(.read_only).init(kv.value_cursor);
-        const repo_event = try evt.read(evt.Repo, DB, evt.admin_repo_opts.hash, arena, repo_map);
+        const repo_event = try evt.read(evt.Repo, DB, hash_kind, arena, repo_map);
         try repos.append(arena.allocator(), repo_event);
+
+        const owner = try evt.User.readById(DB, hash_kind, haxy_moment, arena, repo_event.user_id);
+        try owner_names.append(arena.allocator(), if (owner) |o| o.name else "");
     }
 
     return .{
         .repos = repos.items,
+        .owner_names = owner_names.items,
     };
 }
 
@@ -59,10 +66,16 @@ pub const View = struct {
         const aa = arena.allocator();
 
         const lines = try aa.alloc([]const u8, data.repos.len);
+        const links = try aa.alloc([]const u8, data.repos.len);
         for (data.repos, 0..) |repo, i| {
             lines[i] = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.name, repo.description });
+            // clicking a repo opens its page; the "a:" prefix makes the web
+            // renderer emit an <a href="/repo/alice/foo"> anchor. skip the link
+            // when the owner is unknown so it isn't a dead route.
+            const owner = data.owner_names[i];
+            links[i] = if (owner.len > 0) try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ owner, repo.name }) else "";
         }
-        try self.list.setItems(allocator, lines, null);
+        try self.list.setItems(allocator, lines, links);
 
         return self;
     }

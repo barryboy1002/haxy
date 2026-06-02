@@ -12,23 +12,30 @@ const evt = @import("./event.zig");
 
 pub const Home = @import("./ui/Home.zig");
 pub const User = @import("./ui/User.zig");
+pub const Repo = @import("./ui/Repo.zig");
 pub const Title = @import("./ui/Title.zig");
 pub const Quit = @import("./ui/Quit.zig");
 
 pub const PageKind = enum {
     home,
     user,
+    repo,
 };
 
 pub const Page = union(PageKind) {
     home: Home,
     user: User,
+    repo: Repo,
 
     pub fn init(arena: *std.heap.ArenaAllocator, haxy_moment: evt.AdminDB.HashMap(.read_only), route: RoutablePage) !Page {
         return switch (route.parent()) {
             .home => .{ .home = try Home.init(arena, haxy_moment) },
             .user => switch (route) {
                 .user, .user_settings, .user_auth => |name| .{ .user = try User.init(arena, haxy_moment, name) },
+                else => return error.UnexpectedRoute,
+            },
+            .repo => switch (route) {
+                .repo, .repo_settings, .repo_auth => |name| .{ .repo = try Repo.init(arena, haxy_moment, name) },
                 else => return error.UnexpectedRoute,
             },
         };
@@ -54,10 +61,18 @@ pub const RoutablePage = union(enum) {
     user: Array(evt.User.name_max_len),
     user_settings: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
+    repo: Array(repo_name_max_len),
+    repo_settings: Array(repo_name_max_len),
+    repo_auth: Array(repo_name_max_len),
 
     pub const default: RoutablePage = .home_users;
 
     const user_segment = "/user/";
+    const repo_segment = "/repo/";
+
+    // a repo is identified by "username/reponame"; the route carries both names
+    // joined by '/', so the inline name must fit both plus the separator.
+    pub const repo_name_max_len = evt.User.name_max_len + 1 + evt.Repo.name_max_len;
 
     // an inline, owned array of data. keeping it in the route (rather than a
     // borrowed slice) makes RoutablePage a plain value: it can be copied, stored
@@ -86,8 +101,8 @@ pub const RoutablePage = union(enum) {
             .home_repos => "/repos",
             .home_settings => "/settings",
             .home_auth => "/auth",
-            // user routes carry a runtime name; build them with urlAlloc.
             .user, .user_settings, .user_auth => @compileError("user routes are dynamic; use urlAlloc"),
+            .repo, .repo_settings, .repo_auth => @compileError("repo routes are dynamic; use urlAlloc"),
         };
     }
 
@@ -96,6 +111,9 @@ pub const RoutablePage = union(enum) {
             .user => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}", .{name.slice()}),
             .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name.slice()}),
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
+            .repo => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{name.slice()}),
+            .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/settings", .{name.slice()}),
+            .repo_auth => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/auth", .{name.slice()}),
             inline else => |_, tag| url(tag),
         };
     }
@@ -104,6 +122,7 @@ pub const RoutablePage = union(enum) {
         return switch (self) {
             .home_users, .home_repos, .home_settings, .home_auth => .home,
             .user, .user_settings, .user_auth => .user,
+            .repo, .repo_settings, .repo_auth => .repo,
         };
     }
 
@@ -113,6 +132,7 @@ pub const RoutablePage = union(enum) {
         if (std.mem.eql(u8, path, "/repos")) return .home_repos;
         if (std.mem.eql(u8, path, "/settings")) return .home_settings;
         if (std.mem.eql(u8, path, "/auth")) return .home_auth;
+        // /user/<name>[/settings|/auth]
         if (std.mem.startsWith(u8, path, user_segment)) {
             const rest = path[user_segment.len..];
             const slash = std.mem.indexOfScalar(u8, rest, '/');
@@ -123,9 +143,29 @@ pub const RoutablePage = union(enum) {
                 const sub = rest[s + 1 ..];
                 if (std.mem.eql(u8, sub, "settings")) return .{ .user_settings = parsed };
                 if (std.mem.eql(u8, sub, "auth")) return .{ .user_auth = parsed };
-                return null; // unknown user sub-path
+                return null; // unknown sub-path
             }
             return .{ .user = parsed };
+        }
+        // /repo/<username>/<reponame>[/settings|/auth] — the name carried by the
+        // route is the "username/reponame" pair (both segments, joined).
+        if (std.mem.startsWith(u8, path, repo_segment)) {
+            const rest = path[repo_segment.len..];
+            const user_slash = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
+            const after_user = rest[user_slash + 1 ..];
+            const repo_slash = std.mem.indexOfScalar(u8, after_user, '/');
+            const repo_name = if (repo_slash) |s| after_user[0..s] else after_user;
+            // reject an empty username or reponame
+            if (user_slash == 0 or repo_name.len == 0) return null;
+            const pair = rest[0 .. user_slash + 1 + repo_name.len];
+            const parsed = Array(repo_name_max_len).from(pair) orelse return null; // name too long
+            if (repo_slash) |s| {
+                const sub = after_user[s + 1 ..];
+                if (std.mem.eql(u8, sub, "settings")) return .{ .repo_settings = parsed };
+                if (std.mem.eql(u8, sub, "auth")) return .{ .repo_auth = parsed };
+                return null; // unknown sub-path
+            }
+            return .{ .repo = parsed };
         }
         return null;
     }
@@ -136,6 +176,9 @@ pub const RoutablePage = union(enum) {
             .user => |a_name| std.mem.eql(u8, a_name.slice(), b.user.slice()),
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
+            .repo => |a_name| std.mem.eql(u8, a_name.slice(), b.repo.slice()),
+            .repo_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_settings.slice()),
+            .repo_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_auth.slice()),
             else => true,
         };
     }
@@ -153,6 +196,10 @@ pub const RoutablePage = union(enum) {
                 try jw.objectField("name");
                 try jw.write(name.slice());
             },
+            .repo, .repo_settings, .repo_auth => |name| {
+                try jw.objectField("name");
+                try jw.write(name.slice());
+            },
             else => {},
         }
         try jw.endObject();
@@ -164,8 +211,8 @@ pub const RoutablePage = union(enum) {
         const parseName = struct {
             // errors must stay within std.json's ParseError set; ValueTooLong
             // is its member for an over-long field.
-            fn f(maybe: ?[]const u8) !Array(evt.User.name_max_len) {
-                return Array(evt.User.name_max_len).from(maybe orelse return error.MissingField) orelse error.ValueTooLong;
+            fn f(comptime max_len: usize, maybe: ?[]const u8) !Array(max_len) {
+                return Array(max_len).from(maybe orelse return error.MissingField) orelse error.ValueTooLong;
             }
         }.f;
         return switch (helper.kind) {
@@ -173,9 +220,12 @@ pub const RoutablePage = union(enum) {
             .home_repos => .home_repos,
             .home_settings => .home_settings,
             .home_auth => .home_auth,
-            .user => .{ .user = try parseName(helper.name) },
-            .user_settings => .{ .user_settings = try parseName(helper.name) },
-            .user_auth => .{ .user_auth = try parseName(helper.name) },
+            .user => .{ .user = try parseName(evt.User.name_max_len, helper.name) },
+            .user_settings => .{ .user_settings = try parseName(evt.User.name_max_len, helper.name) },
+            .user_auth => .{ .user_auth = try parseName(evt.User.name_max_len, helper.name) },
+            .repo => .{ .repo = try parseName(repo_name_max_len, helper.name) },
+            .repo_settings => .{ .repo_settings = try parseName(repo_name_max_len, helper.name) },
+            .repo_auth => .{ .repo_auth = try parseName(repo_name_max_len, helper.name) },
         };
     }
 };
@@ -533,6 +583,7 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
     const page_widget: Widget = switch (page.*) {
         .home => |*p| .{ .home = try .init(allocator, p, session) },
         .user => |*p| .{ .user = try .init(allocator, p, session) },
+        .repo => |*p| .{ .repo = try .init(allocator, p, session) },
     };
 
     const demon_art = @embedFile("embed/demon.ans");
@@ -566,10 +617,12 @@ pub const Widget = union(enum) {
     background: AnsiBackground,
     home: Home.View,
     user: User.View,
+    repo: Repo.View,
     quit: Quit.View,
     title: Title.View,
     home_header: Home.Header.View,
     user_header: User.Header.View,
+    repo_header: Repo.Header.View,
     home_users: Home.Users.View,
     home_repos: Home.Repos.View,
     auth_tab: Home.Header.AuthTab.View,
