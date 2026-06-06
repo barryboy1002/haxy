@@ -172,6 +172,31 @@ pub fn main(init: std.process.Init) !void {
         // commit the seed events and consume them into the database
         try evt.commitAndConsume(evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
+        // create the actual repos on disk, named by their hex-encoded event id
+        for (repo_data, 0..) |r, i| {
+            const repo_id = std.fmt.bytesToHex(repo_event_ids[i], .lower);
+            const repo_path = try std.fs.path.join(arena.allocator(), &.{ cwd_path, temp_dir_name, "server", "repos", &repo_id });
+
+            var repo_i = try rp.Repo(.xit, .{}).init(io, allocator, .{ .path = repo_path });
+            defer repo_i.deinit(io, allocator);
+
+            try repo_i.addConfig(io, allocator, .{ .name = "user.name", .value = "haxy" });
+            try repo_i.addConfig(io, allocator, .{ .name = "user.email", .value = "admin@haxy" });
+
+            // write the repo's name and description into a README
+            {
+                var repo_dir = try cwd.openDir(io, repo_path, .{});
+                defer repo_dir.close(io);
+                const readme = try repo_dir.createFile(io, "README.md", .{});
+                defer readme.close(io);
+                const readme_content = try std.fmt.allocPrint(arena.allocator(), "# {s}\n\n{s}\n", .{ r.name, r.description });
+                try readme.writeStreamingAll(io, readme_content);
+            }
+
+            try repo_i.add(io, allocator, &.{"README.md"});
+            _ = try repo_i.commit(io, allocator, .{ .message = "let there be light" });
+        }
+
         break :blk try ui.Session.init(&session_arena, &repo, .{});
     };
     session.is_terminal = true;
