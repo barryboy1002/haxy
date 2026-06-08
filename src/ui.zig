@@ -27,7 +27,8 @@ pub const Page = union(PageKind) {
     user: User,
     repo: Repo,
 
-    pub fn init(arena: *std.heap.ArenaAllocator, haxy_moment: evt.AdminDB.HashMap(.read_only), route: RoutablePage) !Page {
+    pub fn init(arena: *std.heap.ArenaAllocator, session: *Session, route: RoutablePage) !Page {
+        const haxy_moment = session.haxy_moment orelse return error.NoMoment;
         return switch (route.parent()) {
             .home => .{ .home = try Home.init(arena, haxy_moment) },
             .user => switch (route) {
@@ -35,7 +36,7 @@ pub const Page = union(PageKind) {
                 else => return error.UnexpectedRoute,
             },
             .repo => switch (route) {
-                .repo, .repo_settings, .repo_auth => |name| .{ .repo = try Repo.init(arena, haxy_moment, name) },
+                .repo, .repo_settings, .repo_auth => |name| .{ .repo = try Repo.init(arena, session, name) },
                 else => return error.UnexpectedRoute,
             },
         };
@@ -61,18 +62,53 @@ pub const RoutablePage = union(enum) {
     user: Array(evt.User.name_max_len),
     user_settings: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
-    repo: Array(repo_name_max_len),
-    repo_settings: Array(repo_name_max_len),
-    repo_auth: Array(repo_name_max_len),
+    repo: Array(repo_route_max_len),
+    repo_settings: Array(repo_route_max_len),
+    repo_auth: Array(repo_route_max_len),
 
     pub const default: RoutablePage = .home_users;
 
     const user_segment = "/user/";
     const repo_segment = "/repo/";
+    const files_seg = "files";
 
-    // a repo is identified by "username/reponame"; the route carries both names
-    // joined by '/', so the inline name must fit both plus the separator.
-    pub const repo_name_max_len = evt.User.name_max_len + 1 + evt.Repo.name_max_len;
+    // a repo route is "username/reponame", optionally followed by
+    // "/files/<dir>" for a directory in the files tab
+    pub const repo_route_max_len = 1024;
+
+    // the parts of a `.repo` files route. owner/name/dir are slices into the
+    // route's stored string; dir is "" at the repo root.
+    pub const RepoFiles = struct {
+        identity: []const u8, // "owner/name"
+        owner: []const u8,
+        name: []const u8,
+        dir: []const u8,
+
+        // parse a `.repo` route's stored string ("owner/name" or
+        // "owner/name/files/<dir>").
+        pub fn parse(s: []const u8) ?RepoFiles {
+            const s1 = std.mem.indexOfScalar(u8, s, '/') orelse return null;
+            const owner = s[0..s1];
+            const after = s[s1 + 1 ..];
+            const s2 = std.mem.indexOfScalar(u8, after, '/');
+            const name = if (s2) |i| after[0..i] else after;
+            if (owner.len == 0 or name.len == 0) return null;
+            const dir = if (s2) |i| blk: {
+                const tail = after[i + 1 ..]; // "files" or "files/<dir>"
+                break :blk if (std.mem.startsWith(u8, tail, files_seg ++ "/")) tail[files_seg.len + 1 ..] else "";
+            } else "";
+            return .{ .identity = s[0 .. s1 + 1 + name.len], .owner = owner, .name = name, .dir = dir };
+        }
+    };
+
+    // build a `.repo` files route for "owner/name" (identity) at `dir` ("" =
+    // root), or null if the result doesn't fit the inline name.
+    pub fn repoFilesRoute(identity: []const u8, dir: []const u8) ?RoutablePage {
+        if (dir.len == 0) return .{ .repo = Array(repo_route_max_len).from(identity) orelse return null };
+        var buf: [repo_route_max_len]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{s}/" ++ files_seg ++ "/{s}", .{ identity, dir }) catch return null;
+        return .{ .repo = Array(repo_route_max_len).from(s) orelse return null };
+    }
 
     // an inline, owned array of data. keeping it in the route (rather than a
     // borrowed slice) makes RoutablePage a plain value: it can be copied, stored
@@ -80,7 +116,7 @@ pub const RoutablePage = union(enum) {
     pub fn Array(comptime max_len: usize) type {
         return struct {
             bytes: [max_len]u8 = undefined,
-            len: u8 = 0,
+            len: u16 = 0,
 
             pub fn from(s: []const u8) ?Array(max_len) {
                 if (s.len > max_len) return null;
@@ -147,8 +183,10 @@ pub const RoutablePage = union(enum) {
             }
             return .{ .user = parsed };
         }
-        // /repo/<username>/<reponame>[/settings|/auth] — the name carried by the
-        // route is the "username/reponame" pair (both segments, joined).
+        // /repo/<username>/<reponame> (files root), then optionally /settings,
+        // /auth, or /files/<dir> for a directory in the files tab. the `repo`
+        // variant stores "username/reponame" (root) or
+        // "username/reponame/files/<dir>"; settings/auth store just the pair.
         if (std.mem.startsWith(u8, path, repo_segment)) {
             const rest = path[repo_segment.len..];
             const user_slash = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
@@ -157,15 +195,16 @@ pub const RoutablePage = union(enum) {
             const repo_name = if (repo_slash) |s| after_user[0..s] else after_user;
             // reject an empty username or reponame
             if (user_slash == 0 or repo_name.len == 0) return null;
-            const pair = rest[0 .. user_slash + 1 + repo_name.len];
-            const parsed = Array(repo_name_max_len).from(pair) orelse return null; // name too long
+            const pair = rest[0 .. user_slash + 1 + repo_name.len]; // "username/reponame"
             if (repo_slash) |s| {
                 const sub = after_user[s + 1 ..];
-                if (std.mem.eql(u8, sub, "settings")) return .{ .repo_settings = parsed };
-                if (std.mem.eql(u8, sub, "auth")) return .{ .repo_auth = parsed };
+                if (std.mem.eql(u8, sub, "settings")) return .{ .repo_settings = Array(repo_route_max_len).from(pair) orelse return null };
+                if (std.mem.eql(u8, sub, "auth")) return .{ .repo_auth = Array(repo_route_max_len).from(pair) orelse return null };
+                if (std.mem.eql(u8, sub, files_seg)) return repoFilesRoute(pair, ""); // trailing /files == root
+                if (std.mem.startsWith(u8, sub, files_seg ++ "/")) return repoFilesRoute(pair, sub[files_seg.len + 1 ..]);
                 return null; // unknown sub-path
             }
-            return .{ .repo = parsed };
+            return repoFilesRoute(pair, "");
         }
         return null;
     }
@@ -181,6 +220,13 @@ pub const RoutablePage = union(enum) {
             .repo_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_auth.slice()),
             else => true,
         };
+    }
+
+    // true when `a` and `b` are both `.repo` files routes pointing at different
+    // directories. a repo directory change is a navigation (its own page);
+    // settings/auth tab switches are not, so they don't satisfy this.
+    pub fn repoDirChanged(a: RoutablePage, b: RoutablePage) bool {
+        return std.meta.activeTag(a) == .repo and std.meta.activeTag(b) == .repo and !a.eql(b);
     }
 
     // serialize as { "kind": <tag>, "name"?: <user name> }. the default
@@ -223,9 +269,9 @@ pub const RoutablePage = union(enum) {
             .user => .{ .user = try parseName(evt.User.name_max_len, helper.name) },
             .user_settings => .{ .user_settings = try parseName(evt.User.name_max_len, helper.name) },
             .user_auth => .{ .user_auth = try parseName(evt.User.name_max_len, helper.name) },
-            .repo => .{ .repo = try parseName(repo_name_max_len, helper.name) },
-            .repo_settings => .{ .repo_settings = try parseName(repo_name_max_len, helper.name) },
-            .repo_auth => .{ .repo_auth = try parseName(repo_name_max_len, helper.name) },
+            .repo => .{ .repo = try parseName(repo_route_max_len, helper.name) },
+            .repo_settings => .{ .repo_settings = try parseName(repo_route_max_len, helper.name) },
+            .repo_auth => .{ .repo_auth = try parseName(repo_route_max_len, helper.name) },
         };
     }
 };
@@ -243,6 +289,11 @@ pub const Session = struct {
     // where a render is one-shot, this points at the same arena as `arena`.
     page_arena: *std.heap.ArenaAllocator,
     haxy_moment: ?evt.AdminDB.HashMap(.read_only) = null, // db cursor (null on the wasm side)
+    // filesystem io and the path to <server>/repos, for opening on-disk repos
+    // during page construction. both null on wasm, which has no filesystem and
+    // rebuilds pages from the serialized snapshot rather than from disk.
+    io: ?std.Io = null,
+    repos_dir: ?[]const u8 = null,
     pending: std.ArrayList(Action) = .empty, // actions queued by widgets this frame
     nav_back: bool = false, // set by input (escape) to request the native TUI pop a page; see Nav
     is_terminal: bool = false, // true on remote SSH and local TUI
@@ -438,9 +489,10 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, sessi
     }
 }
 
-// if the focus target at focus_id is an `a:` link to a different top-level page
-// than `current`, return its route; otherwise null. lets a host turn a click /
-// enter on such a link into a navigation rather than a focus change.
+// if the focus target at focus_id is an `a:` link that should navigate (a
+// different parent page, or a different files directory within the repo page),
+// return its route; otherwise null. lets a host turn a click / enter on such a
+// link into a navigation rather than a focus change.
 pub fn crossPageLink(root_focus: *Focus, focus_id: usize, current: RoutablePage) ?RoutablePage {
     const child = root_focus.children.get(focus_id) orelse return null;
     const custom = switch (child.focus.kind) {
@@ -450,8 +502,11 @@ pub fn crossPageLink(root_focus: *Focus, focus_id: usize, current: RoutablePage)
     const a_prefix = "a:";
     if (!std.mem.startsWith(u8, custom, a_prefix)) return null;
     const route = RoutablePage.fromUrl(custom[a_prefix.len..]) orelse return null;
-    if (route.parent() == current.parent()) return null;
-    return route;
+    // a link to a different parent page always navigates; within the repo page,
+    // a files-directory link navigates while settings/auth tab links stay
+    // in-page (header-handled).
+    if (route.parent() != current.parent() or RoutablePage.repoDirChanged(route, current)) return route;
+    return null;
 }
 
 // native-TUI navigation
@@ -473,7 +528,6 @@ pub const Nav = struct {
     const max_history: usize = 16;
 
     pub fn init(allocator: std.mem.Allocator, session: *Session) !Nav {
-        const moment = session.haxy_moment orelse unreachable;
         const arena = try allocator.create(std.heap.ArenaAllocator);
         arena.* = std.heap.ArenaAllocator.init(allocator);
         errdefer {
@@ -485,7 +539,7 @@ pub const Nav = struct {
         const route = session.data.current_page;
 
         const page = try arena.allocator().create(Page);
-        page.* = try Page.init(arena, moment, route);
+        page.* = try Page.init(arena, session, route);
         return .{
             .root = try initRoot(allocator, page, session),
             .route = route,
@@ -552,8 +606,12 @@ pub const Nav = struct {
             return;
         }
 
-        if (session.data.current_page.parent() != self.route.parent()) {
-            const moment = session.haxy_moment orelse return;
+        // forward navigation: a different parent page, or — within the repo page
+        // — a different files directory (each directory is its own page, while
+        // settings/auth tab switches stay in-page and are not pushed here).
+        const cp = session.data.current_page;
+        if (cp.parent() != self.route.parent() or RoutablePage.repoDirChanged(cp, self.route)) {
+            if (session.haxy_moment == null) return;
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             errdefer freeArena(allocator, arena);
@@ -562,7 +620,7 @@ pub const Nav = struct {
             const route = session.data.current_page;
 
             const page = try arena.allocator().create(Page);
-            page.* = try Page.init(arena, moment, route);
+            page.* = try Page.init(arena, session, route);
             const new_root = try initRoot(allocator, page, session);
 
             try self.history.append(allocator, .{ .root = self.root, .route = self.route, .arena = self.arena });
@@ -623,6 +681,7 @@ pub const Widget = union(enum) {
     home_header: Home.Header.View,
     user_header: User.Header.View,
     repo_header: Repo.Header.View,
+    repo_files: Repo.Files.View,
     home_users: Home.Users.View,
     home_repos: Home.Repos.View,
     auth_tab: Home.Header.AuthTab.View,

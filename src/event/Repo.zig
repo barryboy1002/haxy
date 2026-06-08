@@ -8,6 +8,8 @@ name: []const u8,
 description: []const u8,
 enable_issue: bool,
 
+const Self = @This();
+
 pub const name_max_len = 32;
 
 pub fn consume(
@@ -76,6 +78,13 @@ pub fn consume(
     }
 }
 
+// a repo plus its event id (the id is the on-disk repo directory name, so the
+// caller can locate the working repo under <server>/repos/<hex event id>).
+pub const RepoWithId = struct {
+    repo: Self,
+    event_id: [evt.event_id_size]u8,
+};
+
 // read a repo by its owner's name and repo name. the owner name is resolved to
 // a user id via name->user-id (the repo index is keyed by "user-id/repo-name"),
 // matching the /repo/username/reponame url.
@@ -86,7 +95,7 @@ pub fn readByOwnerAndName(
     arena: *std.heap.ArenaAllocator,
     owner_name: []const u8,
     repo_name: []const u8,
-) !?@This() {
+) !?RepoWithId {
     // owner name -> user id
     const name_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "name->user-id")) orelse return null;
     const name_to_user_id = try DB.HashMap(.read_only).init(name_to_user_id_cursor);
@@ -106,5 +115,5 @@ pub fn readByOwnerAndName(
     const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
     const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, &repo_id)) orelse return null;
     const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
-    return try evt.read(@This(), DB, hash_kind, arena, repo_map);
+    return .{ .repo = try evt.read(@This(), DB, hash_kind, arena, repo_map), .event_id = repo_id };
 }

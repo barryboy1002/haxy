@@ -378,9 +378,13 @@ fn renderIndexHtml(
     defer page_arena.deinit();
 
     var session = try ui.Session.init(&page_arena, &repo, session_data);
+    // give the page builders filesystem access to the on-disk repos (a sibling
+    // "repos" dir next to the admin repo) so the Repo page can read its files.
+    session.io = io;
+    session.repos_dir = try std.fs.path.join(page_arena.allocator(), &.{ std.fs.path.dirname(admin_repo_path) orelse ".", "repos" });
 
     const snapshot: ui.Snapshot = .{
-        .page = try ui.Page.init(session.page_arena, session.haxy_moment orelse unreachable, session.data.current_page),
+        .page = try ui.Page.init(session.page_arena, &session, session.data.current_page),
         .session = session.data,
     };
     var root = try ui.initRoot(allocator, &snapshot.page, &session);

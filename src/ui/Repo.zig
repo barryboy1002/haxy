@@ -10,35 +10,41 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
 pub const Header = @import("./Repo/Header.zig");
+pub const Files = @import("./Repo/Files.zig");
 pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
+const Array = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len);
+
 header: Header,
 repo: evt.Repo,
+files: Files,
 settings: Settings,
 auth: Auth,
 quit: Quit,
-route_name: ui.RoutablePage.Array(ui.RoutablePage.repo_name_max_len),
+// the full files route this page renders ("owner/name" or "owner/name/files/<dir>"),
+// mirrored into current_page when the files tab is selected.
+route_name: Array,
+// "owner/name" alone, mirrored when the settings/auth tab is selected.
+identity: Array,
 
 const Self = @This();
 
 pub fn init(
     arena: *std.heap.ArenaAllocator,
-    haxy_moment: evt.AdminDB.HashMap(.read_only),
-    name: ui.RoutablePage.Array(ui.RoutablePage.repo_name_max_len),
+    session: *ui.Session,
+    name: Array,
 ) !Self {
     const DB = evt.AdminDB;
     const hash_kind = evt.admin_repo_opts.hash;
+    const haxy_moment = session.haxy_moment orelse return error.NoMoment;
 
-    // the route name is "username/reponame"; split it to look the repo up by
-    // its owner and name.
-    const path = name.slice();
-    const slash = std.mem.indexOfScalar(u8, path, '/') orelse return error.NotFound;
-    const owner_name = path[0..slash];
-    const repo_name = path[slash + 1 ..];
+    // the route is "owner/name" or "owner/name/files/<dir>".
+    const rf = ui.RoutablePage.RepoFiles.parse(name.slice()) orelse return error.NotFound;
 
-    const repo = (try evt.Repo.readByOwnerAndName(DB, hash_kind, haxy_moment, arena, owner_name, repo_name)) orelse return error.NotFound;
+    const found = (try evt.Repo.readByOwnerAndName(DB, hash_kind, haxy_moment, arena, rf.owner, rf.name)) orelse return error.NotFound;
+    const repo = found.repo;
 
     // resolve the creating user so the header can show their name to the left
     // of the repo title.
@@ -47,10 +53,13 @@ pub fn init(
     return .{
         .header = try Header.init(arena, repo.name, owner.name),
         .repo = repo,
+        // the repo's event id is the on-disk repo directory name
+        .files = try Files.init(arena, session, &found.event_id, rf.identity, rf.dir),
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
         .route_name = name,
+        .identity = Array.from(rf.identity) orelse return error.NotFound,
     };
 }
 
@@ -80,12 +89,11 @@ pub const View = struct {
             var stack = wgt.Stack(ui.Widget).init();
             errdefer stack.deinit(allocator);
 
-            // files — the default tab. blank for now: an empty list renders
-            // nothing below the header.
+            // files — the default tab: the current directory's listing.
             {
-                var list = try ui.FlowBox.Scroll.init(allocator, .{});
-                errdefer list.deinit(allocator);
-                try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
+                var files_view = try Files.View.init(allocator, &data.files, session);
+                errdefer files_view.deinit(allocator);
+                try stack.children.put(allocator, files_view.getFocus().id, .{ .repo_files = files_view });
             }
 
             {
@@ -129,14 +137,15 @@ pub const View = struct {
         // rather than navigating.
         if (header.getSelectedIndex()) |index| {
             stack.getFocus().child_id = stack.children.keys()[index];
-            const name = self.data.route_name;
             switch (index) {
-                1 => self.session.data.current_page = .{ .repo_settings = name },
-                2 => self.session.data.current_page = .{ .repo_auth = name },
+                // settings/auth carry only "owner/name"; files carries this
+                // page's directory (route_name) so the url keeps the dir.
+                1 => self.session.data.current_page = .{ .repo_settings = self.data.identity },
+                2 => self.session.data.current_page = .{ .repo_auth = self.data.identity },
                 // the quit tab is tty-only and not a route, so leave current_page
                 // alone (nothing to mirror into the url).
                 3 => {},
-                else => self.session.data.current_page = .{ .repo = name },
+                else => self.session.data.current_page = .{ .repo = self.data.route_name },
             }
         }
         try self.box.build(allocator, constraint, root_focus);
@@ -168,7 +177,7 @@ pub const View = struct {
                             .stack => {
                                 if (child.stack.getSelected()) |selected_widget| {
                                     const at_top = switch (selected_widget.*) {
-                                        .flow_box_scroll => |*v| v.getSelectedIndex() == 0,
+                                        .repo_files => |*v| v.getSelectedIndex() == 0,
                                         .home_settings => |*v| v.getSelectedIndex() == 0,
                                         .home_auth => |*v| v.getSelectedIndex() == 0,
                                         .quit => |*v| v.getSelectedIndex() == 0,

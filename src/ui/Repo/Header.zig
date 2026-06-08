@@ -85,8 +85,11 @@ pub const View = struct {
 
         // every tab link is repo-scoped so selecting one stays on this page —
         // switching its stack and updating the url — instead of navigating to
-        // the global settings or auth pages
-        const files_link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.owner_name, data.name });
+        // the global settings or auth pages. the files tab routes through the
+        // shared helper so the /repo/.../files url format lives in one place.
+        const identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.owner_name, data.name });
+        const files_route = ui.RoutablePage.repoFilesRoute(identity, "") orelse return error.RouteTooLong;
+        const files_link = try std.fmt.allocPrint(aa, "a:{s}", .{try files_route.urlAlloc(session.page_arena)});
         const settings_link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}/settings", .{ data.owner_name, data.name });
         const auth_link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}/auth", .{ data.owner_name, data.name });
 

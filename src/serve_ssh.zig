@@ -74,6 +74,9 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     defer repo.deinit(io, allocator);
     var ui_session = try ui.Session.init(&session_arena, &repo, .{});
     ui_session.is_terminal = true;
+    // let page builders open on-disk repos (sibling "repos" dir of the admin repo)
+    ui_session.io = io;
+    ui_session.repos_dir = try std.fs.path.join(session_arena.allocator(), &.{ std.fs.path.dirname(handler.admin_repo_path) orelse ".", "repos" });
 
     var nav = try ui.Nav.init(allocator, &ui_session);
     defer nav.deinit(allocator);

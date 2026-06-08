@@ -183,17 +183,24 @@ pub fn main(init: std.process.Init) !void {
             try repo_i.addConfig(io, allocator, .{ .name = "user.name", .value = "haxy" });
             try repo_i.addConfig(io, allocator, .{ .name = "user.email", .value = "admin@haxy" });
 
-            // write the repo's name and description into a README
+            // write the repo's name and description into a README, plus a
+            // nested doc so the file tree has a directory to descend into
             {
                 var repo_dir = try cwd.openDir(io, repo_path, .{});
                 defer repo_dir.close(io);
+
                 const readme = try repo_dir.createFile(io, "README.md", .{});
                 defer readme.close(io);
                 const readme_content = try std.fmt.allocPrint(arena.allocator(), "# {s}\n\n{s}\n", .{ r.name, r.description });
                 try readme.writeStreamingAll(io, readme_content);
+
+                try repo_dir.createDirPath(io, "docs/dev");
+                const doc = try repo_dir.createFile(io, "docs/dev/contribute.md", .{});
+                defer doc.close(io);
+                try doc.writeStreamingAll(io, "To contribute, please make a pull request");
             }
 
-            try repo_i.add(io, allocator, &.{"README.md"});
+            try repo_i.add(io, allocator, &.{ "README.md", "docs/dev/contribute.md" });
             _ = try repo_i.commit(io, allocator, .{ .message = "let there be light" });
         }
 
@@ -216,6 +223,10 @@ pub fn main(init: std.process.Init) !void {
 
     const server_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" });
     defer allocator.free(server_path);
+
+    // let the native TUI's page builders open the on-disk repos for the file tree
+    session.io = io;
+    session.repos_dir = try std.fs.path.join(session_arena.allocator(), &.{ server_path, "repos" });
 
     if (cli) {
         var stdout_writer = std.Io.File.stdout().writer(io, &.{});

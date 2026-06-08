@@ -1,0 +1,216 @@
+const std = @import("std");
+const evt = @import("../../event.zig");
+const ui = @import("../../ui.zig");
+const xit = @import("xit");
+const rp = xit.repo;
+const xitui = xit.xitui;
+const wgt = xitui.widget;
+const layout = xitui.layout;
+const inp = xitui.input;
+const Grid = xitui.grid.Grid;
+const Focus = xitui.focus.Focus;
+
+// one entry in the directory currently being viewed.
+pub const Entry = struct {
+    name: []const u8,
+    is_dir: bool,
+};
+
+// "owner/name", so the view can build /repo/owner/name/files/... links.
+identity: []const u8,
+// the directory being viewed, relative to the repo root ("" at the root).
+dir: []const u8,
+entries: []const Entry,
+
+const Self = @This();
+
+pub fn init(
+    arena: *std.heap.ArenaAllocator,
+    session: *ui.Session,
+    event_id: *const [evt.event_id_size]u8,
+    identity: []const u8,
+    dir: []const u8,
+) !Self {
+    const aa = arena.allocator();
+    const empty: Self = .{ .identity = try aa.dupe(u8, identity), .dir = try aa.dupe(u8, dir), .entries = &.{} };
+
+    // no filesystem (wasm) or nowhere to look: empty listing. the wasm path
+    // never calls init anyway — it rebuilds from the serialized snapshot.
+    const io = session.io orelse return empty;
+    const repos_dir = session.repos_dir orelse return empty;
+
+    // the repo's working copy lives at <repos_dir>/<hex event id>.
+    const hex = std.fmt.bytesToHex(event_id.*, .lower);
+    const repo_path = try std.fs.path.join(aa, &.{ repos_dir, &hex });
+
+    // open + read the committed file list with the arena's backing allocator
+    // (transient; freed before init returns); the listing is built into the
+    // page arena so it outlives them.
+    const gpa = arena.child_allocator;
+    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return empty;
+    defer repo.deinit(io, gpa);
+    var status = repo.status(io, gpa) catch return empty;
+    defer status.deinit(gpa);
+
+    // collect the immediate children of `dir`. each committed path is a full
+    // file path; a child is a directory when more path follows its first
+    // segment under `dir`.
+    var children: std.StringArrayHashMapUnmanaged(bool) = .empty; // name -> is_dir
+    defer children.deinit(gpa);
+    const prefix_len = if (dir.len == 0) 0 else dir.len + 1; // skip "dir/"
+    for (status.head_tree.entries.keys()) |path| {
+        if (dir.len != 0) {
+            if (!std.mem.startsWith(u8, path, dir) or path.len <= dir.len or path[dir.len] != '/') continue;
+        }
+        const rel = path[prefix_len..];
+        const slash = std.mem.indexOfScalar(u8, rel, '/');
+        const name = if (slash) |s| rel[0..s] else rel;
+        const is_dir = slash != null;
+        const gop = try children.getOrPut(gpa, name);
+        if (!gop.found_existing) gop.value_ptr.* = is_dir else if (is_dir) gop.value_ptr.* = true;
+    }
+
+    // sort directories first, then alphabetically, and dupe into the page arena.
+    const Pair = struct { name: []const u8, is_dir: bool };
+    var pairs = try gpa.alloc(Pair, children.count());
+    defer gpa.free(pairs);
+    for (children.keys(), children.values(), 0..) |name, is_dir, i| pairs[i] = .{ .name = name, .is_dir = is_dir };
+    std.mem.sort(Pair, pairs, {}, struct {
+        fn lessThan(_: void, a: Pair, b: Pair) bool {
+            if (a.is_dir != b.is_dir) return a.is_dir;
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.lessThan);
+
+    const entries = try aa.alloc(Entry, pairs.len);
+    for (pairs, 0..) |pair, i| entries[i] = .{ .name = try aa.dupe(u8, pair.name), .is_dir = pair.is_dir };
+
+    return .{ .identity = empty.identity, .dir = empty.dir, .entries = entries };
+}
+
+pub const View = struct {
+    // a vertical list: one focusable row per entry. each subdirectory row is an
+    // `a:` link to its /repo/.../files/<path> route, so following it (click or
+    // Enter) navigates through the host's link handling, like the Users/Repos
+    // lists. files are unlinked. a ".." row at the top links to the parent.
+    scroll: wgt.Scroll(ui.Widget), // wraps a vertical Box of rows
+    data: *const Self,
+
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+        var box = wgt.Box(ui.Widget).init(.{ .border_style = null, .direction = .vert });
+        errdefer box.deinit(allocator);
+
+        // labels and link kinds are borrowed by the rows, so they live in the
+        // page arena (as long as this page's widget tree).
+        const aa = session.page_arena.allocator();
+        if (data.dir.len != 0) {
+            try addRow(allocator, &box, "..", try dirLink(session.page_arena, data.identity, parentDir(data.dir)));
+        }
+        for (data.entries) |entry| {
+            const label = if (entry.is_dir) try std.fmt.allocPrint(aa, "{s}/", .{entry.name}) else entry.name;
+            const link = if (entry.is_dir) try dirLink(session.page_arena, data.identity, try childDir(aa, data.dir, entry.name)) else "";
+            try addRow(allocator, &box, label, link);
+        }
+        if (box.children.count() > 0) box.getFocus().child_id = box.children.keys()[0];
+
+        var scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = box }, .vert);
+        errdefer scroll.deinit(allocator);
+        return .{ .scroll = scroll, .data = data };
+    }
+
+    fn addRow(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, link: []const u8) !void {
+        var row = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
+        errdefer row.deinit(allocator);
+        row.getFocus().focusable = true;
+        if (link.len != 0) row.getFocus().kind = .{ .custom = link };
+        try box.children.put(allocator, row.getFocus().id, .{ .widget = .{ .text_box = row }, .rect = null, .min_size = null });
+    }
+
+    pub fn deinit(self: *View, allocator: std.mem.Allocator) void {
+        self.scroll.deinit(allocator);
+    }
+
+    fn innerBox(self: *View) *wgt.Box(ui.Widget) {
+        return &self.scroll.child.box;
+    }
+
+    pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+        // the selected row shows a border (the focused TextBox upgrades it to a
+        // double border itself); the rest stay borderless.
+        const box = self.innerBox();
+        for (box.children.keys(), box.children.values()) |id, *child| {
+            switch (child.widget) {
+                .text_box => |*tb| tb.options.border_style = if (box.getFocus().child_id == id) .single else .hidden,
+                else => {},
+            }
+        }
+        // clear the incoming min_size so rows size to their content rather than
+        // stretching to fill the page height; max_size still bounds the scroll
+        // viewport so a long listing clips and scrolls.
+        try self.scroll.build(allocator, .{
+            .min_size = .{ .width = null, .height = null },
+            .max_size = constraint.max_size,
+        }, root_focus);
+    }
+
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        _ = allocator;
+        // up/down move the selection. Enter and clicks on a link row are turned
+        // into navigation by the host (crossPageLink); the ".." row and the
+        // browser Back button (or Escape on the TUI) handle ascending.
+        switch (key) {
+            .arrow_down => try self.moveSelection(root_focus, 1),
+            .arrow_up => try self.moveSelection(root_focus, -1),
+            else => {},
+        }
+    }
+
+    fn moveSelection(self: *View, root_focus: *Focus, delta: isize) !void {
+        const box = self.innerBox();
+        const keys = box.children.keys();
+        const cur_id = box.getFocus().child_id orelse return;
+        const cur = box.children.getIndex(cur_id) orelse return;
+        if (delta < 0 and cur == 0) return;
+        if (delta > 0 and cur + 1 >= keys.len) return;
+        const next = if (delta < 0) cur - 1 else cur + 1;
+        try root_focus.setFocus(keys[next]);
+        if (box.children.values()[next].rect) |rect| self.scroll.scrollToRect(rect);
+    }
+
+    pub fn clearGrid(self: *View) void {
+        self.scroll.clearGrid();
+    }
+
+    pub fn getGrid(self: View) ?Grid {
+        return self.scroll.getGrid();
+    }
+
+    pub fn getFocus(self: *View) *Focus {
+        return self.scroll.getFocus();
+    }
+
+    pub fn getSelectedIndex(self: View) ?usize {
+        const box = &self.scroll.child.box;
+        const child_id = box.focus.child_id orelse return null;
+        return box.children.getIndex(child_id);
+    }
+};
+
+// the "a:" link for the files route at `dir` within `identity` ("owner/name").
+fn dirLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, dir: []const u8) ![]const u8 {
+    const route = ui.RoutablePage.repoFilesRoute(identity, dir) orelse return error.RouteTooLong;
+    const url = try route.urlAlloc(page_arena);
+    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+}
+
+// `dir`/`name`, or just `name` at the root.
+fn childDir(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
+    return if (dir.len == 0) name else std.fmt.allocPrint(arena, "{s}/{s}", .{ dir, name });
+}
+
+// `dir` with its last segment removed ("" when `dir` has a single segment).
+fn parentDir(dir: []const u8) []const u8 {
+    const slash = std.mem.lastIndexOfScalar(u8, dir, '/') orelse return "";
+    return dir[0..slash];
+}
