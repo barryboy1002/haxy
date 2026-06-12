@@ -467,8 +467,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session) !void {
         // there may be an animation that requires more looping.
         var blocking = !grid_changed;
         while (try terminal.readKey(io, blocking)) |key| {
-            try inputKey(allocator, &nav.root, key, session);
             blocking = false;
+            try inputKey(allocator, &nav.root, key, session);
         }
 
         // local run has no repo to persist to, so just apply in-memory
