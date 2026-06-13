@@ -365,10 +365,8 @@ fn fingerprintOfAuthorizedKey(line: []const u8) ?[ssh.fingerprint_len]u8 {
 // write an error to the client's stderr and exit non-zero. stderr (not stdout)
 // because the git exec sessions that call this carry the pack protocol on
 // stdout, where stray text breaks the client's pkt-line parser.
-fn writeError(sess: *ssh.SessionCtx, msg: []const u8) !void {
-    var buf: [256]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buf, "haxy ssh: {s}\n", .{msg});
-    try sess.writeStderr(text);
+fn writeError(sess: *ssh.SessionCtx, comptime msg: []const u8) !void {
+    try sess.writeStderr("haxy ssh: " ++ msg ++ "\n");
     try sess.exit(1);
 }
 
