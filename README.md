@@ -50,7 +50,7 @@ zig build try
 
 This will launch a server with fake data that it stores in the `temp-try` directory. It will then launch the TUI directly in your terminal (you can exit by pressing escape).
 
-Additionally, you can view the web UI at http://localhost:8000 and push a git repo to http://localhost:8080 like this:
+Additionally, you can view the web UI at http://localhost:8000 and push a git repo over SSH like this:
 
 ```
 mkdir -p temp-try/client/test
@@ -59,10 +59,9 @@ git init
 echo "hello" > hello.txt
 git add hello.txt
 git commit -m "let there be light"
-git remote add origin http://localhost:8080/admin/test
-git push origin HEAD:master
+GIT_SSH_COMMAND='ssh -p 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i ../../key' git push localhost:admin/test HEAD:master
 ```
 
-After that, the repo will be in `temp-try/server/repos` at a directory named by its repo id.
+After that, the repo will be in `temp-try/server/repos` in a directory named by its repo id.
 
 *"C'mon Alex! You always dreamt about going on a big adventure! Let this be our first!" -- Lunar: Silver Star Story*

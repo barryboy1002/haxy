@@ -99,6 +99,7 @@ pub fn run(
         .admin_repo_path = admin_repo_path,
         .repo_root_path = repo_root_path,
         .is_test = options.is_test,
+        .err = err,
     };
     serve_ssh.runListener(io, allocator, &host_key, &ssh_session_handler, &ssh_server, &tasks, err);
 

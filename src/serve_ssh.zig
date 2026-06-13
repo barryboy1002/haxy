@@ -16,9 +16,10 @@ pub const SessionHandler = struct {
     // test mode serves repos directly by path instead of resolving them as
     // <owner>/<repo> through the event store
     is_test: bool,
+    err: *std.Io.Writer,
 
     pub fn handleSession(self: *const SessionHandler, sess: *ssh.SessionCtx, request: ssh.Request) !void {
-        std.debug.print("ssh session: kind={s} key={s}\n", .{ @tagName(request), sess.fingerprint });
+        serve_common.logError(self.err, "ssh session: kind={s} key={s}\n", .{ @tagName(request), sess.fingerprint });
         switch (request) {
             .shell => |pty_maybe| {
                 const pty = pty_maybe orelse {
@@ -89,7 +90,7 @@ fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh
     // runs as the function unwinds — so any error it returns leaves the TUI torn
     // down and we can surface the failure on the restored screen before exiting.
     runTui(handler, sess, pty) catch |err| {
-        std.debug.print("ssh tui session failed: {s}\n", .{@errorName(err)});
+        serve_common.logError(handler.err, "ssh tui session failed: {s}\n", .{@errorName(err)});
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "haxy ssh: {s}\r\n", .{@errorName(err)}) catch "haxy ssh: internal error\r\n";
         sess.writeBytes(msg) catch {};
@@ -214,6 +215,14 @@ fn runGitSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, command:
     const create_if_missing = parsed.service == .receive_pack;
     const any_repo_opts: rp.AnyRepoOpts(.xit) = .{};
 
+    // authenticate pushes: the authenticated key must be registered to the
+    // repo's owner. skipped in test mode, which serves repos directly by path.
+    if (create_if_missing and !handler.is_test) {
+        const owner_repo = evt.parseOwnerRepoPath(parsed.dir) orelse return writeError(sess, "repo path must be <owner>/<repo>");
+        if (!try isKeyAuthorized(io, allocator, handler.admin_repo_path, owner_repo.owner, &sess.fingerprint))
+            return writeError(sess, "unauthorized: this SSH key is not registered to the repo owner");
+    }
+
     const repo_path = switch (try serve_common.resolveRepoPath(io, allocator, handler.is_test, handler.repo_root_path, handler.admin_repo_path, parsed.dir, create_if_missing)) {
         .ok => |p| p,
         .invalid => return writeError(sess, "repo path must be <owner>/<repo>"),
@@ -314,6 +323,43 @@ fn parseGitCommand(allocator: std.mem.Allocator, command: []const u8) !ParsedGit
             return error.UnsupportedService;
 
     return .{ .service = service, .dir = try allocator.dupe(u8, dir_token) };
+}
+
+// true if `fingerprint` matches one of the named user's registered SSH keys
+fn isKeyAuthorized(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    admin_repo_path: []const u8,
+    owner_name: []const u8,
+    fingerprint: *const [ssh.fingerprint_len]u8,
+) !bool {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const user = (try evt.User.readByName(io, allocator, admin_repo_path, &arena, owner_name)) orelse return false;
+
+    var it = std.mem.splitScalar(u8, user.ssh_keys, '\n');
+    while (it.next()) |line| {
+        const fp = fingerprintOfAuthorizedKey(line) orelse continue;
+        if (std.mem.eql(u8, &fp, fingerprint)) return true;
+    }
+    return false;
+}
+
+// the SHA256 fingerprint of one authorized_keys line, or null if the line is
+// blank or not a parseable "<type> <base64> [comment]" entry
+fn fingerprintOfAuthorizedKey(line: []const u8) ?[ssh.fingerprint_len]u8 {
+    var it = std.mem.tokenizeAny(u8, line, " \t\r");
+    _ = it.next() orelse return null; // key type
+    const blob_b64 = it.next() orelse return null;
+
+    const decoder = std.base64.standard.Decoder;
+    const blob_len = decoder.calcSizeForSlice(blob_b64) catch return null;
+    var blob_buf: [4096]u8 = undefined;
+    if (blob_len > blob_buf.len) return null;
+    decoder.decode(blob_buf[0..blob_len], blob_b64) catch return null;
+
+    return ssh.formatFingerprint(blob_buf[0..blob_len]);
 }
 
 // write an error to the client and exit non-zero

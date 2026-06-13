@@ -145,6 +145,32 @@ pub fn readById(
     return try evt.read(@This(), DB, hash_kind, arena, user_map);
 }
 
+// read a user by name from the admin event store, or null if the admin repo or
+// the user doesn't exist. field byte slices are allocated in `arena`.
+pub fn readByName(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    admin_repo_path: []const u8,
+    arena: *std.heap.ArenaAllocator,
+    name: []const u8,
+) !?Self {
+    var repo = rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path }) catch |err| switch (err) {
+        error.RepoNotFound => return null,
+        else => |e| return e,
+    };
+    defer repo.deinit(io, allocator);
+
+    const moment = try evt.currentMoment(evt.admin_repo_opts, &repo);
+
+    const name_to_user_id_cursor = try moment.getCursor(hash.hashInt(evt.admin_repo_opts.hash, "name->user-id")) orelse return null;
+    const name_to_user_id = try evt.AdminDB.HashMap(.read_only).init(name_to_user_id_cursor);
+    const user_id_cursor = try name_to_user_id.getCursor(hash.hashInt(evt.admin_repo_opts.hash, name)) orelse return null;
+    var user_id: [evt.event_id_size]u8 = undefined;
+    _ = try user_id_cursor.readBytes(&user_id);
+
+    return try readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, &user_id);
+}
+
 // flip a user's ANSI-art preference by re-emitting their User event with
 // enable_ansi negated. a no-op for an unknown user. `repo` must be writable.
 pub fn toggleAnsi(

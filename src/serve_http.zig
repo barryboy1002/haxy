@@ -116,6 +116,17 @@ fn handleGitRequest(
     const has_remote_user = findHeader(request, "authorization") != null;
     const protocol_version = protocolVersionFromHeader(findHeader(request, "git-protocol"));
 
+    const create_if_missing = isReceivePack(handler, suffix, uri.query);
+
+    // pushing over HTTP is disabled outside test mode; pushes go over SSH
+    if (create_if_missing and !is_test) {
+        if (http_server.reader.state == .received_head) {
+            http_server.reader.state = .ready;
+        }
+        try writeSimpleResponse(http_server, 403, "Forbidden", "text/plain", "push over HTTP is disabled");
+        return;
+    }
+
     const body = if (request.head.method == .POST) blk: {
         const reader = try request.readerExpectContinue(&.{});
         break :blk try reader.allocRemaining(allocator, .unlimited);
@@ -125,8 +136,6 @@ fn handleGitRequest(
     if (http_server.reader.state == .received_head) {
         http_server.reader.state = .ready;
     }
-
-    const create_if_missing = isReceivePack(handler, suffix, uri.query);
 
     const repo_path = switch (try serve_common.resolveRepoPath(io, allocator, is_test, repo_root_path, admin_repo_path, repo_rel, create_if_missing)) {
         .ok => |p| p,
