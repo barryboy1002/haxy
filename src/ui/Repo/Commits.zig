@@ -437,6 +437,18 @@ pub const View = struct {
         }
 
         try self.box.build(allocator, constraint, root_focus);
+
+        // if the diff pane is selected but focus is still elsewhere in this view,
+        // the pane was too narrow to lay out when focus crossed over. it's laid
+        // out now, so focus its hunk.
+        if (self.diffActive() and inner.children.count() > 0) {
+            if (root_focus.grandchild_id) |g| {
+                const in_view = self.box.getFocus().children.contains(g);
+                const in_diff = inner.children.contains(g);
+                if (in_view and !in_diff)
+                    try root_focus.setFocus(inner.getFocus().child_id orelse inner.children.keys()[0]);
+            }
+        }
     }
 
     fn refreshDiff(self: *View, allocator: std.mem.Allocator) !void {
@@ -609,7 +621,13 @@ pub const View = struct {
     fn focusDiff(self: *View, root_focus: *Focus) !void {
         const inner = self.diffInner();
         if (inner.children.count() == 0) return;
-        try root_focus.setFocus(inner.getFocus().child_id orelse inner.children.keys()[0]);
+        const target = inner.getFocus().child_id orelse inner.children.keys()[0];
+        try root_focus.setFocus(target);
+        if (root_focus.grandchild_id == target) return;
+        // the diff pane wasn't laid out last build (too narrow to show beside
+        // the list), so its hunks aren't in the focus tree yet. select the pane
+        // at the box level, and the hunk will be focused after the next build.
+        self.box.getFocus().child_id = self.diffOuter().getFocus().id;
     }
 
     fn focusList(self: *View, root_focus: *Focus) !void {
