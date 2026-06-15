@@ -239,6 +239,13 @@ pub fn main(init: std.process.Init) !void {
             // hunks to look at. stepped timestamps vary the date column.
             const base_ts: u64 = 1_700_000_000; // 2023-11-14
             const edit_files = [_][]const u8{ "src/alpha.txt", "src/beta.txt", "src/gamma.txt" };
+            // cycled through to pad each line into prose-like content.
+            const words = [_][]const u8{
+                "lorem",  "ipsum",  "dolor",   "sit",     "amet",    "consectetur",
+                "quantum", "vector", "matrix",  "buffer",  "kernel",  "socket",
+                "falcon",  "otter",  "badger",  "walrus",  "ferret",  "marmot",
+                "scatter", "gather", "encode",  "decode",  "render",  "commit",
+            };
             var c: usize = 0;
             while (c < 30) : (c += 1) {
                 {
@@ -253,12 +260,24 @@ pub fn main(init: std.process.Init) !void {
                         // every 8th line (offset per file) encodes the commit
                         // number; the rest stay constant. the changed lines sit
                         // far enough apart that diff renders each as its own hunk.
+                        // each line is padded with cycled words to a per-line
+                        // length, capped at 120 characters.
                         for (0..40) |line| {
+                            const start = writer.written().len;
                             if ((line + fi) % 8 == 0) {
-                                try writer.writer.print("line {d}: rev {d}\n", .{ line, c });
+                                try writer.writer.print("line {d}: rev {d}", .{ line, c });
                             } else {
-                                try writer.writer.print("line {d}\n", .{line});
+                                try writer.writer.print("line {d}", .{line});
                             }
+                            const target = 40 + (line * 17 + fi * 23) % 70;
+                            var w = line + fi;
+                            while (true) : (w += 1) {
+                                const word = words[w % words.len];
+                                const len = writer.written().len - start;
+                                if (len >= target or len + 1 + word.len > 120) break;
+                                try writer.writer.print(" {s}", .{word});
+                            }
+                            try writer.writer.writeByte('\n');
                         }
                         try file.writeStreamingAll(io, writer.written());
                     }
