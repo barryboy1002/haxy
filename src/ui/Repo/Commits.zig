@@ -414,6 +414,18 @@ pub const View = struct {
         // swap the diff pane to the selected commit when it changes.
         try self.refreshDiff(allocator);
 
+        // mirror the focused commit into the url so it updates as the selection
+        // moves, but only while focus is inside this view (the list or diff). when
+        // focus sits on the header tab, use the page's base /commits route.
+        if (root_focus.grandchild_id) |g| {
+            if (self.box.getFocus().children.contains(g)) {
+                if (self.selectedCommitIndex()) |sel| {
+                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, self.data.commits[sel].oid)) |route|
+                        self.session.data.current_page = route;
+                }
+            }
+        }
+
         // the selected list row shows a border (the focused TextBox upgrades it
         // to a double border itself); the rest stay borderless.
         const lb = self.listBox();
