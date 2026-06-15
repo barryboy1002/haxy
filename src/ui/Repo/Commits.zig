@@ -436,7 +436,13 @@ pub const View = struct {
             }
         }
 
-        try self.box.build(allocator, constraint, root_focus);
+        // web browsers provide scrolling, so let every widget grow to
+        // its natural size instead of clipping inside the diff scroll
+        const build_constraint = if (self.session.is_terminal) constraint else layout.Constraint{
+            .min_size = .{ .width = null, .height = null },
+            .max_size = .{ .width = null, .height = null },
+        };
+        try self.box.build(allocator, build_constraint, root_focus);
 
         // if the diff pane is selected but focus is still elsewhere in this view,
         // the pane was too narrow to lay out when focus crossed over. it's laid
