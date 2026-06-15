@@ -291,6 +291,9 @@ pub fn main(init: std.process.Init) !void {
         break :blk try ui.Session.init(&session_arena, &repo, .{});
     };
     session.is_terminal = true;
+    // try uses the default serve options below, so the footer's url points at
+    // the default web UI port.
+    session.web_port = try (srv.Options{}).wuiPort();
 
     // start the server
 

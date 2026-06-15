@@ -11,6 +11,11 @@ pub const Options = struct {
     ssh_listen: []const u8 = "127.0.0.1:8022",
     wui_listen: []const u8 = "127.0.0.1:8000",
     data_dir: []const u8 = ".",
+
+    // the port from `wui_listen`, for the TUI footer's url.
+    pub fn wuiPort(self: Options) !u16 {
+        return (try parseListenAddress(self.wui_listen)).port;
+    }
 };
 
 const ListenAddress = struct {
@@ -94,6 +99,7 @@ pub fn run(
     const ssh_session_handler = serve_ssh.SessionHandler{
         .admin_repo_path = admin_repo_path,
         .repo_root_path = repo_root_path,
+        .wui_port = wui_listen_address.port,
         .err = err,
     };
     serve_ssh.runListener(io, allocator, &host_key, &ssh_session_handler, &ssh_server, &tasks, err);

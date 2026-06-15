@@ -353,6 +353,9 @@ pub const Session = struct {
     // does not navigate.
     next_page: ?RoutablePage = null,
     is_terminal: bool = false, // true on remote SSH and local TUI
+    // port the web UI is served on, for the TUI/SSH footer's "http://localhost:<port>..."
+    // url. null on the web itself (no footer there).
+    web_port: ?u16 = null,
     quit_requested: bool = false,
 
     const Self = @This();
@@ -706,7 +709,25 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
 
     const demon_art = @embedFile("embed/demon.ans");
 
-    var root = Widget{ .background = try AnsiBackground.init(allocator, page_widget, demon_art, session) };
+    // on the TUI/SSH, the page sits above a one-row footer showing the url
+    var root = if (session.is_terminal) blk: {
+        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        errdefer box.deinit(allocator);
+        const bg_id = bg_blk: {
+            var background = try AnsiBackground.init(allocator, page_widget, demon_art, session);
+            errdefer background.deinit(allocator);
+            const id = background.getFocus().id;
+            try box.children.put(allocator, id, .{ .widget = .{ .background = background }, .rect = null, .min_size = null });
+            break :bg_blk id;
+        };
+        {
+            var footer = try Footer.init(allocator, session);
+            errdefer footer.deinit(allocator);
+            try box.children.put(allocator, footer.getFocus().id, .{ .widget = .{ .footer = footer }, .rect = null, .min_size = .{ .width = null, .height = 1 } });
+        }
+        box.getFocus().child_id = bg_id;
+        break :blk Widget{ .box = box };
+    } else Widget{ .background = try AnsiBackground.init(allocator, page_widget, demon_art, session) };
     errdefer root.deinit(allocator);
 
     // input-owning views build their TextInputs in init — so reset the
@@ -752,6 +773,7 @@ pub const Widget = union(enum) {
     auth_tab: Home.Header.AuthTab.View,
     home_settings: Home.Settings.View,
     home_auth: Home.Auth.View,
+    footer: Footer,
 
     pub fn deinit(self: *Widget, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -1111,6 +1133,77 @@ pub const Spacer = struct {
     }
 
     pub fn getFocus(self: *Spacer) *Focus {
+        return self.focus;
+    }
+};
+
+// a one-row, non-focusable status bar showing the current page's url
+pub const Footer = struct {
+    focus: *Focus,
+    grid: ?Grid,
+    session: *Session,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(allocator: std.mem.Allocator, session: *Session) !Footer {
+        return .{
+            .focus = try Focus.create(allocator, .container),
+            .grid = null,
+            .session = session,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Footer, allocator: std.mem.Allocator) void {
+        self.focus.destroy(allocator);
+        if (self.grid) |*grid| grid.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn build(self: *Footer, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        _ = root_focus;
+        self.clearGrid();
+        const width = constraint.max_size.width orelse return;
+        if (width == 0) return;
+
+        _ = self.arena.reset(.retain_capacity);
+        const aa = self.arena.allocator();
+        const path = self.session.data.current_page.urlAlloc(&self.arena) catch return;
+        const text = if (self.session.web_port) |port|
+            std.fmt.allocPrint(aa, "http://localhost:{d}{s}", .{ port, path }) catch return
+        else
+            path;
+
+        var grid = try Grid.init(allocator, .{ .width = width, .height = 1 });
+        errdefer grid.deinit();
+        var utf8 = (std.unicode.Utf8View.init(text) catch return).iterator();
+        var i: usize = 0;
+        while (utf8.nextCodepointSlice()) |ch| {
+            if (i == width) break;
+            grid.cells.items[try grid.cells.at(.{ 0, i })].rune = ch;
+            i += 1;
+        }
+        self.grid = grid;
+    }
+
+    pub fn input(self: *Footer, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        _ = self;
+        _ = allocator;
+        _ = key;
+        _ = root_focus;
+    }
+
+    pub fn clearGrid(self: *Footer) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+    }
+
+    pub fn getGrid(self: Footer) ?Grid {
+        return self.grid;
+    }
+
+    pub fn getFocus(self: *Footer) *Focus {
         return self.focus;
     }
 };

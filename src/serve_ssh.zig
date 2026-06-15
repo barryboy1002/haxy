@@ -13,6 +13,7 @@ const serve_common = @import("./serve_common.zig");
 pub const SessionHandler = struct {
     admin_repo_path: []const u8,
     repo_root_path: []const u8,
+    wui_port: u16, // port the web UI is served on, shown in the TUI footer's url
     err: *std.Io.Writer,
 
     pub fn handleSession(self: *const SessionHandler, sess: *ssh.SessionCtx, request: ssh.Request) !void {
@@ -118,6 +119,7 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     defer repo.deinit(io, allocator);
     var ui_session = try ui.Session.init(&session_arena, &repo, .{});
     ui_session.is_terminal = true;
+    ui_session.web_port = handler.wui_port;
     // let page builders open on-disk repos (sibling "repos" dir of the admin repo)
     ui_session.io = io;
     ui_session.repos_dir = try std.fs.path.join(session_arena.allocator(), &.{ std.fs.path.dirname(handler.admin_repo_path) orelse ".", "repos" });
