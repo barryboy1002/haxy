@@ -603,13 +603,17 @@ pub const View = struct {
         return root_focus.grandchild_id == id;
     }
 
-    // keep the diff scroll within its content, using the last build's grids.
+    // keep the diff scroll within its content, using the last build's grids. the
+    // scroll bar's reserved column/row isn't part of the content viewport, so
+    // exclude it (as scrollToRect does) or the last column/row stays unreachable.
     fn clampDiffScroll(self: *View) void {
         const sc = self.diffScroll();
         const vp = sc.grid orelse return;
         const content = sc.child.box.grid orelse return;
-        const max_y: isize = if (content.size.height > vp.size.height) @intCast(content.size.height - vp.size.height) else 0;
-        const max_x: isize = if (content.size.width > vp.size.width) @intCast(content.size.width - vp.size.width) else 0;
+        const view_w = vp.size.width - sc.bar_w;
+        const view_h = vp.size.height - sc.bar_h;
+        const max_y: isize = if (content.size.height > view_h) @intCast(content.size.height - view_h) else 0;
+        const max_x: isize = if (content.size.width > view_w) @intCast(content.size.width - view_w) else 0;
         sc.y = std.math.clamp(sc.y, 0, max_y);
         sc.x = std.math.clamp(sc.x, 0, max_x);
     }
