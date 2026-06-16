@@ -48,7 +48,8 @@ pub fn consume(
 
         // if this event_id already maps to a user with a different name,
         // drop the stale name->id entry first
-        if (try event_id_to_user.getCursor(user_key)) |existing_cursor| {
+        const existing_cursor_maybe = try event_id_to_user.getCursor(user_key);
+        if (existing_cursor_maybe) |existing_cursor| {
             const existing_user = try DB.HashMap(.read_only).init(existing_cursor);
             const existing_event = try evt.read(@This(), DB, hash_kind, arena, existing_user);
             if (!std.mem.eql(u8, existing_event.name, event.name)) {
@@ -61,6 +62,14 @@ pub fn consume(
         try evt.upsert(@This(), DB, hash_kind, user, event);
 
         try name_to_user_id.put(hash.hashInt(hash_kind, event.name), .{ .bytes = event_id });
+
+        // first time we've seen this user: append its id to the ordered list
+        // the users view paginates through (a delete leaves a tombstone here).
+        if (existing_cursor_maybe == null) {
+            const user_list_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-list"));
+            const user_list = try DB.ArrayList(.read_write).init(user_list_cursor);
+            try user_list.append(.{ .bytes = event_id });
+        }
     } else {
         // read the user's name so we can drop its name->id index entry
         if (try event_id_to_user.getCursor(user_key)) |existing_cursor| {

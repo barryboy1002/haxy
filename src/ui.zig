@@ -30,7 +30,13 @@ pub const Page = union(PageKind) {
     pub fn init(arena: *std.heap.ArenaAllocator, session: *Session, route: RoutablePage) !Page {
         const haxy_moment = session.haxy_moment orelse return error.NoMoment;
         return switch (route.parent()) {
-            .home => .{ .home = try Home.init(arena, haxy_moment) },
+            .home => .{ .home = try Home.init(arena, haxy_moment, switch (route) {
+                .home_users => |after| after,
+                else => 0,
+            }, switch (route) {
+                .home_repos => |after| after,
+                else => 0,
+            }) },
             .user => switch (route) {
                 .user, .user_settings, .user_auth => |name| .{ .user = try User.init(arena, haxy_moment, name) },
                 else => return error.UnexpectedRoute,
@@ -55,8 +61,8 @@ pub const Snapshot = struct {
 // .user parent page, so switching between them stays on that page (and just
 // updates the url) rather than navigating away.
 pub const RoutablePage = union(enum) {
-    home_users,
-    home_repos,
+    home_users: usize, // 0 = first page
+    home_repos: usize, // 0 = first page
     home_settings,
     home_auth,
     user: Array(evt.User.name_max_len),
@@ -67,7 +73,7 @@ pub const RoutablePage = union(enum) {
     repo_settings: Array(repo_route_max_len),
     repo_auth: Array(repo_route_max_len),
 
-    pub const default: RoutablePage = .home_users;
+    pub const default: RoutablePage = .{ .home_users = 0 };
 
     const user_segment = "/user/";
     const repo_segment = "/repo/";
@@ -166,6 +172,8 @@ pub const RoutablePage = union(enum) {
 
     pub fn urlAlloc(self: RoutablePage, arena: *std.heap.ArenaAllocator) ![]const u8 {
         return switch (self) {
+            .home_users => |after| if (after == 0) @as([]const u8, "/users") else try std.fmt.allocPrint(arena.allocator(), "/users?after={d}", .{after}),
+            .home_repos => |after| if (after == 0) @as([]const u8, "/repos") else try std.fmt.allocPrint(arena.allocator(), "/repos?after={d}", .{after}),
             .user => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}", .{name.slice()}),
             .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name.slice()}),
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
@@ -192,8 +200,8 @@ pub const RoutablePage = union(enum) {
     pub fn fromUrl(path: []const u8, query: ?[]const u8) ?RoutablePage {
         const after = uintParam(query, "after") orelse 0;
         if (std.mem.eql(u8, path, "/")) return default;
-        if (std.mem.eql(u8, path, "/users")) return .home_users;
-        if (std.mem.eql(u8, path, "/repos")) return .home_repos;
+        if (std.mem.eql(u8, path, "/users")) return .{ .home_users = after };
+        if (std.mem.eql(u8, path, "/repos")) return .{ .home_repos = after };
         if (std.mem.eql(u8, path, "/settings")) return .home_settings;
         if (std.mem.eql(u8, path, "/auth")) return .home_auth;
         // /user/<name>[/settings|/auth]
@@ -254,6 +262,8 @@ pub const RoutablePage = union(enum) {
     pub fn eql(a: RoutablePage, b: RoutablePage) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
         return switch (a) {
+            .home_users => |a_after| a_after == b.home_users,
+            .home_repos => |a_after| a_after == b.home_repos,
             .user => |a_name| std.mem.eql(u8, a_name.slice(), b.user.slice()),
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
@@ -298,6 +308,23 @@ pub const RoutablePage = union(enum) {
             ca.commits_after != cb.commits_after;
     }
 
+    // true when `a` and `b` are the same home list tab paginated to a different
+    // window. switching between the users/repos tabs is in-page (the home page
+    // holds both lists), so only a changed `after` on the same tab navigates.
+    pub fn homePageChanged(a: RoutablePage, b: RoutablePage) bool {
+        return switch (a) {
+            .home_users => |aa| switch (b) {
+                .home_users => |bb| aa != bb,
+                else => false,
+            },
+            .home_repos => |aa| switch (b) {
+                .home_repos => |bb| aa != bb,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
     // serialize as { "kind": <tag>, "name"?: <name>, "after"?: <n> }. the default
     // union(enum) codec doesn't round-trip here: Stringify emits a void
     // variant as a bare tag string, but the parser expects an object — so the
@@ -321,6 +348,10 @@ pub const RoutablePage = union(enum) {
                 try jw.objectField("after");
                 try jw.write(c.after);
             },
+            .home_users, .home_repos => |after| {
+                try jw.objectField("after");
+                try jw.write(after);
+            },
             else => {},
         }
         try jw.endObject();
@@ -337,8 +368,8 @@ pub const RoutablePage = union(enum) {
             }
         }.f;
         return switch (helper.kind) {
-            .home_users => .home_users,
-            .home_repos => .home_repos,
+            .home_users => .{ .home_users = helper.after },
+            .home_repos => .{ .home_repos = helper.after },
             .home_settings => .home_settings,
             .home_auth => .home_auth,
             .user => .{ .user = try parseName(evt.User.name_max_len, helper.name) },
@@ -594,10 +625,10 @@ pub fn crossPageLink(root_focus: *Focus, focus_id: usize, current: RoutablePage)
     const url = custom[a_prefix.len..];
     const q = std.mem.indexOfScalar(u8, url, '?');
     const route = RoutablePage.fromUrl(if (q) |i| url[0..i] else url, if (q) |i| url[i + 1 ..] else null) orelse return null;
-    // a link to a different parent page always navigates; within the repo page,
-    // a files-directory link navigates while settings/auth tab links stay
-    // in-page (header-handled).
-    if (route.parent() != current.parent() or RoutablePage.repoPageChanged(route, current)) return route;
+    // a link to a different parent page always navigates; within a page, a
+    // files-directory / commits-page / list-window change navigates while tab
+    // links stay in-page (header-handled).
+    if (route.parent() != current.parent() or RoutablePage.repoPageChanged(route, current) or RoutablePage.homePageChanged(route, current)) return route;
     return null;
 }
 

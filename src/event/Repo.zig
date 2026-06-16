@@ -37,7 +37,8 @@ pub fn consume(
 
         // if this event_id already maps to a repo under a different key (its
         // name or owner changed), drop the stale name->id entry first
-        if (try event_id_to_repo.getCursor(repo_key)) |existing_cursor| {
+        const existing_cursor_maybe = try event_id_to_repo.getCursor(repo_key);
+        if (existing_cursor_maybe) |existing_cursor| {
             const existing_repo = try DB.HashMap(.read_only).init(existing_cursor);
             const existing_event = try evt.read(@This(), DB, hash_kind, arena, existing_repo);
             const existing_path = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ existing_event.user_id, existing_event.name });
@@ -51,6 +52,14 @@ pub fn consume(
         try evt.upsert(@This(), DB, hash_kind, repo, event);
 
         try name_to_repo_id.put(hash.hashInt(hash_kind, repo_path), .{ .bytes = event_id });
+
+        // first time we've seen this repo: append its id to the ordered list
+        // the repos view paginates through (a delete leaves a tombstone here).
+        if (existing_cursor_maybe == null) {
+            const repo_list_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "repo-list"));
+            const repo_list = try DB.ArrayList(.read_write).init(repo_list_cursor);
+            try repo_list.append(.{ .bytes = event_id });
+        }
 
         const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
         const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);

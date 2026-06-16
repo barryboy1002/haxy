@@ -10,14 +10,22 @@ const inp = xitui.input;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
+// how many repos a page shows before the "load more" row appears.
+pub const page_size = 20;
+
 repos: []const evt.Repo,
 owner_names: []const []const u8,
+// the window start this page was built with, mirrored into the url.
+after: usize,
+// the `after` for the "load more" link, or null when this is the last page.
+next_after: ?usize,
 
 const Self = @This();
 
 pub fn init(
     arena: *std.heap.ArenaAllocator,
     haxy_moment: evt.AdminDB.HashMap(.read_only),
+    after: usize,
 ) !Self {
     const DB = evt.AdminDB;
     const hash_kind = evt.admin_repo_opts.hash;
@@ -25,13 +33,27 @@ pub fn init(
     var repos: std.ArrayList(evt.Repo) = .empty;
     var owner_names: std.ArrayList([]const u8) = .empty;
 
-    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return error.NotFound;
+    const empty: Self = .{ .repos = &.{}, .owner_names = &.{}, .after = after, .next_after = null };
+
+    // the ordered repo-list (oldest first); absent until the first repo exists.
+    const repo_list_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "repo-list")) orelse return empty;
+    const repo_list = try DB.ArrayList(.read_only).init(repo_list_cursor);
+    const count = try repo_list.count();
+
+    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return empty;
     const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
 
-    var repos_iter = try event_id_to_repo.iterator();
-    while (try repos_iter.next()) |kv_cursor| {
-        const kv = try kv_cursor.readKeyValuePair();
-        const repo_map = try DB.HashMap(.read_only).init(kv.value_cursor);
+    // read the window [after, after+page_size) by index — a direct O(log n)
+    // seek per entry, never scanning the whole table. ids whose repo has been
+    // deleted (tombstones) are skipped.
+    const end = @min(after + page_size, count);
+    var i = after;
+    while (i < end) : (i += 1) {
+        const id_cursor = try repo_list.getCursor(@intCast(i)) orelse continue;
+        var event_id: [evt.event_id_size]u8 = undefined;
+        _ = try id_cursor.readBytes(&event_id);
+        const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, &event_id)) orelse continue;
+        const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
         const repo_event = try evt.read(evt.Repo, DB, hash_kind, arena, repo_map);
         try repos.append(arena.allocator(), repo_event);
 
@@ -42,6 +64,8 @@ pub fn init(
     return .{
         .repos = repos.items,
         .owner_names = owner_names.items,
+        .after = after,
+        .next_after = if (end < count) end else null,
     };
 }
 
@@ -65,8 +89,10 @@ pub const View = struct {
         defer arena.deinit();
         const aa = arena.allocator();
 
-        const lines = try aa.alloc([]const u8, data.repos.len);
-        const links = try aa.alloc([]const u8, data.repos.len);
+        // one row per repo, plus a trailing "load more" row when more remain.
+        const extra: usize = if (data.next_after != null) 1 else 0;
+        const lines = try aa.alloc([]const u8, data.repos.len + extra);
+        const links = try aa.alloc([]const u8, data.repos.len + extra);
         for (data.repos, 0..) |repo, i| {
             lines[i] = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.name, repo.description });
             // clicking a repo opens its page; the "a:" prefix makes the web
@@ -74,6 +100,12 @@ pub const View = struct {
             // when the owner is unknown so it isn't a dead route.
             const owner = data.owner_names[i];
             links[i] = if (owner.len > 0) try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ owner, repo.name }) else "";
+        }
+        if (data.next_after) |next_after| {
+            // the load-more row navigates to the next window (full reload on web,
+            // Nav rebuild on the TUI), exactly like the commits "load more".
+            lines[data.repos.len] = "load more";
+            links[data.repos.len] = try std.fmt.allocPrint(aa, "a:/repos?after={d}", .{next_after});
         }
         try self.list.setItems(allocator, lines, links);
 
