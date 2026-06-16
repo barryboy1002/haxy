@@ -47,17 +47,23 @@ pub fn init(
 
     // every repo route's stored string starts with "owner/name"; the files
     // route additionally encodes a directory, the commits route a start oid.
-    const name = switch (route) {
-        .repo, .repo_commits, .repo_settings, .repo_auth => |n| n,
+    const name_str: []const u8 = switch (route) {
+        .repo, .repo_settings, .repo_auth => |n| n.slice(),
+        .repo_commits => |c| c.name.slice(),
         else => return error.UnexpectedRoute,
     };
-    const rf = ui.RoutablePage.RepoFiles.parse(name.slice()) orelse return error.NotFound;
+    const rf = ui.RoutablePage.RepoFiles.parse(name_str) orelse return error.NotFound;
     const tag = std.meta.activeTag(route);
 
     // page state lives in the route only for the tab it targets; the other tabs
     // open at their root/first page.
     const files_dir = if (tag == .repo) rf.dir else "";
-    const commits_start = if (tag == .repo_commits) ui.RoutablePage.repoCommitsStart(name.slice()) else "";
+    const commits_start = if (tag == .repo_commits) ui.RoutablePage.repoCommitsStart(name_str) else "";
+    // how many diff hunks the commits view's selected commit shows ("load more").
+    const commits_after: usize = switch (route) {
+        .repo_commits => |c| c.after,
+        else => 0,
+    };
 
     const found = (try evt.Repo.readByOwnerAndName(DB, hash_kind, haxy_moment, arena, rf.owner, rf.name)) orelse return error.NotFound;
     const repo = found.repo;
@@ -68,15 +74,15 @@ pub fn init(
 
     // each tab mirror carries this page's route for that tab; tabs not targeted
     // by the incoming route fall back to their root/first-page route.
-    const route_name = if (tag == .repo) name else (ui.RoutablePage.repoFilesRoute(rf.identity, "") orelse return error.NotFound).repo;
-    const commits_route_name = if (tag == .repo_commits) name else (ui.RoutablePage.repoCommitsRoute(rf.identity, "") orelse return error.NotFound).repo_commits;
+    const route_name = (ui.RoutablePage.repoFilesRoute(rf.identity, files_dir) orelse return error.NotFound).repo;
+    const commits_route_name = if (tag == .repo_commits) route.repo_commits.name else (ui.RoutablePage.repoCommitsRoute(rf.identity, "", 0) orelse return error.NotFound).repo_commits.name;
 
     return .{
         .header = try Header.init(arena, repo.name, owner.name),
         .repo = repo,
         // the repo's event id is the on-disk repo directory name
         .files = try Files.init(arena, session, &found.event_id, rf.identity, files_dir),
-        .commits = try Commits.init(arena, session, &found.event_id, rf.identity, commits_start),
+        .commits = try Commits.init(arena, session, &found.event_id, rf.identity, commits_start, commits_after),
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
@@ -170,7 +176,7 @@ pub const View = struct {
             switch (index) {
                 // files/commits carry this page's content route (directory / log
                 // page); settings/auth carry only "owner/name".
-                1 => self.session.data.current_page = .{ .repo_commits = self.data.commits_route_name },
+                1 => self.session.data.current_page = .{ .repo_commits = .{ .name = self.data.commits_route_name } },
                 2 => self.session.data.current_page = .{ .repo_settings = self.data.identity },
                 3 => self.session.data.current_page = .{ .repo_auth = self.data.identity },
                 // the quit tab is tty-only and not a route, so leave current_page

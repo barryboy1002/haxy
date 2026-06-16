@@ -63,7 +63,7 @@ pub const RoutablePage = union(enum) {
     user_settings: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
     repo: Array(repo_route_max_len),
-    repo_commits: Array(repo_route_max_len),
+    repo_commits: struct { name: Array(repo_route_max_len), after: usize = 0 },
     repo_settings: Array(repo_route_max_len),
     repo_auth: Array(repo_route_max_len),
 
@@ -123,13 +123,13 @@ pub const RoutablePage = union(enum) {
     // build a `.repo_commits` route for "owner/name" (identity) at `start_oid`
     // ("" = the first page). always carries the `commits` marker so page 1
     // ("owner/name/commits") doesn't collide with the files root.
-    pub fn repoCommitsRoute(identity: []const u8, start_oid: []const u8) ?RoutablePage {
+    pub fn repoCommitsRoute(identity: []const u8, start_oid: []const u8, after: usize) ?RoutablePage {
         var buf: [repo_route_max_len]u8 = undefined;
         const s = if (start_oid.len == 0)
             std.fmt.bufPrint(&buf, "{s}/" ++ commits_seg, .{identity}) catch return null
         else
             std.fmt.bufPrint(&buf, "{s}/" ++ commits_seg ++ "/{s}", .{ identity, start_oid }) catch return null;
-        return .{ .repo_commits = Array(repo_route_max_len).from(s) orelse return null };
+        return .{ .repo_commits = .{ .name = Array(repo_route_max_len).from(s) orelse return null, .after = after } };
     }
 
     // an inline, owned array of data. keeping it in the route (rather than a
@@ -170,8 +170,10 @@ pub const RoutablePage = union(enum) {
             .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name.slice()}),
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
             .repo => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{name.slice()}),
-            // the stored string already carries the "commits[/oid]" suffix.
-            .repo_commits => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{name.slice()}),
+            .repo_commits => |c| if (c.after == 0)
+                try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{c.name.slice()})
+            else
+                try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}?after={d}", .{ c.name.slice(), c.after }),
             .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/settings", .{name.slice()}),
             .repo_auth => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/auth", .{name.slice()}),
             inline else => |_, tag| url(tag),
@@ -186,7 +188,9 @@ pub const RoutablePage = union(enum) {
         };
     }
 
-    pub fn fromUrl(path: []const u8) ?RoutablePage {
+    // parse a path plus its raw query string
+    pub fn fromUrl(path: []const u8, query: ?[]const u8) ?RoutablePage {
+        const after = uintParam(query, "after") orelse 0;
         if (std.mem.eql(u8, path, "/")) return default;
         if (std.mem.eql(u8, path, "/users")) return .home_users;
         if (std.mem.eql(u8, path, "/repos")) return .home_repos;
@@ -226,11 +230,23 @@ pub const RoutablePage = union(enum) {
                 if (std.mem.eql(u8, sub, "auth")) return .{ .repo_auth = Array(repo_route_max_len).from(pair) orelse return null };
                 if (std.mem.eql(u8, sub, files_seg)) return repoFilesRoute(pair, ""); // trailing /files == root
                 if (std.mem.startsWith(u8, sub, files_seg ++ "/")) return repoFilesRoute(pair, sub[files_seg.len + 1 ..]);
-                if (std.mem.eql(u8, sub, commits_seg)) return repoCommitsRoute(pair, ""); // trailing /commits == page 1
-                if (std.mem.startsWith(u8, sub, commits_seg ++ "/")) return repoCommitsRoute(pair, sub[commits_seg.len + 1 ..]);
+                if (std.mem.eql(u8, sub, commits_seg)) return repoCommitsRoute(pair, "", after); // trailing /commits == page 1
+                if (std.mem.startsWith(u8, sub, commits_seg ++ "/")) return repoCommitsRoute(pair, sub[commits_seg.len + 1 ..], after);
                 return null; // unknown sub-path
             }
             return repoFilesRoute(pair, "");
+        }
+        return null;
+    }
+
+    // read a "key=<uint>" value from a raw "a=1&b=2" query string.
+    fn uintParam(query: ?[]const u8, key: []const u8) ?usize {
+        const qs = query orelse return null;
+        var it = std.mem.splitScalar(u8, qs, '&');
+        while (it.next()) |pair| {
+            const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+            if (std.mem.eql(u8, pair[0..eq], key))
+                return std.fmt.parseInt(usize, pair[eq + 1 ..], 10) catch null;
         }
         return null;
     }
@@ -242,7 +258,7 @@ pub const RoutablePage = union(enum) {
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
             .repo => |a_name| std.mem.eql(u8, a_name.slice(), b.repo.slice()),
-            .repo_commits => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_commits.slice()),
+            .repo_commits => |a_c| std.mem.eql(u8, a_c.name.slice(), b.repo_commits.name.slice()) and a_c.after == b.repo_commits.after,
             .repo_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_settings.slice()),
             .repo_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_auth.slice()),
             else => true,
@@ -252,11 +268,12 @@ pub const RoutablePage = union(enum) {
     // the content a repo route renders: which repo, plus the files directory and
     // commits page. tab switches keep this fixed (the page already holds every
     // tab's data); a files-directory or commits-page change alters it.
-    const RepoContent = struct { identity: []const u8, files_dir: []const u8, commits_start: []const u8 };
+    const RepoContent = struct { identity: []const u8, files_dir: []const u8, commits_start: []const u8, commits_after: usize };
 
     fn repoContent(r: RoutablePage) ?RepoContent {
         const name = switch (r) {
-            .repo, .repo_commits, .repo_settings, .repo_auth => |n| n.slice(),
+            .repo, .repo_settings, .repo_auth => |n| n.slice(),
+            .repo_commits => |c| c.name.slice(),
             else => return null,
         };
         const rf = RepoFiles.parse(name) orelse return null;
@@ -264,6 +281,10 @@ pub const RoutablePage = union(enum) {
             .identity = rf.identity,
             .files_dir = if (std.meta.activeTag(r) == .repo) rf.dir else "",
             .commits_start = if (std.meta.activeTag(r) == .repo_commits) repoCommitsStart(name) else "",
+            .commits_after = switch (r) {
+                .repo_commits => |c| c.after,
+                else => 0,
+            },
         };
     }
 
@@ -273,10 +294,11 @@ pub const RoutablePage = union(enum) {
         const cb = repoContent(b) orelse return false;
         return !std.mem.eql(u8, ca.identity, cb.identity) or
             !std.mem.eql(u8, ca.files_dir, cb.files_dir) or
-            !std.mem.eql(u8, ca.commits_start, cb.commits_start);
+            !std.mem.eql(u8, ca.commits_start, cb.commits_start) or
+            ca.commits_after != cb.commits_after;
     }
 
-    // serialize as { "kind": <tag>, "name"?: <user name> }. the default
+    // serialize as { "kind": <tag>, "name"?: <name>, "after"?: <n> }. the default
     // union(enum) codec doesn't round-trip here: Stringify emits a void
     // variant as a bare tag string, but the parser expects an object — so the
     // server->wasm Snapshot JSON would fail to parse.
@@ -289,9 +311,15 @@ pub const RoutablePage = union(enum) {
                 try jw.objectField("name");
                 try jw.write(name.slice());
             },
-            .repo, .repo_commits, .repo_settings, .repo_auth => |name| {
+            .repo, .repo_settings, .repo_auth => |name| {
                 try jw.objectField("name");
                 try jw.write(name.slice());
+            },
+            .repo_commits => |c| {
+                try jw.objectField("name");
+                try jw.write(c.name.slice());
+                try jw.objectField("after");
+                try jw.write(c.after);
             },
             else => {},
         }
@@ -299,7 +327,7 @@ pub const RoutablePage = union(enum) {
     }
 
     pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !RoutablePage {
-        const Helper = struct { kind: std.meta.Tag(RoutablePage), name: ?[]const u8 = null };
+        const Helper = struct { kind: std.meta.Tag(RoutablePage), name: ?[]const u8 = null, after: usize = 0 };
         const helper = try std.json.innerParse(Helper, allocator, source, options);
         const parseName = struct {
             // errors must stay within std.json's ParseError set; ValueTooLong
@@ -317,7 +345,7 @@ pub const RoutablePage = union(enum) {
             .user_settings => .{ .user_settings = try parseName(evt.User.name_max_len, helper.name) },
             .user_auth => .{ .user_auth = try parseName(evt.User.name_max_len, helper.name) },
             .repo => .{ .repo = try parseName(repo_route_max_len, helper.name) },
-            .repo_commits => .{ .repo_commits = try parseName(repo_route_max_len, helper.name) },
+            .repo_commits => .{ .repo_commits = .{ .name = try parseName(repo_route_max_len, helper.name), .after = helper.after } },
             .repo_settings => .{ .repo_settings = try parseName(repo_route_max_len, helper.name) },
             .repo_auth => .{ .repo_auth = try parseName(repo_route_max_len, helper.name) },
         };
@@ -563,7 +591,9 @@ pub fn crossPageLink(root_focus: *Focus, focus_id: usize, current: RoutablePage)
     };
     const a_prefix = "a:";
     if (!std.mem.startsWith(u8, custom, a_prefix)) return null;
-    const route = RoutablePage.fromUrl(custom[a_prefix.len..]) orelse return null;
+    const url = custom[a_prefix.len..];
+    const q = std.mem.indexOfScalar(u8, url, '?');
+    const route = RoutablePage.fromUrl(if (q) |i| url[0..i] else url, if (q) |i| url[i + 1 ..] else null) orelse return null;
     // a link to a different parent page always navigates; within the repo page,
     // a files-directory link navigates while settings/auth tab links stay
     // in-page (header-handled).

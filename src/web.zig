@@ -177,7 +177,7 @@ fn handleRequest(
         return;
     }
 
-    if (ui.RoutablePage.fromUrl(path)) |current_page| {
+    if (ui.RoutablePage.fromUrl(path, if (uri.query) |comp| comp.percent_encoded else null)) |current_page| {
         // resolve the haxy_session cookie's token to a user_id via the
         // store. user_id_buf lives on the stack for the rest of handleRequest,
         // which is plenty for renderIndexHtml to consume.

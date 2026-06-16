@@ -14,8 +14,8 @@ const Focus = xitui.focus.Focus;
 
 // how many commits a page shows before a "next" link appears.
 const page_size = 20;
-// max diff lines rendered per chunk (the initial render and each "load more")
-const diff_budget = 100;
+// how many diff hunks a commit shows per page; "load more" reveals another page.
+const diff_page = 10;
 
 pub const Hunk = struct {
     lines: []const []const u8,
@@ -39,9 +39,6 @@ identity: []const u8,
 commits: []const Commit,
 // the first oid of the next page, or null when this is the last page.
 next_start: ?[]const u8,
-// the on-disk repo directory name (hex event id), for reopening to render more
-// diff hunks when "load more" is activated in the TUI.
-repo_dir_hex: []const u8,
 
 const Self = @This();
 
@@ -51,6 +48,9 @@ pub fn init(
     event_id: *const [evt.event_id_size]u8,
     identity: []const u8,
     start_oid: []const u8,
+    // how many hunks the selected commit (the first one, == start_oid) shows;
+    // 0 means the default page. raised by "load more" via the url.
+    after: usize,
 ) !Self {
     const aa = arena.allocator();
     const hex = std.fmt.bytesToHex(event_id.*, .lower);
@@ -58,7 +58,6 @@ pub fn init(
         .identity = try aa.dupe(u8, identity),
         .commits = &.{},
         .next_start = null,
-        .repo_dir_hex = try aa.dupe(u8, &hex),
     };
 
     // no filesystem (wasm) or nowhere to look: empty listing. the wasm path
@@ -116,8 +115,11 @@ pub fn init(
     // the diff machinery isn't wasm-clean and the wasm client never runs it (it
     // renders from the snapshot), so gate it out of the wasm build.
     if (!builtin.cpu.arch.isWasm()) {
-        for (buf[0..count], oids[0..count]) |*commit, oid| {
-            const rendered = renderCommitDiff(io, gpa, aa, &repo, oid, 0, diff_budget) catch
+        for (buf[0..count], oids[0..count], 0..) |*commit, oid, i| {
+            // the selected commit (the first, == start_oid) shows `after` hunks
+            // when the url asks; the rest show one default page.
+            const max_hunks = if (i == 0 and after > 0) after else diff_page;
+            const rendered = renderCommitDiff(io, gpa, aa, &repo, oid, max_hunks) catch
                 RenderedDiff{ .hunks = &.{}, .shown_hunks = 0, .has_more = false };
             commit.hunks = rendered.hunks;
             commit.shown_hunks = rendered.shown_hunks;
@@ -129,7 +131,6 @@ pub fn init(
         .identity = empty.identity,
         .commits = try aa.dupe(Commit, buf[0..count]),
         .next_start = next_start,
-        .repo_dir_hex = empty.repo_dir_hex,
     };
 }
 
@@ -140,15 +141,14 @@ const RenderedDiff = struct {
 };
 
 // render a commit's diff against its first parent into `arena`-owned hunks,
-// skipping the first `skip_hunks` hunks and emitting at most `budget` lines
+// emitting at most `max_hunks` hunks (has_more is set when more remain)
 fn renderCommitDiff(
     io: std.Io,
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     repo: *rp.Repo(.xit, .{}),
     oid: [xit.hash.hexLen(.sha1)]u8,
-    skip_hunks: usize,
-    budget: usize,
+    max_hunks: usize,
 ) !RenderedDiff {
     const empty = RenderedDiff{ .hunks = &.{}, .shown_hunks = 0, .has_more = false };
 
@@ -167,8 +167,6 @@ fn renderCommitDiff(
     var file_iter = repo.filePairs(io, gpa, .{ .tree = .{ .tree_diff = &tree_diff } }) catch return empty;
 
     var hunks: std.ArrayList(Hunk) = .empty;
-    var total_lines: usize = 0;
-    var hunks_seen: usize = 0;
     var has_more = false;
 
     file_loop: while (file_iter.next() catch null) |pair_val| {
@@ -184,11 +182,7 @@ fn renderCommitDiff(
             var hunk = hunk_val;
             defer hunk.deinit(gpa);
 
-            if (hunks_seen < skip_hunks) {
-                hunks_seen += 1;
-                continue;
-            }
-            if (total_lines >= budget) {
+            if (hunks.items.len >= max_hunks) {
                 has_more = true;
                 break :file_loop;
             }
@@ -200,13 +194,12 @@ fn renderCommitDiff(
                 file_header_emitted = true;
             }
             try appendHunkLines(arena, &lines, &hunk_iter, &hunk);
-            total_lines += lines.items.len;
             try hunks.append(arena, .{ .lines = try lines.toOwnedSlice(arena) });
-            hunks_seen += 1;
         }
     }
 
-    return .{ .hunks = try hunks.toOwnedSlice(arena), .shown_hunks = hunks_seen, .has_more = has_more };
+    const shown = hunks.items.len;
+    return .{ .hunks = try hunks.toOwnedSlice(arena), .shown_hunks = shown, .has_more = has_more };
 }
 
 // append a hunk's header and its edit lines
@@ -266,12 +259,6 @@ pub const View = struct {
     session: *ui.Session,
     // the commit whose diff the pane currently shows (index into data.commits).
     diffed_index: ?usize,
-    // mutable diff state for the displayed commit (seeded from data, grown by
-    // "load more").
-    shown_hunks: usize,
-    has_more: bool,
-    // focus id of the "load more" row, when present.
-    load_more_id: ?usize,
 
     const list_index: usize = 0;
     const diff_index: usize = 1;
@@ -293,7 +280,7 @@ pub const View = struct {
                     try addRow(allocator, &list_box, commit.message, "");
                 }
                 if (data.next_start) |next| {
-                    try addRow(allocator, &list_box, "next", try commitsPageLink(session.page_arena, data.identity, next));
+                    try addRow(allocator, &list_box, "next", try commitsLink(session.page_arena, data.identity, next, 0));
                 }
                 if (list_box.children.count() > 0) list_box.getFocus().child_id = list_box.children.keys()[0];
                 break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .box = list_box }, .{ .direction = .vert });
@@ -327,9 +314,6 @@ pub const View = struct {
             .data = data,
             .session = session,
             .diffed_index = null,
-            .shown_hunks = 0,
-            .has_more = false,
-            .load_more_id = null,
         };
     }
 
@@ -354,16 +338,16 @@ pub const View = struct {
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
     }
 
-    // the focusable "load more" row; its kind carries the GET endpoint the web
-    // client fetches (the TUI reopens the repo instead).
-    fn addLoadMore(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), oid: []const u8, after_hunks: usize) !void {
-        const link = try std.fmt.allocPrint(self.session.page_arena.allocator(), "fetch:/_diff/{s}/{s}?after={d}", .{ self.data.identity, oid, after_hunks });
+    // the focusable "load more" row. it's a navigation link to this commit's
+    // route with a larger `after`, so activating it (the host follows the "a:"
+    // link) reloads the page showing more hunks — the same on the TUI and web.
+    fn addLoadMore(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), oid: []const u8, next_after: usize) !void {
+        const link = try commitsLink(self.session.page_arena, self.data.identity, oid, next_after);
         var tb = try wgt.TextBox(ui.Widget).init(allocator, "load more", .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
         tb.getFocus().kind = .{ .custom = link };
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
-        self.load_more_id = tb.getFocus().id;
     }
 
     pub fn deinit(self: *View, allocator: std.mem.Allocator) void {
@@ -416,7 +400,8 @@ pub const View = struct {
         if (root_focus.grandchild_id) |g| {
             if (self.box.getFocus().children.contains(g)) {
                 if (self.selectedCommitIndex()) |sel| {
-                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, self.data.commits[sel].oid)) |route|
+                    // selection moves reset the diff expansion (after = 0).
+                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, self.data.commits[sel].oid, 0)) |route|
                         self.session.data.current_page = route;
                 }
             }
@@ -485,12 +470,10 @@ pub const View = struct {
         for (inner.children.values()) |*child| child.widget.deinit(allocator);
         inner.children.clearAndFree(allocator);
         inner.getFocus().child_id = null;
-        self.load_more_id = null;
 
         for (commit.hunks) |hunk| try self.addHunkBox(allocator, inner, hunk.lines);
-        if (commit.has_more) try self.addLoadMore(allocator, inner, commit.oid, commit.shown_hunks);
-        self.shown_hunks = commit.shown_hunks;
-        self.has_more = commit.has_more;
+        // the load-more link reloads showing one more page of this commit's hunks.
+        if (commit.has_more) try self.addLoadMore(allocator, inner, commit.oid, commit.shown_hunks + diff_page);
 
         const sc = self.diffScroll();
         sc.x = 0;
@@ -498,8 +481,9 @@ pub const View = struct {
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        _ = allocator;
         if (self.diffActive()) {
-            try self.diffInput(allocator, key, root_focus);
+            try self.diffInput(key, root_focus);
         } else {
             try self.listInput(key, root_focus);
         }
@@ -523,7 +507,7 @@ pub const View = struct {
         }
     }
 
-    fn diffInput(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    fn diffInput(self: *View, key: inp.Key, root_focus: *Focus) !void {
         const sc = self.diffScroll();
         switch (key) {
             // left scrolls horizontally, then leaves for the list once flush left.
@@ -541,10 +525,10 @@ pub const View = struct {
             .arrow_down => try self.moveDiff(root_focus, 1),
             .page_up => try self.pageDiff(root_focus, -page_rows),
             .page_down => try self.pageDiff(root_focus, page_rows),
-            .enter => if (self.focusedIsLoadMore(root_focus)) try self.loadMore(allocator, root_focus),
+            // Enter / a click on the "load more" row follow its "a:" link in the
+            // host (it reloads the page with more hunks), so they don't reach here.
             .mouse => |mouse| switch (mouse.action) {
                 .scroll => |dir| try self.moveDiff(root_focus, if (dir == .up) -1 else 1),
-                .press => |btn| if (btn == .left and self.focusedIsLoadMore(root_focus)) try self.loadMore(allocator, root_focus),
                 else => {},
             },
             else => {},
@@ -618,11 +602,6 @@ pub const View = struct {
         if (chosen) |id| try root_focus.setFocus(id);
     }
 
-    fn focusedIsLoadMore(self: *View, root_focus: *Focus) bool {
-        const id = self.load_more_id orelse return false;
-        return root_focus.grandchild_id == id;
-    }
-
     // keep the diff scroll within its content, using the last build's grids. the
     // scroll bar's reserved column/row isn't part of the content viewport, so
     // exclude it (as scrollToRect does) or the last column/row stays unreachable.
@@ -673,53 +652,6 @@ pub const View = struct {
         if (lb.children.values()[next].rect) |rect| self.listScroll().scrollToRect(rect);
     }
 
-    // render the next budget of hunks for the displayed commit and append them.
-    // the TUI reopens the repo here; the wasm path has no repo and the web host
-    // drives "load more" via the GET endpoint instead, so the repo code is
-    // comptime-elided from the wasm build.
-    fn loadMore(self: *View, allocator: std.mem.Allocator, root_focus: *Focus) !void {
-        // the wasm build has no repo; it drives "load more" via the GET endpoint.
-        if (!builtin.cpu.arch.isWasm()) try self.loadMoreNative(allocator, root_focus);
-    }
-
-    fn loadMoreNative(self: *View, allocator: std.mem.Allocator, root_focus: *Focus) !void {
-        const io = self.session.io orelse return;
-        const repos_dir = self.session.repos_dir orelse return;
-        const sel = self.diffed_index orelse return;
-        const commit = self.data.commits[sel];
-        if (commit.oid.len != xit.hash.hexLen(.sha1)) return;
-
-        const aa = self.session.page_arena.allocator();
-        const gpa = self.session.page_arena.child_allocator;
-        const repo_path = try std.fs.path.join(aa, &.{ repos_dir, self.data.repo_dir_hex });
-        var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return;
-        defer repo.deinit(io, gpa);
-
-        var oid: [xit.hash.hexLen(.sha1)]u8 = undefined;
-        @memcpy(&oid, commit.oid);
-        const rendered = renderCommitDiff(io, gpa, aa, &repo, oid, self.shown_hunks, diff_budget) catch return;
-
-        const inner = self.diffInner();
-        if (self.load_more_id) |id| {
-            if (inner.children.fetchOrderedRemove(id)) |kv| {
-                var w = kv.value.widget;
-                w.deinit(allocator);
-            }
-            self.load_more_id = null;
-        }
-        // focus the last already-shown hunk (the one just above where "load
-        // more" was). it's already in the focus tree from the last build, so the
-        // focus lands; the freshly-appended hunks aren't in the tree until the
-        // next build, so focusing one here would silently no-op. the user scrolls
-        // down into the new hunks from here.
-        const shown = inner.children.count(); // old hunk count ("load more" removed)
-        for (rendered.hunks) |hunk| try self.addHunkBox(allocator, inner, hunk.lines);
-        self.shown_hunks = rendered.shown_hunks;
-        self.has_more = rendered.has_more;
-        if (rendered.has_more) try self.addLoadMore(allocator, inner, commit.oid, rendered.shown_hunks);
-        if (shown > 0) try root_focus.setFocus(inner.children.keys()[shown - 1]);
-    }
-
     pub fn clearGrid(self: *View) void {
         self.box.clearGrid();
     }
@@ -749,9 +681,10 @@ pub const View = struct {
     }
 };
 
-// the "a:" link for the commits page starting at `start_oid` within `identity`.
-fn commitsPageLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, start_oid: []const u8) ![]const u8 {
-    const route = ui.RoutablePage.repoCommitsRoute(identity, start_oid) orelse return error.RouteTooLong;
+// the "a:" navigation link for the commits page starting at `start_oid` within
+// `identity`, showing the selected commit's first `after` hunks (0 = default).
+fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, start_oid: []const u8, after: usize) ![]const u8 {
+    const route = ui.RoutablePage.repoCommitsRoute(identity, start_oid, after) orelse return error.RouteTooLong;
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
