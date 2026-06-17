@@ -222,6 +222,12 @@ WebAssembly.instantiateStreaming(fetch("/haxy.wasm"), importObject).then(async (
     grid.addEventListener("click", (event) => {
         const span = event.target.closest(".clickable");
         if (!span) return;
+        // leave modified / non-left clicks (open-in-new-tab, etc.) to the browser
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        // wasm routes the click: an in-page link just moves focus and re-renders,
+        // a cross-page one calls _navigate. suppress the <a>'s own navigation so
+        // an in-page link doesn't also trigger a redundant full page load.
+        event.preventDefault();
         const focusId = Number(span.dataset.focusId);
         wasmInstance.exports._onMouseClick(focusId);
         wasmInstance.exports._tick(minRows(), maxCols());
