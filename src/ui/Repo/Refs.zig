@@ -25,6 +25,9 @@ branches: []const []const u8,
 tags: []const []const u8,
 branches_next_after: ?usize,
 tags_next_after: ?usize,
+// the columns' headers, in the half-height SubTitle font.
+branches_label: ui.SubTitle,
+tags_label: ui.SubTitle,
 
 const Self = @This();
 
@@ -42,6 +45,8 @@ pub fn init(
     // the offset only applies to its own column; the other stays at 0.
     const branches_after: usize = if (kind == .branch) after else 0;
     const tags_after: usize = if (kind == .tag) after else 0;
+    const branches_label = try ui.SubTitle.init(arena, "branches");
+    const tags_label = try ui.SubTitle.init(arena, "tags");
     const empty: Self = .{
         .identity = try aa.dupe(u8, identity),
         .kind = kind,
@@ -50,6 +55,8 @@ pub fn init(
         .tags = &.{},
         .branches_next_after = null,
         .tags_next_after = null,
+        .branches_label = branches_label,
+        .tags_label = tags_label,
     };
 
     // no filesystem (wasm) or nowhere to look: empty lists. the wasm path never
@@ -83,6 +90,8 @@ pub fn init(
         .tags = tags.names,
         .branches_next_after = branches.next_after,
         .tags_next_after = tags.next_after,
+        .branches_label = branches_label,
+        .tags_label = tags_label,
     };
 }
 
@@ -122,8 +131,8 @@ pub const View = struct {
         // the offset only applies to its own column; the other starts at 0.
         const branches_after: usize = if (data.kind == .branch) data.after else 0;
         const tags_after: usize = if (data.kind == .tag) data.after else 0;
-        try addColumn(allocator, &box, session, data.identity, .branch, "branches:", data.branches, branches_after, data.branches_next_after);
-        try addColumn(allocator, &box, session, data.identity, .tag, "tags:", data.tags, tags_after, data.tags_next_after);
+        try addColumn(allocator, &box, session, data.identity, .branch, &data.branches_label, data.branches, branches_after, data.branches_next_after);
+        try addColumn(allocator, &box, session, data.identity, .tag, &data.tags_label, data.tags, tags_after, data.tags_next_after);
 
         var self = View{ .box = box, .data = data };
         // select the first row of the first column that has one.
@@ -142,7 +151,7 @@ pub const View = struct {
         session: *ui.Session,
         identity: []const u8,
         kind: ui.RoutablePage.RefKind,
-        label: []const u8,
+        label: *const ui.SubTitle,
         names: []const []const u8,
         after: usize,
         next_after: ?usize,
@@ -150,15 +159,24 @@ pub const View = struct {
         var column = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer column.deinit(allocator);
 
-        // a fixed, non-focusable header styled like the rows so it left-aligns
-        // with them; it stays visible while the rows scroll below. it declares
-        // its height as a min so the (fill) scroll reserves room for it rather
-        // than consuming the whole column. one text line framed by a (hidden)
-        // border above and below.
+        // a fixed, non-focusable header in the SubTitle font, nudged off the
+        // left edge by a one-column space. it stays visible while the rows
+        // scroll below, and declares its height (2 rows) as a min so the (fill)
+        // scroll reserves room for it rather than consuming the whole column.
         {
-            var header = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
-            errdefer header.deinit(allocator);
-            try column.children.put(allocator, header.getFocus().id, .{ .widget = .{ .text_box = header }, .rect = null, .min_size = .{ .width = null, .height = 1 + 2 } });
+            var header_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            errdefer header_box.deinit(allocator);
+            {
+                var space = try wgt.Text(ui.Widget).init(allocator, " ");
+                errdefer space.deinit(allocator);
+                try header_box.children.put(allocator, space.getFocus().id, .{ .widget = .{ .text = space }, .rect = null, .min_size = null });
+            }
+            {
+                var header = try ui.SubTitle.View.init(allocator, label);
+                errdefer header.deinit(allocator);
+                try header_box.children.put(allocator, header.getFocus().id, .{ .widget = .{ .sub_title = header }, .rect = null, .min_size = null });
+            }
+            try column.children.put(allocator, header_box.getFocus().id, .{ .widget = .{ .box = header_box }, .rect = null, .min_size = .{ .width = null, .height = 2 } });
         }
 
         // a long ref list overflows the page height; the rows scroll on their
