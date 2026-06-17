@@ -291,8 +291,6 @@ pub const View = struct {
     const diff_index: usize = 1;
     const list_max_width: usize = 40;
     const diff_min_width: usize = 40;
-    // how many rows a page up/down jumps, and the scroll-wheel step.
-    const page_rows = 10;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
@@ -546,8 +544,10 @@ pub const View = struct {
             .arrow_right => try self.focusDiff(root_focus),
             .arrow_down => try self.moveSelection(root_focus, 1),
             .arrow_up => try self.moveSelection(root_focus, -1),
-            .page_down => try self.moveSelection(root_focus, page_rows),
-            .page_up => try self.moveSelection(root_focus, -page_rows),
+            .page_down => try self.moveSelection(root_focus, 10),
+            .page_up => try self.moveSelection(root_focus, -10),
+            .end => try self.moveSelection(root_focus, @intCast(self.listBox().children.count())),
+            .home => try self.moveSelection(root_focus, -@as(isize, @intCast(self.listBox().children.count()))),
             .mouse => |mouse| switch (mouse.action) {
                 .scroll => |dir| try self.moveSelection(root_focus, if (dir == .up) -1 else 1),
                 else => {},
@@ -572,8 +572,10 @@ pub const View = struct {
             },
             .arrow_up => try self.moveDiff(root_focus, -1),
             .arrow_down => try self.moveDiff(root_focus, 1),
-            .page_up => try self.pageDiff(root_focus, -page_rows),
-            .page_down => try self.pageDiff(root_focus, page_rows),
+            .page_up => try self.pageDiff(root_focus, -10),
+            .page_down => try self.pageDiff(root_focus, 10),
+            .home => try self.jumpDiff(root_focus, false),
+            .end => try self.jumpDiff(root_focus, true),
             // Enter / a click on a "previous"/"next" row follow its "a:" link in
             // the host (it reloads the adjacent window), so they don't reach here.
             .mouse => |mouse| switch (mouse.action) {
@@ -584,53 +586,67 @@ pub const View = struct {
         }
     }
 
-    // move focus one hunk in `dir` (+1 down, -1 up). on the web the browser owns
-    // scrolling, so just step focus to the adjacent hunk and let scrollToFocus
-    // bring it into view. on the terminal, if the adjacent hunk is already
-    // visible just move focus; otherwise scroll one line toward it (focusing it
-    // once it appears) so scrolling never skips past an on-screen hunk.
-    fn moveDiff(self: *View, root_focus: *Focus, dir: isize) !void {
+    // move one step in `delta` (+ down, - up). in the terminal, `delta` is a
+    // line count unless there is a new hunk visible (in which case it is a
+    // hunk count). on the web `delta` is always a hunk count.
+    fn moveDiff(self: *View, root_focus: *Focus, delta: isize) !void {
         const inner = self.diffInner();
         const keys = inner.children.keys();
         if (keys.len == 0) return;
         const cur: usize = if (root_focus.grandchild_id) |g| (inner.children.getIndex(g) orelse 0) else 0;
-        const target = @as(isize, @intCast(cur)) + dir;
+        const target = @as(isize, @intCast(cur)) + delta;
         const in_range = target >= 0 and target < @as(isize, @intCast(keys.len));
 
-        if (!self.session.is_terminal) {
-            if (in_range) try root_focus.setFocus(keys[@intCast(target)]);
-            return;
-        }
+        if (self.session.is_terminal) {
+            if (in_range and self.hunkVisible(@intCast(target))) {
+                try root_focus.setFocus(keys[@intCast(target)]);
+                return;
+            }
 
-        if (in_range and self.hunkVisible(@intCast(target))) {
-            try root_focus.setFocus(keys[@intCast(target)]);
-            return;
+            const sc = self.diffScroll();
+            sc.y += delta * 5; // magnify because it's a line count
+            self.clampDiffScroll();
+            if (in_range and self.hunkVisible(@intCast(target))) {
+                try root_focus.setFocus(keys[@intCast(target)]);
+            }
+        } else {
+            if (in_range) {
+                try root_focus.setFocus(keys[@intCast(target)]);
+            }
         }
-
-        const sc = self.diffScroll();
-        sc.y += dir;
-        self.clampDiffScroll();
-        if (in_range and self.hunkVisible(@intCast(target)))
-            try root_focus.setFocus(keys[@intCast(target)]);
     }
 
     // page a fixed number of lines, then focus the leading visible hunk
-    // (bottom-most when paging down, top-most when paging up). on the web the
-    // browser scrolls, so jump focus by a page's worth of hunks instead.
+    // (bottom-most when paging down, top-most when paging up). in the
+    // terminal, `delta` is a line count, and on the web it's a hunk count.
     fn pageDiff(self: *View, root_focus: *Focus, delta: isize) !void {
-        if (!self.session.is_terminal) {
+        if (self.session.is_terminal) {
+            const sc = self.diffScroll();
+            sc.y += delta * 5; // magnify because it's a line count
+            self.clampDiffScroll();
+            try self.focusVisible(root_focus, delta > 0);
+        } else {
             const inner = self.diffInner();
             const keys = inner.children.keys();
             if (keys.len == 0) return;
             const cur: isize = if (root_focus.grandchild_id) |g| @intCast(inner.children.getIndex(g) orelse 0) else 0;
             const target: usize = @intCast(std.math.clamp(cur + delta, 0, @as(isize, @intCast(keys.len - 1))));
             try root_focus.setFocus(keys[target]);
-            return;
         }
-        const sc = self.diffScroll();
-        sc.y += delta;
-        self.clampDiffScroll();
-        try self.focusVisible(root_focus, delta > 0);
+    }
+
+    // jump to the first or last hunk. on the web the browser scrolls to the
+    // focused hunk; on the terminal pin the scroll to the top/bottom too.
+    fn jumpDiff(self: *View, root_focus: *Focus, to_end: bool) !void {
+        const inner = self.diffInner();
+        const keys = inner.children.keys();
+        if (keys.len == 0) return;
+        if (self.session.is_terminal) {
+            const sc = self.diffScroll();
+            sc.y = if (to_end) std.math.maxInt(isize) else 0;
+            self.clampDiffScroll();
+        }
+        try root_focus.setFocus(if (to_end) keys[keys.len - 1] else keys[0]);
     }
 
     // whether hunk `index` is at least partly within the diff viewport, per the
