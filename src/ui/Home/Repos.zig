@@ -32,23 +32,24 @@ pub fn init(
 
     const empty: Self = .{ .repos = &.{}, .owner_names = &.{}, .after = after, .next_after = null };
 
-    // the ordered repo-list (oldest first); absent until the first repo exists.
-    const repo_list_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "repo-list")) orelse return empty;
-    const repo_list = try DB.ArrayList(.read_only).init(repo_list_cursor);
-    const count = try repo_list.count();
+    // the repos ordered by creation time (oldest first); absent until the first
+    // repo exists. keyed by [timestamp][event-id], value = event-id.
+    const timestamp_to_repo_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "timestamp->repo-id")) orelse return empty;
+    const timestamp_to_repo_id = try DB.SortedMap(.read_only).init(timestamp_to_repo_id_cursor);
+    const count = try timestamp_to_repo_id.count();
 
     const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return empty;
     const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
 
-    // read the window [after, after+page_size) by index — a direct O(log n)
-    // seek per entry, never scanning the whole table. ids whose repo has been
-    // deleted (tombstones) are skipped.
+    // read the window [after, after+page_size) by index — a direct O(log n) seek
+    // per entry, never scanning the whole table. deletes remove their entry (no
+    // tombstones), so the window is dense.
     const end = @min(after + page_size, count);
     var i = after;
     while (i < end) : (i += 1) {
-        const id_cursor = try repo_list.getCursor(@intCast(i)) orelse continue;
+        const id_kv = try timestamp_to_repo_id.getIndexKeyValuePair(@intCast(i)) orelse continue;
         var event_id: [evt.event_id_size]u8 = undefined;
-        _ = try id_cursor.readBytes(&event_id);
+        _ = try id_kv.value_cursor.readBytes(&event_id);
         const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, &event_id)) orelse continue;
         const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
         const repo_event = try evt.read(evt.Repo, DB, hash_kind, arena, repo_map);

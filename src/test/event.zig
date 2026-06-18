@@ -807,3 +807,107 @@ test "user and repo" {
         try std.testing.expect(null == try event_id_to_user.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)));
     }
 }
+
+test "repos and users paginate in creation order" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const temp_dir_name = "temp-event-order";
+
+    const cwd = std.Io.Dir.cwd();
+    var temp_dir_or_err = cwd.openDir(io, temp_dir_name, .{});
+    if (temp_dir_or_err) |*temp_dir| {
+        temp_dir.close(io);
+        try cwd.deleteTree(io, temp_dir_name);
+    } else |_| {}
+    var temp_dir = try cwd.createDirPathOpen(io, temp_dir_name, .{});
+    defer cwd.deleteTree(io, temp_dir_name) catch {};
+    defer temp_dir.close(io);
+
+    const cwd_path = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd_path);
+    const work_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name });
+    defer allocator.free(work_path);
+
+    const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
+    const Repo = rp.Repo(.xit, repo_opts);
+    var repo = try Repo.init(io, allocator, .{ .path = work_path });
+    defer repo.deinit(io, allocator);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const user_id = evt.EventWithId.randomId(prng.random());
+    var repo_ids: [4][evt.event_id_size]u8 = undefined;
+    for (&repo_ids) |*id| id.* = evt.EventWithId.randomId(prng.random());
+
+    var pw_buf: [evt.User.password_hash_max_len]u8 = undefined;
+    const pw = try evt.User.hashPassword("pw", &pw_buf, io);
+
+    // asserts the timestamp->repo-id map holds exactly `expected` ids in that order
+    const Check = struct {
+        fn order(
+            comptime DB: type,
+            comptime hash_kind: hash.HashKind,
+            moment: DB.HashMap(.read_only),
+            expected: []const *const [evt.event_id_size]u8,
+        ) !void {
+            const cursor = try moment.getCursor(hash.hashInt(hash_kind, "timestamp->repo-id")) orelse return error.NotFound;
+            const map = try DB.SortedMap(.read_only).init(cursor);
+            try std.testing.expectEqual(expected.len, try map.count());
+            for (expected, 0..) |id, i| {
+                const kv = (try map.getIndexKeyValuePair(@intCast(i))) orelse return error.NotFound;
+                var buf: [evt.event_id_size]u8 = undefined;
+                _ = try kv.value_cursor.readBytes(&buf);
+                try std.testing.expectEqualSlices(u8, id, &buf);
+            }
+        }
+    };
+
+    // one user, then four repos, each with its own creation timestamp (user@100,
+    // repos@101..104)
+    const events = [_]evt.EventWithId{
+        .{ .id = std.fmt.bytesToHex(user_id, .lower), .timestamp = 100, .event = .{ .user = .{ .name = "alice", .display_name = "Alice", .email = "alice@example.test", .password_hash = pw } } },
+        .{ .id = std.fmt.bytesToHex(repo_ids[0], .lower), .timestamp = 101, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo0", .description = "d0", .enable_issue = true } } },
+        .{ .id = std.fmt.bytesToHex(repo_ids[1], .lower), .timestamp = 102, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo1", .description = "d1", .enable_issue = true } } },
+        .{ .id = std.fmt.bytesToHex(repo_ids[2], .lower), .timestamp = 103, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo2", .description = "d2", .enable_issue = true } } },
+        .{ .id = std.fmt.bytesToHex(repo_ids[3], .lower), .timestamp = 104, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo3", .description = "d3", .enable_issue = true } } },
+    };
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events);
+
+    {
+        const moment = try evt.currentMoment(repo_opts, &repo);
+        try Check.order(Repo.DB, repo_opts.hash, moment, &.{ &repo_ids[0], &repo_ids[1], &repo_ids[2], &repo_ids[3] });
+
+        // the single user shows up in its own ordered map
+        const ucur = try moment.getCursor(hash.hashInt(repo_opts.hash, "timestamp->user-id")) orelse return error.NotFound;
+        const umap = try Repo.DB.SortedMap(.read_only).init(ucur);
+        try std.testing.expectEqual(1, try umap.count());
+    }
+
+    // delete repo1 -> dense order (no tombstone)
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &[_]evt.EventWithId{
+        .{ .id = std.fmt.bytesToHex(repo_ids[1], .lower), .timestamp = 200, .event = .{ .repo = null } },
+    });
+    {
+        const moment = try evt.currentMoment(repo_opts, &repo);
+        try Check.order(Repo.DB, repo_opts.hash, moment, &.{ &repo_ids[0], &repo_ids[2], &repo_ids[3] });
+    }
+
+    // update repo0 at a later timestamp -> keeps its original slot
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &[_]evt.EventWithId{
+        .{ .id = std.fmt.bytesToHex(repo_ids[0], .lower), .timestamp = 300, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo0", .description = "updated", .enable_issue = true } } },
+    });
+    {
+        const moment = try evt.currentMoment(repo_opts, &repo);
+        try Check.order(Repo.DB, repo_opts.hash, moment, &.{ &repo_ids[0], &repo_ids[2], &repo_ids[3] });
+
+        // the value really was updated
+        const e2r_cur = try moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->repo")) orelse return error.NotFound;
+        const e2r = try Repo.DB.HashMap(.read_only).init(e2r_cur);
+        const rc = try e2r.getCursor(hash.hashInt(repo_opts.hash, &repo_ids[0])) orelse return error.NotFound;
+        const rm = try Repo.DB.HashMap(.read_only).init(rc);
+        const re = try evt.read(evt.Repo, Repo.DB, repo_opts.hash, &arena, rm);
+        try std.testing.expectEqualStrings("updated", re.description);
+    }
+}

@@ -174,6 +174,8 @@ pub fn main(init: std.process.Init) !void {
         for (user_data, 0..) |u, i| {
             events_to_consume[i] = .{
                 .id = std.fmt.bytesToHex(user_ids[i], .lower),
+                // stepped timestamps so the seeded users/repos list in a stable order
+                .timestamp = @intCast(i + 1),
                 .event = .{
                     .user = .{
                         .name = u.name,
@@ -188,6 +190,7 @@ pub fn main(init: std.process.Init) !void {
         for (repo_data, 0..) |r, i| {
             events_to_consume[user_data.len + i] = .{
                 .id = std.fmt.bytesToHex(repo_event_ids[i], .lower),
+                .timestamp = @intCast(user_data.len + i + 1),
                 .event = .{
                     .repo = .{
                         .user_id = &user_ids[r.user_index],

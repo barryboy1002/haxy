@@ -28,25 +28,26 @@ pub fn init(
 
     var users: std.ArrayList(evt.User.Safe) = .empty;
 
-    // the ordered user-list (oldest first); absent until the first user exists.
-    const user_list_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "user-list")) orelse
+    // the users ordered by creation time (oldest first); absent until the first
+    // user exists. keyed by [timestamp][event-id], value = event-id.
+    const timestamp_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "timestamp->user-id")) orelse
         return .{ .users = &.{}, .after = after, .next_after = null };
-    const user_list = try DB.ArrayList(.read_only).init(user_list_cursor);
-    const count = try user_list.count();
+    const timestamp_to_user_id = try DB.SortedMap(.read_only).init(timestamp_to_user_id_cursor);
+    const count = try timestamp_to_user_id.count();
 
     const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->user")) orelse
         return .{ .users = &.{}, .after = after, .next_after = null };
     const event_id_to_user = try DB.HashMap(.read_only).init(event_id_to_user_cursor);
 
-    // read the window [after, after+page_size) by index — a direct O(log n)
-    // seek per entry, never scanning the whole table. ids whose user has been
-    // deleted (tombstones) are skipped.
+    // read the window [after, after+page_size) by index — a direct O(log n) seek
+    // per entry, never scanning the whole table. deletes remove their entry (no
+    // tombstones), so the window is dense.
     const end = @min(after + page_size, count);
     var i = after;
     while (i < end) : (i += 1) {
-        const id_cursor = try user_list.getCursor(@intCast(i)) orelse continue;
+        const id_kv = try timestamp_to_user_id.getIndexKeyValuePair(@intCast(i)) orelse continue;
         var event_id: [evt.event_id_size]u8 = undefined;
-        _ = try id_cursor.readBytes(&event_id);
+        _ = try id_kv.value_cursor.readBytes(&event_id);
         const user_cursor = try event_id_to_user.getCursor(hash.hashInt(hash_kind, &event_id)) orelse continue;
         const user_map = try DB.HashMap(.read_only).init(user_cursor);
         const user_event = try evt.read(evt.User, DB, hash_kind, arena, user_map);

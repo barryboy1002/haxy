@@ -34,6 +34,7 @@ pub fn consume(
     event_id: *const [evt.event_id_size]u8,
     event_maybe: ?@This(),
     arena: *std.heap.ArenaAllocator,
+    created_ts: u64,
 ) !void {
     const user_key = hash.hashInt(hash_kind, event_id);
 
@@ -63,12 +64,15 @@ pub fn consume(
 
         try name_to_user_id.put(hash.hashInt(hash_kind, event.name), .{ .bytes = event_id });
 
-        // first time we've seen this user: append its id to the ordered list
-        // the users view paginates through (a delete leaves a tombstone here).
+        // first time we've seen this user: record its creation timestamp and add it
+        // to the ordered map the users view paginates through
         if (existing_cursor_maybe == null) {
-            const user_list_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-list"));
-            const user_list = try DB.ArrayList(.read_write).init(user_list_cursor);
-            try user_list.append(.{ .bytes = event_id });
+            try user.put(hash.hashInt(hash_kind, "created-ts"), .{ .uint = created_ts });
+
+            const timestamp_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->user-id"));
+            const timestamp_to_user_id = try DB.SortedMap(.read_write).init(timestamp_to_user_id_cursor);
+            const order_key = evt.orderKey(created_ts, event_id);
+            try timestamp_to_user_id.put(&order_key, .{ .bytes = event_id });
         }
     } else {
         // read the user's name so we can drop its name->id index entry
@@ -76,6 +80,15 @@ pub fn consume(
             const existing_user = try DB.HashMap(.read_only).init(existing_cursor);
             const existing_event = try evt.read(@This(), DB, hash_kind, arena, existing_user);
             _ = try name_to_user_id.remove(hash.hashInt(hash_kind, existing_event.name));
+
+            // drop it from the ordered map using its recorded creation timestamp
+            if (try existing_user.getCursor(hash.hashInt(hash_kind, "created-ts"))) |created_ts_cursor| {
+                const stored_ts = try created_ts_cursor.readUint();
+                const timestamp_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->user-id"));
+                const timestamp_to_user_id = try DB.SortedMap(.read_write).init(timestamp_to_user_id_cursor);
+                const order_key = evt.orderKey(stored_ts, event_id);
+                _ = try timestamp_to_user_id.remove(&order_key);
+            }
         }
 
         if (!try event_id_to_user.remove(user_key)) return error.EventNotFound;
@@ -200,6 +213,7 @@ pub fn toggleAnsi(
     updated.enable_ansi = !user.enable_ansi;
     try evt.commitAndConsume(repo_opts, io, allocator, repo, evt.events_ref, &[_]evt.EventWithId{.{
         .id = std.fmt.bytesToHex(user_id[0..evt.event_id_size].*, .lower),
+        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .event = .{ .user = updated },
     }});
 }

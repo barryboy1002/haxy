@@ -19,6 +19,7 @@ pub fn consume(
     event_id: *const [evt.event_id_size]u8,
     event_maybe: ?@This(),
     arena: *std.heap.ArenaAllocator,
+    created_ts: u64,
 ) !void {
     const repo_key = hash.hashInt(hash_kind, event_id);
 
@@ -53,12 +54,15 @@ pub fn consume(
 
         try name_to_repo_id.put(hash.hashInt(hash_kind, repo_path), .{ .bytes = event_id });
 
-        // first time we've seen this repo: append its id to the ordered list
-        // the repos view paginates through (a delete leaves a tombstone here).
+        // first time we've seen this repo: record its creation timestamp and add it
+        // to the ordered map the repos view paginates through
         if (existing_cursor_maybe == null) {
-            const repo_list_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "repo-list"));
-            const repo_list = try DB.ArrayList(.read_write).init(repo_list_cursor);
-            try repo_list.append(.{ .bytes = event_id });
+            try repo.put(hash.hashInt(hash_kind, "created-ts"), .{ .uint = created_ts });
+
+            const timestamp_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->repo-id"));
+            const timestamp_to_repo_id = try DB.SortedMap(.read_write).init(timestamp_to_repo_id_cursor);
+            const order_key = evt.orderKey(created_ts, event_id);
+            try timestamp_to_repo_id.put(&order_key, .{ .bytes = event_id });
         }
 
         const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
@@ -74,6 +78,15 @@ pub fn consume(
 
             const existing_path = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ existing_repo_event.user_id, existing_repo_event.name });
             _ = try name_to_repo_id.remove(hash.hashInt(hash_kind, existing_path));
+
+            // drop it from the ordered map using its recorded creation timestamp
+            if (try existing_repo.getCursor(hash.hashInt(hash_kind, "created-ts"))) |created_ts_cursor| {
+                const stored_ts = try created_ts_cursor.readUint();
+                const timestamp_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->repo-id"));
+                const timestamp_to_repo_id = try DB.SortedMap(.read_write).init(timestamp_to_repo_id_cursor);
+                const order_key = evt.orderKey(stored_ts, event_id);
+                _ = try timestamp_to_repo_id.remove(&order_key);
+            }
 
             const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
             const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);

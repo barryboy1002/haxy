@@ -35,6 +35,7 @@ pub const EventWithId = struct {
         repo: ?Repo,
         issue: ?Issue,
     },
+    timestamp: u64 = 0, // not serialized, because it comes from the commit timestamp
 
     pub fn jsonStringify(self: EventWithId, jw: anytype) !void {
         try jw.beginObject();
@@ -310,9 +311,11 @@ pub fn consumeInTransaction(
             var current_event_id: [event_id_size]u8 = undefined;
             _ = try std.fmt.hexToBytes(&current_event_id, &event_with_id.id);
 
+            const created_ts = commit_object.content.commit.metadata.timestamp;
+
             switch (event_with_id.event) {
-                .user => |event_maybe| try User.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe, &arena),
-                .repo => |event_maybe| try Repo.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe, &arena),
+                .user => |event_maybe| try User.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe, &arena, created_ts),
+                .repo => |event_maybe| try Repo.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe, &arena, created_ts),
                 .issue => |event_maybe| try Issue.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, event_maybe),
             }
         }
@@ -362,10 +365,20 @@ pub fn commitAndConsume(
     for (events) |event| {
         json.clearRetainingCapacity();
         try std.json.Stringify.value(event, .{}, &json.writer);
-        _ = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, ref);
+        _ = try repo.commitAtRef(io, allocator, .{ .message = json.written(), .timestamp = event.timestamp }, null, ref);
     }
 
     try consume(repo_opts, io, allocator, repo, ref);
+}
+
+// build the key for SortedMaps sorted by timestamp. the big-endian timestamp
+// makes byte order match creation order; the event id breaks ties and keeps
+// keys unique within the same timestamp.
+pub fn orderKey(timestamp: u64, event_id: *const [event_id_size]u8) [@sizeOf(u64) + event_id_size]u8 {
+    var key: [@sizeOf(u64) + event_id_size]u8 = undefined;
+    std.mem.writeInt(u64, key[0..@sizeOf(u64)], timestamp, .big);
+    @memcpy(key[@sizeOf(u64)..], event_id);
+    return key;
 }
 
 // split a pushed "<owner>/<repo>" path into its two components, or null if it
@@ -423,6 +436,7 @@ pub fn resolveOrCreateRepo(
 
     try commitAndConsume(admin_repo_opts, io, allocator, &repo, events_ref, &[_]EventWithId{.{
         .id = event_id_hex,
+        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .event = .{ .repo = .{
             .user_id = &owner_user_id,
             .name = repo_name,
