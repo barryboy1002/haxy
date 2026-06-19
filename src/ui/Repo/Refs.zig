@@ -74,11 +74,11 @@ pub fn init(
     var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return empty;
     defer repo.deinit(io, gpa);
 
-    var branch_iter = repo.listBranches(io, gpa) catch return empty;
+    var branch_iter = repo.listBranches(io, gpa, .{ .index = branches_after }) catch return empty;
     defer branch_iter.deinit(io);
     const branches = try collectWindow(io, aa, &branch_iter, branches_after);
 
-    var tag_iter = repo.listTags(io, gpa) catch return empty;
+    var tag_iter = repo.listTags(io, gpa, .{ .index = tags_after }) catch return empty;
     defer tag_iter.deinit(io);
     const tags = try collectWindow(io, aa, &tag_iter, tags_after);
 
@@ -95,14 +95,8 @@ pub fn init(
     };
 }
 
-// window a ref iterator without materializing the whole list: skip the prior
-// windows, take this window's names into the page arena (`aa`), then peek one
-// more to learn whether a "next →" window exists.
+// window a ref iterator without materializing the whole list
 fn collectWindow(io: std.Io, aa: std.mem.Allocator, iter: anytype, after: usize) !Window {
-    var skipped: usize = 0;
-    while (skipped < after) : (skipped += 1) {
-        if (try iter.next(io) == null) return .{ .names = &.{}, .next_after = null };
-    }
     var names = try std.ArrayListUnmanaged([]const u8).initCapacity(aa, page_size);
     while (names.items.len < page_size) {
         const ref = try iter.next(io) orelse break;
