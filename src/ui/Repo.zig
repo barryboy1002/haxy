@@ -47,8 +47,8 @@ pub fn init(
     const hash_kind = evt.admin_repo_opts.hash;
     const haxy_moment = session.haxy_moment orelse return error.NoMoment;
 
-    // every repo route's stored string starts with "owner/name"; the files
-    // route additionally encodes a directory, the commits route a start oid.
+    // every repo route's stored string starts with "owner/name"; the files and
+    // commits routes additionally encode a ref/oid (files also a directory).
     const name_str: []const u8 = switch (route) {
         .repo, .repo_settings, .repo_auth => |n| n.slice(),
         .repo_commits => |c| c.name.slice(),
@@ -64,7 +64,9 @@ pub fn init(
     const files_ref_kind = if (tag == .repo) rf.ref_kind else null;
     const files_ref_value = if (tag == .repo) rf.ref_value else "";
     const files_dir = if (tag == .repo) rf.dir else "";
-    const commits_start = if (tag == .repo_commits) ui.RoutablePage.repoCommitsStart(name_str) else "";
+    // a null commits ref means the commits tab opens at the default branch
+    // (Commits.init resolves it).
+    const commits_ref = if (tag == .repo_commits) ui.RoutablePage.repoCommitsRef(name_str) else ui.RoutablePage.CommitsRef{ .ref_or_oid = null, .value = "" };
     // how many diff hunks the commits view's selected commit shows ("load more").
     const commits_after: usize = switch (route) {
         .repo_commits => |c| c.after,
@@ -88,17 +90,21 @@ pub fn init(
     // of the repo title.
     const owner = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, repo.user_id)) orelse return error.NotFound;
 
+    // build commits first so its resolved ref (the default branch when the route
+    // named none) can canonicalize the commits-tab mirror url.
+    const commits = try Commits.init(arena, session, &found.event_id, rf.identity, commits_ref.ref_or_oid, commits_ref.value, commits_after);
+
     // each tab mirror carries this page's route for that tab; tabs not targeted
     // by the incoming route fall back to their root/first-page route.
     const route_name = (ui.RoutablePage.repoFilesRoute(rf.identity, files_ref_kind, files_ref_value, files_dir) orelse return error.NotFound).repo;
-    const commits_route_name = if (tag == .repo_commits) route.repo_commits.name else (ui.RoutablePage.repoCommitsRoute(rf.identity, "", 0) orelse return error.NotFound).repo_commits.name;
+    const commits_route_name = (ui.RoutablePage.repoCommitsRoute(rf.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_after) orelse return error.NotFound).repo_commits.name;
 
     return .{
         .header = try Header.init(arena, repo.name, owner.name),
         .repo = repo,
         // the repo's event id is the on-disk repo directory name
         .files = try Files.init(arena, session, &found.event_id, rf.identity, files_ref_kind, files_ref_value, files_dir),
-        .commits = try Commits.init(arena, session, &found.event_id, rf.identity, commits_start, commits_after),
+        .commits = commits,
         .refs = try Refs.init(arena, session, &found.event_id, rf.identity, refs_kind, refs_after),
         .settings = Settings.init(),
         .auth = Auth.init(),

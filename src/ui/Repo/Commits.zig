@@ -12,6 +12,9 @@ const inp = xitui.input;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
+const RefOrOid = ui.RoutablePage.RefOrOid;
+const hex_len = ui.ResolvedRefOrOid.hex_len;
+
 // how many commits a page shows before a "next" link appears.
 const page_size = 20;
 // how many diff hunks one window of a commit's diff shows; "next"/"previous"
@@ -37,8 +40,12 @@ pub const Commit = struct {
     has_more: bool,
 };
 
-// "owner/name", so the view can build /repo/owner/name/commits/<oid> links.
+// "owner/name", so the view can build /repo/owner/name/commits/... links.
 identity: []const u8,
+// the resolved ref/oid this log walks from (the default branch when the route
+// didn't name one), so the page can canonicalize its url to it.
+ref_or_oid: RefOrOid,
+ref_or_oid_value: []const u8,
 commits: []const Commit,
 // the first oid of the next page, or null when this is the last page.
 next_start: ?[]const u8,
@@ -50,49 +57,47 @@ pub fn init(
     session: *ui.Session,
     event_id: *const [evt.event_id_size]u8,
     identity: []const u8,
-    start_oid: []const u8,
-    // the hunk index the selected commit's (the first one, == start_oid) diff
+    requested_ref_or_oid: ?RefOrOid,
+    requested_value: []const u8,
+    // the hunk index the selected commit's (the first one, the walk root) diff
     // window starts at; 0 is the first window. moved by "next"/"previous".
     after: usize,
 ) !Self {
     const aa = arena.allocator();
     const hex = std.fmt.bytesToHex(event_id.*, .lower);
-    const empty: Self = .{
-        .identity = try aa.dupe(u8, identity),
-        .commits = &.{},
-        .next_start = null,
-    };
 
     // no filesystem (wasm) or nowhere to look: empty listing. the wasm path
     // never calls init anyway — it rebuilds from the serialized snapshot.
-    const io = session.io orelse return empty;
-    const repos_dir = session.repos_dir orelse return empty;
+    const io = session.io orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value);
+    const repos_dir = session.repos_dir orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value);
 
     const repo_path = try std.fs.path.join(aa, &.{ repos_dir, &hex });
 
     // walk the log with the arena's backing allocator (transient; the commits
     // we keep are duped into the page arena so they outlive it).
     const gpa = arena.child_allocator;
-    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return empty;
+    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value);
     defer repo.deinit(io, gpa);
 
-    // page 1 walks from HEAD (null); a later page starts at its first oid.
-    var start_arr: [1][xit.hash.hexLen(.sha1)]u8 = undefined;
-    const start_oids: ?[]const [xit.hash.hexLen(.sha1)]u8 = if (start_oid.len == 0) null else blk: {
-        if (start_oid.len != start_arr[0].len) return empty; // malformed oid
-        @memcpy(&start_arr[0], start_oid);
-        break :blk start_arr[0..1];
+    // resolve the requested ref (or the default branch) to the commit oid to
+    // walk from. an explicitly named ref that doesn't resolve is a bad url
+    // (NotFound -> 404); the default-branch path falls through to empty.
+    const resolved = (try ui.ResolvedRefOrOid.init(&repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
+        if (requested_ref_or_oid != null) return error.NotFound;
+        return emptyResult(aa, identity, .branch, requested_value);
     };
+    var start_arr = [1][hex_len]u8{resolved.oid};
+    const start_oids: []const [hex_len]u8 = start_arr[0..1];
 
     // collect this page's commit metadata, plus a peek at the one after it (its
     // oid is the next page's start). the diff for each is rendered afterward, so
     // the log iterator is closed before opening per-commit diff iterators.
     var buf: [page_size]Commit = undefined;
-    var oids: [page_size][xit.hash.hexLen(.sha1)]u8 = undefined;
+    var oids: [page_size][hex_len]u8 = undefined;
     var count: usize = 0;
     var next_start: ?[]const u8 = null;
     {
-        var iter = repo.log(io, gpa, start_oids) catch return empty;
+        var iter = repo.log(io, gpa, start_oids) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value);
         defer iter.deinit();
         while (try iter.next(gpa)) |commit_object| {
             defer commit_object.deinit();
@@ -133,9 +138,22 @@ pub fn init(
     }
 
     return .{
-        .identity = empty.identity,
+        .identity = try aa.dupe(u8, identity),
+        .ref_or_oid = resolved.ref_or_oid,
+        .ref_or_oid_value = resolved.value,
         .commits = try aa.dupe(Commit, buf[0..count]),
         .next_start = next_start,
+    };
+}
+
+// an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
+fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: RefOrOid, value: []const u8) !Self {
+    return .{
+        .identity = try aa.dupe(u8, identity),
+        .ref_or_oid = ref_or_oid,
+        .ref_or_oid_value = try aa.dupe(u8, value),
+        .commits = &.{},
+        .next_start = null,
     };
 }
 
@@ -439,7 +457,7 @@ pub const View = struct {
                 if (self.selectedCommitIndex()) |sel| {
                     // mirror the commit's current diff window so the url stays
                     // linkable (0 for any commit but the windowed start one).
-                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, self.data.commits[sel].oid, self.data.commits[sel].window_start)) |route|
+                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, .object, self.data.commits[sel].oid, self.data.commits[sel].window_start)) |route|
                         self.session.data.current_page = route;
                 }
             }
@@ -541,7 +559,7 @@ pub const View = struct {
             .enter => if (self.selectedCommitIndex() != null)
                 try self.focusDiff(root_focus)
             else if (self.data.next_start) |next| {
-                if (ui.RoutablePage.repoCommitsRoute(self.data.identity, next, 0)) |route|
+                if (ui.RoutablePage.repoCommitsRoute(self.data.identity, .object, next, 0)) |route|
                     try self.session.navigate(route);
             },
             .arrow_right => try self.focusDiff(root_focus),
@@ -763,10 +781,10 @@ pub const View = struct {
     }
 };
 
-// the "a:" navigation link for the commits page starting at `start_oid` within
+// the "a:" navigation link for the commits page walking from commit `oid` within
 // `identity`, showing the selected commit's first `after` hunks (0 = default).
-fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, start_oid: []const u8, after: usize) ![]const u8 {
-    const route = ui.RoutablePage.repoCommitsRoute(identity, start_oid, after) orelse return error.RouteTooLong;
+fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8, after: usize) ![]const u8 {
+    const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, after) orelse return error.RouteTooLong;
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
@@ -775,7 +793,7 @@ fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, start
 // points at the same route as commitsLink but the "ai:" prefix keeps wasm clicks
 // in-page (crossPageLink ignores it); the href is only followed with js off.
 fn commitRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8) ![]const u8 {
-    const route = ui.RoutablePage.repoCommitsRoute(identity, oid, 0) orelse return error.RouteTooLong;
+    const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, 0) orelse return error.RouteTooLong;
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
 }

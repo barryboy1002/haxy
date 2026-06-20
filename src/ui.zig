@@ -1,6 +1,8 @@
 const std = @import("std");
 const xit = @import("xit");
 const rp = xit.repo;
+const rf = xit.ref;
+const hash = xit.hash;
 const xitui = xit.xitui;
 const term = xitui.terminal;
 const wgt = xitui.widget;
@@ -82,7 +84,7 @@ pub const RoutablePage = union(enum) {
     pub const RefOrOid = enum {
         branch,
         tag,
-        oid,
+        object,
 
         fn fromSeg(s: []const u8) ?RefOrOid {
             return std.meta.stringToEnum(RefOrOid, s);
@@ -160,23 +162,31 @@ pub const RoutablePage = union(enum) {
         return .{ .repo = Array(repo_route_max_len).from(s) orelse return null };
     }
 
-    // the start oid of a `.repo_commits` route's stored string ("" = page 1,
-    // which the commits tab walks from HEAD).
-    pub fn repoCommitsStart(s: []const u8) []const u8 {
+    // the ref/oid a `.repo_commits` route's stored string walks from. kind is
+    // null for the bare "owner/name/commits" (the repo's default branch). the
+    // returned value slices into `s`.
+    pub const CommitsRef = struct { ref_or_oid: ?RefOrOid, value: []const u8 };
+    pub fn repoCommitsRef(s: []const u8) CommitsRef {
         const marker = "/" ++ commits_seg ++ "/";
-        const i = std.mem.indexOf(u8, s, marker) orelse return "";
-        return s[i + marker.len ..];
+        const i = std.mem.indexOf(u8, s, marker) orelse return .{ .ref_or_oid = null, .value = "" };
+        const ref_part = s[i + marker.len ..]; // "<refkind>/<refvalue>"
+        const k1 = std.mem.indexOfScalar(u8, ref_part, '/') orelse return .{ .ref_or_oid = null, .value = "" };
+        const kind = RefOrOid.fromSeg(ref_part[0..k1]) orelse return .{ .ref_or_oid = null, .value = "" };
+        const value = ref_part[k1 + 1 ..];
+        if (value.len == 0) return .{ .ref_or_oid = null, .value = "" };
+        return .{ .ref_or_oid = kind, .value = value };
     }
 
-    // build a `.repo_commits` route for "owner/name" (identity) at `start_oid`
-    // ("" = the first page). always carries the `commits` marker so page 1
+    // build a `.repo_commits` route for "owner/name" (identity), walking from
+    // `ref_or_oid`/`value` (a null ref_or_oid yields the bare default-branch
+    // route). always carries the `commits` marker so the bare route
     // ("owner/name/commits") doesn't collide with the files root.
-    pub fn repoCommitsRoute(identity: []const u8, start_oid: []const u8, after: usize) ?RoutablePage {
+    pub fn repoCommitsRoute(identity: []const u8, ref_or_oid: ?RefOrOid, value: []const u8, after: usize) ?RoutablePage {
         var buf: [repo_route_max_len]u8 = undefined;
-        const s = if (start_oid.len == 0)
-            std.fmt.bufPrint(&buf, "{s}/" ++ commits_seg, .{identity}) catch return null
+        const s = if (ref_or_oid) |kind|
+            std.fmt.bufPrint(&buf, "{s}/" ++ commits_seg ++ "/{s}/{s}", .{ identity, @tagName(kind), value }) catch return null
         else
-            std.fmt.bufPrint(&buf, "{s}/" ++ commits_seg ++ "/{s}", .{ identity, start_oid }) catch return null;
+            std.fmt.bufPrint(&buf, "{s}/" ++ commits_seg, .{identity}) catch return null;
         return .{ .repo_commits = .{ .name = Array(repo_route_max_len).from(s) orelse return null, .after = after } };
     }
 
@@ -306,8 +316,16 @@ pub const RoutablePage = union(enum) {
                     const dir = if (k2) |i| after_kind[i + 1 ..] else "";
                     return repoFilesRoute(pair, kind, value, dir);
                 }
-                if (std.mem.eql(u8, sub, commits_seg)) return repoCommitsRoute(pair, "", after); // trailing /commits == page 1
-                if (std.mem.startsWith(u8, sub, commits_seg ++ "/")) return repoCommitsRoute(pair, sub[commits_seg.len + 1 ..], after);
+                if (std.mem.eql(u8, sub, commits_seg)) return repoCommitsRoute(pair, null, "", after); // trailing /commits == default branch
+                if (std.mem.startsWith(u8, sub, commits_seg ++ "/")) {
+                    // "commits/<refkind>/<refvalue>"
+                    const ref_part = sub[commits_seg.len + 1 ..];
+                    const k1 = std.mem.indexOfScalar(u8, ref_part, '/') orelse return null;
+                    const kind = RefOrOid.fromSeg(ref_part[0..k1]) orelse return null;
+                    const value = ref_part[k1 + 1 ..];
+                    if (value.len == 0) return null;
+                    return repoCommitsRoute(pair, kind, value, after);
+                }
                 return null; // unknown sub-path
             }
             return repoFilesRoute(pair, null, "", "");
@@ -364,7 +382,8 @@ pub const RoutablePage = union(enum) {
         ref_or_oid: ?RefOrOid,
         ref_or_oid_value: []const u8,
         files_dir: []const u8,
-        commits_start: []const u8,
+        commits_ref_or_oid: ?RefOrOid,
+        commits_ref_or_oid_value: []const u8,
         commits_after: usize,
         refs_kind: RefKind,
         refs_after: usize,
@@ -380,7 +399,7 @@ pub const RoutablePage = union(enum) {
             .repo_refs => |*r2| r2.name.slice(),
             else => return null,
         };
-        const rf = RepoFiles.parse(name) orelse return null;
+        const files = RepoFiles.parse(name) orelse return null;
         // a 0 offset means no refs pagination, so canonicalize the column to
         // branch then — otherwise the base /refs route would look like a content
         // change relative to the same page mirrored with kind=tag.
@@ -389,12 +408,15 @@ pub const RoutablePage = union(enum) {
             else => 0,
         };
         const is_files = std.meta.activeTag(r.*) == .repo;
+        const is_commits = std.meta.activeTag(r.*) == .repo_commits;
+        const commits_ref = if (is_commits) repoCommitsRef(name) else CommitsRef{ .ref_or_oid = null, .value = "" };
         return .{
-            .identity = rf.identity,
-            .ref_or_oid = if (is_files) rf.ref_kind else null,
-            .ref_or_oid_value = if (is_files) rf.ref_value else "",
-            .files_dir = if (is_files) rf.dir else "",
-            .commits_start = if (std.meta.activeTag(r.*) == .repo_commits) repoCommitsStart(name) else "",
+            .identity = files.identity,
+            .ref_or_oid = if (is_files) files.ref_kind else null,
+            .ref_or_oid_value = if (is_files) files.ref_value else "",
+            .files_dir = if (is_files) files.dir else "",
+            .commits_ref_or_oid = commits_ref.ref_or_oid,
+            .commits_ref_or_oid_value = commits_ref.value,
             .commits_after = switch (r.*) {
                 .repo_commits => |c| c.after,
                 else => 0,
@@ -415,7 +437,8 @@ pub const RoutablePage = union(enum) {
             ca.ref_or_oid != cb.ref_or_oid or
             !std.mem.eql(u8, ca.ref_or_oid_value, cb.ref_or_oid_value) or
             !std.mem.eql(u8, ca.files_dir, cb.files_dir) or
-            !std.mem.eql(u8, ca.commits_start, cb.commits_start) or
+            ca.commits_ref_or_oid != cb.commits_ref_or_oid or
+            !std.mem.eql(u8, ca.commits_ref_or_oid_value, cb.commits_ref_or_oid_value) or
             ca.commits_after != cb.commits_after or
             ca.refs_kind != cb.refs_kind or
             ca.refs_after != cb.refs_after;
@@ -508,6 +531,61 @@ pub const RoutablePage = union(enum) {
             .repo_settings => .{ .repo_settings = try parseName(repo_route_max_len, helper.name) },
             .repo_auth => .{ .repo_auth = try parseName(repo_route_max_len, helper.name) },
         };
+    }
+};
+
+// a `RefOrOid` resolved against an on-disk repo to the commit oid it points at
+pub const ResolvedRefOrOid = struct {
+    // the hex-oid length for the default repo options the on-disk repos use
+    pub const hex_len = hash.hexLen((rp.RepoOpts(.xit){}).hash);
+
+    // the concrete ref/oid (a null request resolves to the default branch)
+    ref_or_oid: RoutablePage.RefOrOid,
+    // its branch/tag name or oid string, duped into the allocator passed in
+    value: []const u8,
+    // the commit oid it points at
+    oid: [hex_len]u8,
+
+    // resolve a requested ref/oid (null = the repo's default branch) to a
+    // concrete ref/oid plus the commit oid it points at. null when it doesn't
+    // resolve (an unknown branch/tag, or a malformed/unknown oid).
+    pub fn init(
+        repo: *rp.Repo(.xit, .{}),
+        io: std.Io,
+        aa: std.mem.Allocator,
+        requested_ref_or_oid: ?RoutablePage.RefOrOid,
+        requested_value: []const u8,
+    ) !?ResolvedRefOrOid {
+        var ref_or_oid: RoutablePage.RefOrOid = requested_ref_or_oid orelse .branch;
+        var value: []const u8 = requested_value;
+        // no ref named: fall back to HEAD's branch (or its oid when detached).
+        if (requested_ref_or_oid == null) {
+            var head_buf: [rf.MAX_REF_CONTENT_SIZE]u8 = undefined;
+            if (repo.head(io, &head_buf)) |head| switch (head) {
+                .ref => |r| {
+                    ref_or_oid = .branch;
+                    value = r.name;
+                },
+                .oid => |o| {
+                    ref_or_oid = .object;
+                    value = o;
+                },
+            } else |_| {}
+        }
+
+        var oid: [hex_len]u8 = undefined;
+        switch (ref_or_oid) {
+            .object => {
+                if (value.len != hex_len) return null;
+                @memcpy(&oid, value);
+            },
+            .branch, .tag => {
+                const ref_kind: rf.RefKind = if (ref_or_oid == .branch) .head else .tag;
+                oid = (repo.readRef(io, .{ .kind = ref_kind, .name = value }) catch null) orelse return null;
+            },
+        }
+        // dupe so the value outlives the stack buffer head() may have filled.
+        return .{ .ref_or_oid = ref_or_oid, .value = try aa.dupe(u8, value), .oid = oid };
     }
 };
 

@@ -15,6 +15,8 @@ test "commits list next row is a cross-page link" {
 
     const data = Commits{
         .identity = identity,
+        .ref_or_oid = .object,
+        .ref_or_oid_value = oid0,
         .commits = &.{
             .{ .oid = oid0, .date = "2024-01-01", .message = "first", .hunks = &.{}, .window_start = 0, .has_prev = false, .has_more = false },
         },
@@ -22,7 +24,7 @@ test "commits list next row is a cross-page link" {
     };
 
     var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = true };
-    session.data.current_page = ui.RoutablePage.repoCommitsRoute(identity, oid0, 0).?;
+    session.data.current_page = ui.RoutablePage.repoCommitsRoute(identity, .object, oid0, 0).?;
 
     var view = try Commits.View.init(allocator, &data, &session);
     defer view.deinit(allocator);

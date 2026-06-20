@@ -4,8 +4,6 @@ const ui = @import("../../ui.zig");
 const xit = @import("xit");
 const rp = xit.repo;
 const tr = xit.tree;
-const rf = xit.ref;
-const hash = xit.hash;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
@@ -14,8 +12,6 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
 const RefOrOid = ui.RoutablePage.RefOrOid;
-// the hex-oid length for the default repo options the on-disk repos use.
-const hex_len = hash.hexLen((rp.RepoOpts(.xit){}).hash);
 
 // one entry in the directory currently being viewed.
 pub const Entry = struct {
@@ -63,46 +59,19 @@ pub fn init(
     var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, dir);
     defer repo.deinit(io, gpa);
 
-    // resolve the effective ref: the one named in the route, else HEAD's branch.
-    // the value is duped immediately so it outlives the stack buffer head() fills.
-    var resolved_ref_or_oid: RefOrOid = requested_ref_or_oid orelse .branch;
-    var resolved_value: []const u8 = requested_value;
-    if (requested_ref_or_oid == null) {
-        var head_buf: [rf.MAX_REF_CONTENT_SIZE]u8 = undefined;
-        if (repo.head(io, &head_buf)) |head| switch (head) {
-            .ref => |ref| {
-                resolved_ref_or_oid = .branch;
-                resolved_value = try aa.dupe(u8, ref.name);
-            },
-            .oid => |oid| {
-                resolved_ref_or_oid = .object;
-                resolved_value = try aa.dupe(u8, oid);
-            },
-        } else |_| {}
-    }
-
-    // resolve the ref to the commit oid whose tree we list. a ref the route
-    // named explicitly that doesn't resolve is a bad url (NotFound -> 404); the
-    // default-branch path instead falls through to an empty listing below.
-    const explicit = requested_ref_or_oid != null;
-    var oid: [hex_len]u8 = undefined;
-    switch (resolved_ref_or_oid) {
-        .object => {
-            if (resolved_value.len != hex_len) return unresolved(aa, identity, explicit, resolved_ref_or_oid, resolved_value, dir);
-            @memcpy(&oid, resolved_value);
-        },
-        .branch, .tag => {
-            const ref_kind: rf.RefKind = if (resolved_ref_or_oid == .branch) .head else .tag;
-            oid = (repo.readRef(io, .{ .kind = ref_kind, .name = resolved_value }) catch null) orelse
-                return unresolved(aa, identity, explicit, resolved_ref_or_oid, resolved_value, dir);
-        },
-    }
+    // resolve the requested ref (or the default branch) to the commit oid whose
+    // tree we list. a ref the route named explicitly that doesn't resolve is a
+    // bad url (NotFound -> 404); the default-branch path falls through to empty.
+    const resolved = (try ui.ResolvedRefOrOid.init(&repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
+        if (requested_ref_or_oid != null) return error.NotFound;
+        return emptyResult(aa, identity, .branch, requested_value, dir);
+    };
 
     // read the tree at that commit. building the read-only state mirrors what
     // repo.status does internally, but for an arbitrary commit rather than HEAD.
-    var moment = repo.core.latestMoment() catch return emptyResult(aa, identity, resolved_ref_or_oid, resolved_value, dir);
+    var moment = repo.core.latestMoment() catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, dir);
     const state = rp.Repo(.xit, .{}).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
-    var tree = tr.Tree(.xit, .{}).init(state, io, gpa, &oid) catch return emptyResult(aa, identity, resolved_ref_or_oid, resolved_value, dir);
+    var tree = tr.Tree(.xit, .{}).init(state, io, gpa, &resolved.oid) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, dir);
     defer tree.deinit();
 
     // collect the immediate children of `dir`. each committed path is a full
@@ -144,18 +113,11 @@ pub fn init(
 
     return .{
         .identity = try aa.dupe(u8, identity),
-        .ref_or_oid = resolved_ref_or_oid,
-        .ref_or_oid_value = try aa.dupe(u8, resolved_value),
+        .ref_or_oid = resolved.ref_or_oid,
+        .ref_or_oid_value = resolved.value,
         .dir = try aa.dupe(u8, dir),
         .entries = entries,
     };
-}
-
-// a ref that didn't resolve: a 404 when the route named it explicitly, else an
-// empty listing (e.g. resolving an empty repo's default branch).
-fn unresolved(aa: std.mem.Allocator, identity: []const u8, explicit: bool, ref_or_oid: RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
-    if (explicit) return error.NotFound;
-    return emptyResult(aa, identity, ref_or_oid, ref_or_oid_value, dir);
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
