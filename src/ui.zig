@@ -541,14 +541,16 @@ pub const ResolvedRefOrOid = struct {
 
     // the concrete ref/oid (a null request resolves to the default branch)
     ref_or_oid: RoutablePage.RefOrOid,
-    // its branch/tag name or oid string, duped into the allocator passed in
+    // its branch/tag name or oid, url-encoded (ref names may contain '/', so the
+    // route layer — which splits on '/' — stores them encoded). duped into `aa`.
     value: []const u8,
     // the commit oid it points at
     oid: [hex_len]u8,
 
     // resolve a requested ref/oid (null = the repo's default branch) to a
-    // concrete ref/oid plus the commit oid it points at. null when it doesn't
-    // resolve (an unknown branch/tag, or a malformed/unknown oid).
+    // concrete ref/oid plus the commit oid it points at. `requested_value` is the
+    // url-encoded form (as it appears in the route). null when it doesn't resolve
+    // (an unknown branch/tag, or a malformed/unknown oid).
     pub fn init(
         repo: *rp.Repo(.xit, .{}),
         io: std.Io,
@@ -557,7 +559,11 @@ pub const ResolvedRefOrOid = struct {
         requested_value: []const u8,
     ) !?ResolvedRefOrOid {
         var ref_or_oid: RoutablePage.RefOrOid = requested_ref_or_oid orelse .branch;
-        var value: []const u8 = requested_value;
+        // the decoded ref name / oid to look up. a named ref arrives url-encoded.
+        var value: []const u8 = if (requested_ref_or_oid == null)
+            requested_value
+        else
+            std.Uri.percentDecodeInPlace(try aa.dupe(u8, requested_value));
         // no ref named: fall back to HEAD's branch (or its oid when detached).
         if (requested_ref_or_oid == null) {
             var head_buf: [rf.MAX_REF_CONTENT_SIZE]u8 = undefined;
@@ -584,8 +590,19 @@ pub const ResolvedRefOrOid = struct {
                 oid = (repo.readRef(io, .{ .kind = ref_kind, .name = value }) catch null) orelse return null;
             },
         }
-        // dupe so the value outlives the stack buffer head() may have filled.
-        return .{ .ref_or_oid = ref_or_oid, .value = try aa.dupe(u8, value), .oid = oid };
+        // store url-encoded so the route layer can hold the value verbatim.
+        return .{ .ref_or_oid = ref_or_oid, .value = try urlEncode(aa, value), .oid = oid };
+    }
+
+    fn isUnreserved(c: u8) bool {
+        return std.ascii.isAlphanumeric(c) or c == '-' or c == '.' or c == '_' or c == '~';
+    }
+
+    // percent-encode a ref name for use as a single url path segment.
+    fn urlEncode(aa: std.mem.Allocator, raw: []const u8) ![]const u8 {
+        var out: std.Io.Writer.Allocating = .init(aa);
+        try std.Uri.Component.percentEncode(&out.writer, raw, isUnreserved);
+        return out.written();
     }
 };
 

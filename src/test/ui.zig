@@ -42,3 +42,24 @@ test "commits list next row is a cross-page link" {
     const route = ui.crossPageLink(root_focus, next_id, session.data.current_page);
     try std.testing.expect(route != null);
 }
+
+// a ref name with a '/' is url-encoded in the route, so it survives the
+// '/'-delimited url round-trip as a single segment (kind + value) rather than
+// being mis-parsed as extra path.
+test "encoded ref name survives the commits url round-trip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const RP = ui.RoutablePage;
+
+    // the route layer holds the value already url-encoded ("feature%2Ffoo").
+    const route = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", 0).?;
+    const url = try route.urlAlloc(&arena);
+    try std.testing.expectEqualStrings("/repo/alice/ziglings/commits/branch/feature%2Ffoo", url);
+
+    // parsing it back yields the same route, and the ref splits out intact.
+    const parsed = RP.fromUrl(url, null);
+    try std.testing.expect(parsed != null);
+    const ref = RP.repoCommitsRef(parsed.?.repo_commits.name.slice());
+    try std.testing.expectEqual(RP.RefOrOid.branch, ref.ref_or_oid.?);
+    try std.testing.expectEqualStrings("feature%2Ffoo", ref.value);
+}
