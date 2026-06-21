@@ -30,22 +30,23 @@ pub fn init(
 
     // the users ordered by creation time (oldest first); absent until the first
     // user exists. keyed by [timestamp][event-id], value = event-id.
-    const timestamp_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "timestamp->user-id")) orelse
+    const created_ts_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "created-ts->user-id")) orelse
         return .{ .users = &.{}, .after = after, .next_after = null };
-    const timestamp_to_user_id = try DB.SortedMap(.read_only).init(timestamp_to_user_id_cursor);
-    const count = try timestamp_to_user_id.count();
+    const created_ts_to_user_id = try DB.SortedMap(.read_only).init(created_ts_to_user_id_cursor);
+    const count = try created_ts_to_user_id.count();
 
     const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->user")) orelse
         return .{ .users = &.{}, .after = after, .next_after = null };
     const event_id_to_user = try DB.HashMap(.read_only).init(event_id_to_user_cursor);
 
-    // read the window [after, after+page_size) by index — a direct O(log n) seek
-    // per entry, never scanning the whole table. deletes remove their entry (no
-    // tombstones), so the window is dense.
+    // read the window [after, after+page_size) with one seek to the start rank,
+    // then a sequential walk
     const end = @min(after + page_size, count);
+    var iter = try created_ts_to_user_id.iteratorFromIndex(after);
     var i = after;
     while (i < end) : (i += 1) {
-        const id_kv = try timestamp_to_user_id.getIndexKeyValuePair(@intCast(i)) orelse continue;
+        var id_cursor = (try iter.next()) orelse break;
+        const id_kv = try id_cursor.readKeyValuePair();
         var event_id: [evt.event_id_size]u8 = undefined;
         _ = try id_kv.value_cursor.readBytes(&event_id);
         const user_cursor = try event_id_to_user.getCursor(hash.hashInt(hash_kind, &event_id)) orelse continue;

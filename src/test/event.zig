@@ -852,7 +852,7 @@ test "repos and users paginate in creation order" {
             moment: DB.HashMap(.read_only),
             expected: []const *const [evt.event_id_size]u8,
         ) !void {
-            const cursor = try moment.getCursor(hash.hashInt(hash_kind, "timestamp->repo-id")) orelse return error.NotFound;
+            const cursor = try moment.getCursor(hash.hashInt(hash_kind, "created-ts->repo-id")) orelse return error.NotFound;
             const map = try DB.SortedMap(.read_only).init(cursor);
             try std.testing.expectEqual(expected.len, try map.count());
             for (expected, 0..) |id, i| {
@@ -880,7 +880,7 @@ test "repos and users paginate in creation order" {
         try Check.order(Repo.DB, repo_opts.hash, moment, &.{ &repo_ids[0], &repo_ids[1], &repo_ids[2], &repo_ids[3] });
 
         // the single user shows up in its own ordered map
-        const ucur = try moment.getCursor(hash.hashInt(repo_opts.hash, "timestamp->user-id")) orelse return error.NotFound;
+        const ucur = try moment.getCursor(hash.hashInt(repo_opts.hash, "created-ts->user-id")) orelse return error.NotFound;
         const umap = try Repo.DB.SortedMap(.read_only).init(ucur);
         try std.testing.expectEqual(1, try umap.count());
     }

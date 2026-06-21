@@ -77,10 +77,10 @@ pub fn consume(
         // first time we've seen this repo: add it to the ordered map the repos
         // view paginates through
         if (existing_cursor_maybe == null) {
-            const timestamp_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->repo-id"));
-            const timestamp_to_repo_id = try DB.SortedMap(.read_write).init(timestamp_to_repo_id_cursor);
+            const created_ts_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->repo-id"));
+            const created_ts_to_repo_id = try DB.SortedMap(.read_write).init(created_ts_to_repo_id_cursor);
             const order_key = evt.orderKey(event_to_write.created_ts, event_id);
-            try timestamp_to_repo_id.put(&order_key, .{ .bytes = event_id });
+            try created_ts_to_repo_id.put(&order_key, .{ .bytes = event_id });
         }
 
         const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
@@ -98,10 +98,10 @@ pub fn consume(
             _ = try name_to_repo_id.remove(hash.hashInt(hash_kind, existing_path));
 
             // drop it from the ordered map using its recorded creation timestamp
-            const timestamp_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->repo-id"));
-            const timestamp_to_repo_id = try DB.SortedMap(.read_write).init(timestamp_to_repo_id_cursor);
+            const created_ts_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->repo-id"));
+            const created_ts_to_repo_id = try DB.SortedMap(.read_write).init(created_ts_to_repo_id_cursor);
             const order_key = evt.orderKey(existing_repo_event.created_ts, event_id);
-            _ = try timestamp_to_repo_id.remove(&order_key);
+            _ = try created_ts_to_repo_id.remove(&order_key);
 
             const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
             const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);

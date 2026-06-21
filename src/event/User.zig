@@ -86,10 +86,10 @@ pub fn consume(
         // first time we've seen this user: add it to the ordered map the users
         // view paginates through
         if (existing_cursor_maybe == null) {
-            const timestamp_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->user-id"));
-            const timestamp_to_user_id = try DB.SortedMap(.read_write).init(timestamp_to_user_id_cursor);
+            const created_ts_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->user-id"));
+            const created_ts_to_user_id = try DB.SortedMap(.read_write).init(created_ts_to_user_id_cursor);
             const order_key = evt.orderKey(event_to_write.created_ts, event_id);
-            try timestamp_to_user_id.put(&order_key, .{ .bytes = event_id });
+            try created_ts_to_user_id.put(&order_key, .{ .bytes = event_id });
         }
     } else {
         // read the user's name so we can drop its name->id index entry
@@ -99,10 +99,10 @@ pub fn consume(
             _ = try name_to_user_id.remove(hash.hashInt(hash_kind, existing_event.name));
 
             // drop it from the ordered map using its recorded creation timestamp
-            const timestamp_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "timestamp->user-id"));
-            const timestamp_to_user_id = try DB.SortedMap(.read_write).init(timestamp_to_user_id_cursor);
+            const created_ts_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->user-id"));
+            const created_ts_to_user_id = try DB.SortedMap(.read_write).init(created_ts_to_user_id_cursor);
             const order_key = evt.orderKey(existing_event.created_ts, event_id);
-            _ = try timestamp_to_user_id.remove(&order_key);
+            _ = try created_ts_to_user_id.remove(&order_key);
         }
 
         if (!try event_id_to_user.remove(user_key)) return error.EventNotFound;
