@@ -111,8 +111,11 @@ pub fn init(
     const commits = try Commits.init(arena, session, &found.event_id, rf.identity, requested_ref_or_oid, requested_ref_value, commits_after);
 
     // each tab mirror carries this page's route for that tab; tabs not targeted
-    // by the incoming route fall back to their root/first-page route.
-    const route_name = (ui.RoutablePage.repoFilesRoute(rf.identity, files.ref_or_oid, files.ref_or_oid_value, files.dir) orelse return error.NotFound).repo;
+    // by the incoming route fall back to their root/first-page route. the files
+    // mirror carries the selected file (when the route named one) so the url
+    // keeps it before focus enters the view.
+    const files_path = if (files.selected_file) |f| try Files.childDir(arena.allocator(), files.dir, f) else files.dir;
+    const route_name = (ui.RoutablePage.repoFilesRoute(rf.identity, files.ref_or_oid, files.ref_or_oid_value, files_path) orelse return error.NotFound).repo;
     const commits_route_name = (ui.RoutablePage.repoCommitsRoute(rf.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_after) orelse return error.NotFound).repo_commits.name;
 
     return .{

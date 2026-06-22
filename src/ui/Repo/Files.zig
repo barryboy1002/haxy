@@ -36,6 +36,10 @@ ref_or_oid: RefOrOid,
 ref_or_oid_value: []const u8,
 // the directory being viewed, relative to the repo root ("" at the root).
 dir: []const u8,
+// a file within `dir` to start selected (so its contents show and the url
+// carries it), or null to fall back to a README / the first row. set when the
+// route's path named a file rather than a directory.
+selected_file: ?[]const u8 = null,
 entries: []const Entry,
 // the "viewing <ref> <value>" banner shown above the listing.
 sub_header: SubHeader,
@@ -49,15 +53,15 @@ pub fn init(
     identity: []const u8,
     requested_ref_or_oid: ?RefOrOid,
     requested_value: []const u8,
-    dir: []const u8,
+    path: []const u8,
 ) !Self {
     const aa = arena.allocator();
 
     // no filesystem (wasm) or nowhere to look: empty listing pinned to whatever
     // ref the route asked for. the wasm path never calls init anyway — it
     // rebuilds from the serialized snapshot.
-    const io = session.io orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, dir);
-    const repos_dir = session.repos_dir orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, dir);
+    const io = session.io orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
+    const repos_dir = session.repos_dir orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
 
     // the repo's working copy lives at <repos_dir>/<hex event id>.
     const hex = std.fmt.bytesToHex(event_id.*, .lower);
@@ -67,7 +71,7 @@ pub fn init(
     // (transient; freed before init returns); the listing is built into the
     // page arena so it outlives them.
     const gpa = arena.child_allocator;
-    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, dir);
+    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
     defer repo.deinit(io, gpa);
 
     // resolve the requested ref (or the default branch) to the commit oid whose
@@ -75,15 +79,25 @@ pub fn init(
     // bad url (NotFound -> 404); the default-branch path falls through to empty.
     const resolved = (try ui.ResolvedRefOrOid.init(&repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null) return error.NotFound;
-        return emptyResult(aa, identity, .branch, requested_value, dir);
+        return emptyResult(aa, identity, .branch, requested_value, path);
     };
 
     // read the tree at that commit. building the read-only state mirrors what
     // repo.status does internally, but for an arbitrary commit rather than HEAD.
-    var moment = repo.core.latestMoment() catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, dir);
+    var moment = repo.core.latestMoment() catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
     const state = rp.Repo(.xit, .{}).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
-    var tree = tr.Tree(.xit, .{}).init(state, io, gpa, &resolved.oid) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, dir);
+    var tree = tr.Tree(.xit, .{}).init(state, io, gpa, &resolved.oid) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
     defer tree.deinit();
+
+    // `path` names a file when it's an exact tree entry: list its parent
+    // directory and start that file selected. otherwise `path` is the directory.
+    var dir = path;
+    var selected_file: ?[]const u8 = null;
+    if (path.len != 0 and tree.entries.get(path) != null) {
+        const slash = std.mem.lastIndexOfScalar(u8, path, '/');
+        selected_file = try aa.dupe(u8, if (slash) |s| path[s + 1 ..] else path);
+        dir = if (slash) |s| path[0..s] else "";
+    }
 
     // collect the immediate children of `dir`. each committed path is a full
     // file path; a child is a directory when more path follows its first
@@ -91,11 +105,11 @@ pub fn init(
     var children: std.StringArrayHashMapUnmanaged(bool) = .empty; // name -> is_dir
     defer children.deinit(gpa);
     const prefix_len = if (dir.len == 0) 0 else dir.len + 1; // skip "dir/"
-    for (tree.entries.keys()) |path| {
+    for (tree.entries.keys()) |entry_path| {
         if (dir.len != 0) {
-            if (!std.mem.startsWith(u8, path, dir) or path.len <= dir.len or path[dir.len] != '/') continue;
+            if (!std.mem.startsWith(u8, entry_path, dir) or entry_path.len <= dir.len or entry_path[dir.len] != '/') continue;
         }
-        const rel = path[prefix_len..];
+        const rel = entry_path[prefix_len..];
         const slash = std.mem.indexOfScalar(u8, rel, '/');
         const name = if (slash) |s| rel[0..s] else rel;
         const is_dir = slash != null;
@@ -119,9 +133,9 @@ pub fn init(
             if (is_dir != want_dir) continue;
             var entry: Entry = .{ .name = try aa.dupe(u8, name), .is_dir = is_dir };
             if (!is_dir) {
-                const path = try childDir(aa, dir, name);
-                if (tree.entries.get(path)) |tree_entry| {
-                    const content = readFileContent(state, io, gpa, aa, path, tree_entry) catch
+                const file_path = try childDir(aa, dir, name);
+                if (tree.entries.get(file_path)) |tree_entry| {
+                    const content = readFileContent(state, io, gpa, aa, file_path, tree_entry) catch
                         FileContent{ .lines = &.{}, .is_binary = false };
                     entry.lines = content.lines;
                     entry.is_binary = content.is_binary;
@@ -137,6 +151,7 @@ pub fn init(
         .ref_or_oid = resolved.ref_or_oid,
         .ref_or_oid_value = resolved.value,
         .dir = try aa.dupe(u8, dir),
+        .selected_file = selected_file,
         .entries = entries,
         .sub_header = try SubHeader.init(aa, resolved.ref_or_oid, resolved.value),
     };
@@ -239,13 +254,14 @@ pub const View = struct {
                     const link = if (entry.is_dir) try dirLink(session.page_arena, data, try childDir(aa, data.dir, entry.name)) else "";
                     try addRow(allocator, &list_box, label, link);
                 }
-                // default the selection to the first row, but prefer a README in
-                // this directory so its contents greet the visitor in the detail
-                // pane. a non-root directory has a leading ".." row, so the entry
+                // select the file the route named, else prefer a README so its
+                // contents greet the visitor in the detail pane, else the first
+                // row. a non-root directory has a leading ".." row, so the entry
                 // index is offset by one there.
                 if (list_box.children.count() > 0) {
                     const base: usize = if (data.dir.len != 0) 1 else 0;
-                    const sel = if (readmeIndex(data.entries)) |i| i + base else 0;
+                    const entry_idx = selectedFileIndex(data) orelse readmeIndex(data.entries);
+                    const sel = if (entry_idx) |i| i + base else 0;
                     list_box.getFocus().child_id = list_box.children.keys()[sel];
                 }
                 break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .box = list_box }, .{ .direction = .vert, .web_native = !session.is_terminal });
@@ -362,6 +378,26 @@ pub const View = struct {
 
         // swap the detail pane to the selected entry when the selection changes.
         try self.refreshDetail(allocator);
+
+        // mirror the selected file into the url so it updates as the selection
+        // moves, but only while focus is inside this view (so landing on the tab
+        // keeps the page's base route). a file selection carries the file path; a
+        // directory / ".." row (or no selection) stays at the directory. the path
+        // is joined in a stack buffer since build runs every frame on the web.
+        if (root_focus.grandchild_id) |g| {
+            if (self.box.getFocus().children.contains(g)) {
+                var buf: [ui.RoutablePage.repo_route_max_len]u8 = undefined;
+                const sel_path = if (self.selectedEntry()) |entry| blk: {
+                    if (entry.is_dir) break :blk self.data.dir;
+                    break :blk if (self.data.dir.len == 0)
+                        entry.name
+                    else
+                        std.fmt.bufPrint(&buf, "{s}/{s}", .{ self.data.dir, entry.name }) catch self.data.dir;
+                } else self.data.dir;
+                if (ui.RoutablePage.repoFilesRoute(self.data.identity, self.data.ref_or_oid, self.data.ref_or_oid_value, sel_path)) |route|
+                    self.session.data.current_page = route;
+            }
+        }
 
         // the selected list row shows a border (the focused TextBox upgrades it
         // to a double border itself); the rest stay borderless.
@@ -594,6 +630,15 @@ fn readmeIndex(entries: []const Entry) ?usize {
     return null;
 }
 
+// the index of the entry the route named (data.selected_file), or null if none.
+fn selectedFileIndex(data: *const Self) ?usize {
+    const name = data.selected_file orelse return null;
+    for (data.entries, 0..) |entry, i| {
+        if (!entry.is_dir and std.mem.eql(u8, entry.name, name)) return i;
+    }
+    return null;
+}
+
 // the "a:" link for the files route at `dir`, pinned to the listing's ref.
 fn dirLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, dir: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoFilesRoute(data.identity, data.ref_or_oid, data.ref_or_oid_value, dir) orelse return error.RouteTooLong;
@@ -602,7 +647,7 @@ fn dirLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, dir: []const
 }
 
 // `dir`/`name`, or just `name` at the root.
-fn childDir(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
+pub fn childDir(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
     return if (dir.len == 0) name else std.fmt.allocPrint(arena, "{s}/{s}", .{ dir, name });
 }
 
