@@ -361,7 +361,9 @@ pub const View = struct {
                 var diff_scroll = blk2: {
                     var diff_inner = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
                     errdefer diff_inner.deinit(allocator);
-                    break :blk2 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = diff_inner }, .{ .direction = .both, .web_native = !session.is_terminal });
+                    // fill the pane (content top-left, scroll bars pinned to the
+                    // edges) rather than shrinking to the diff content.
+                    break :blk2 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = diff_inner }, .{ .direction = .both, .web_native = !session.is_terminal, .fill = true });
                 };
                 errdefer diff_scroll.deinit(allocator);
                 var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .direction = .vert });
@@ -535,6 +537,15 @@ pub const View = struct {
         // it's that narrow we lift the cap and let the list fill the whole width.
         const both_panes_fit = if (constraint.max_size.width) |w| w >= list_max_width + diff_min_width else true;
         self.contentBox().children.values()[list_index].max_size = if (both_panes_fit) .{ .width = list_max_width, .height = null } else null;
+
+        // stretch the diff pane across the rest of the width so it fills the area
+        // rather than shrinking to its content; its scroll fills the pane. when
+        // too narrow for both, it fills the whole width.
+        if (constraint.max_size.width) |w| {
+            self.contentBox().children.values()[diff_index].min_size = .{ .width = if (both_panes_fit) w - list_max_width else w, .height = null };
+        } else {
+            self.contentBox().children.values()[diff_index].min_size = .{ .width = diff_min_width, .height = null };
+        }
 
         // the web bounds the layout to the browser viewport like the terminal;
         // each Scroll's web-native mode hands its full content to a real

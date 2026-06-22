@@ -189,7 +189,9 @@ pub const View = struct {
 
                 if (rows.children.count() > 0) rows.getFocus().child_id = rows.children.keys()[0];
 
-                break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .box = rows }, .{ .direction = .vert, .web_native = !session.is_terminal });
+                // fill the column (rows top-aligned, scroll bar pinned to the
+                // edge) rather than shrinking to the widest row.
+                break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .box = rows }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
             };
             errdefer scroll.deinit(allocator);
 
@@ -239,27 +241,24 @@ pub const View = struct {
         }
 
         // split the available width evenly between the two columns when it's
-        // known; otherwise let them size to their content. the scroll's own
-        // min width stretches it (and its rows/scroll bar) across the column
-        // rather than only the widest row; the Scroll passes that min down to
-        // its rows. (index 1 in each column box is the scroll; 0 is the label.)
+        // known; otherwise let them size to their content. each column's Scroll
+        // has `fill = true`, so it stretches across the column (rows/scroll bar)
+        // rather than hugging the widest row.
         if (constraint.max_size.width) |w| {
             const half = w / 2;
             for (self.box.children.values()) |*child| {
                 child.min_size = .{ .width = half, .height = null };
                 child.max_size = .{ .width = half, .height = null };
-                child.widget.box.children.values()[1].min_size = .{ .width = half, .height = null };
             }
         } else {
             for (self.box.children.values()) |*child| {
                 child.min_size = null;
                 child.max_size = null;
-                child.widget.box.children.values()[1].min_size = null;
             }
         }
 
-        // clear the incoming min height so each column sizes to its content and
-        // its Scroll clips to the viewport rather than stretching to fill.
+        // clear the incoming min height; each column's Scroll fills the viewport
+        // height itself (via `fill`), keeping its bar pinned to the edge.
         try self.box.build(allocator, .{
             .min_size = .{ .width = null, .height = null },
             .max_size = constraint.max_size,

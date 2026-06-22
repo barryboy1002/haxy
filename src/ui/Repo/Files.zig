@@ -319,7 +319,7 @@ pub const View = struct {
         // populateDetail.
         {
             var detail_outer = blk: {
-                var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .direction = .vert });
+                var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
                 errdefer frame.deinit(allocator);
 
                 {
@@ -328,18 +328,31 @@ pub const View = struct {
                     try frame.children.put(allocator, nav_box.getFocus().id, .{ .widget = .{ .box = nav_box }, .rect = null, .min_size = null });
                 }
                 {
-                    var detail_scroll = blk2: {
-                        var detail_inner = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
-                        errdefer detail_inner.deinit(allocator);
-                        break :blk2 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = detail_inner }, .{ .direction = .both, .web_native = !session.is_terminal });
+                    // the content scroll wrapped in a bordered box; build sets the
+                    // border single normally and double when the content is focused
+                    // (the content box itself is borderless).
+                    var scroll_frame = blk2: {
+                        var detail_scroll = blk3: {
+                            var detail_inner = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                            errdefer detail_inner.deinit(allocator);
+                            break :blk3 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = detail_inner }, .{ .direction = .both, .web_native = !session.is_terminal, .fill = true });
+                        };
+                        errdefer detail_scroll.deinit(allocator);
+                        var sf = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .single, .rounded_corners = true, .direction = .vert });
+                        errdefer sf.deinit(allocator);
+                        // the wrapper's selected child is its scroll, so the focus
+                        // chain reaches the content box (populateDetail points the
+                        // scroll's inner box at it).
+                        sf.getFocus().child_id = detail_scroll.getFocus().id;
+                        try sf.children.put(allocator, detail_scroll.getFocus().id, .{ .widget = .{ .scroll = detail_scroll }, .rect = null, .min_size = null });
+                        break :blk2 sf;
                     };
-                    errdefer detail_scroll.deinit(allocator);
+                    errdefer scroll_frame.deinit(allocator);
                     // entering the detail pane lands on the content scroll (focus
-                    // recovery descends the frame's selected child); populateDetail
-                    // points the scroll's inner box at the content. the nav links
+                    // recovery descends the frame's selected child). the nav links
                     // above are reached by scrolling to the top, then up.
-                    frame.getFocus().child_id = detail_scroll.getFocus().id;
-                    try frame.children.put(allocator, detail_scroll.getFocus().id, .{ .widget = .{ .scroll = detail_scroll }, .rect = null, .min_size = null });
+                    frame.getFocus().child_id = scroll_frame.getFocus().id;
+                    try frame.children.put(allocator, scroll_frame.getFocus().id, .{ .widget = .{ .box = scroll_frame }, .rect = null, .min_size = null });
                 }
                 break :blk frame;
             };
@@ -364,11 +377,11 @@ pub const View = struct {
     }
 
     // the selected file's contents as a single focusable multi-line text box.
-    // its hidden border reserves the space the double border occupies when
-    // focused, so focusing doesn't shift layout. `text` lives in the page arena.
+    // it's borderless — the border lives on the surrounding scroll frame, which
+    // doubles when this content is focused. `text` lives in the page arena.
     fn addContentBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8) !void {
         _ = self;
-        var tb = try wgt.TextBox(ui.Widget).init(allocator, text, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
+        var tb = try wgt.TextBox(ui.Widget).init(allocator, text, .{ .border_style = null, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
@@ -398,8 +411,13 @@ pub const View = struct {
         return &self.detailOuter().children.values()[detail_nav_index].widget.box;
     }
 
+    // the bordered box wrapping the content scroll (border toggles with focus).
+    fn detailScrollFrame(self: *View) *wgt.Box(ui.Widget) {
+        return &self.detailOuter().children.values()[detail_scroll_index].widget.box;
+    }
+
     fn detailScroll(self: *View) *wgt.Scroll(ui.Widget) {
-        return &self.detailOuter().children.values()[detail_scroll_index].widget.scroll;
+        return &self.detailScrollFrame().children.values()[0].widget.scroll;
     }
 
     fn detailInner(self: *View) *wgt.Box(ui.Widget) {
@@ -472,16 +490,11 @@ pub const View = struct {
             }
         }
 
-        // the focused content box shows a single border (the focused TextBox
-        // upgrades it to a double border itself, so it stays single when focus is
-        // on the list); the rest keep their space-reserving hidden border.
-        const inner = self.detailInner();
-        for (inner.children.keys(), inner.children.values()) |id, *child| {
-            switch (child.widget) {
-                .text_box => |*tb| tb.options.border_style = if (inner.getFocus().child_id == id) .single else .hidden,
-                else => {},
-            }
-        }
+        // the content scroll's border is single normally and double when the
+        // content is focused (the content box itself is borderless).
+        const has_content = self.detailInner().children.count() > 0;
+        const content_focused = if (root_focus.grandchild_id) |g| self.detailInner().children.contains(g) else false;
+        self.detailScrollFrame().options.border_style = if (!has_content) null else if (content_focused) .double else .single;
 
         // same for the "next" link above the content.
         const nav = self.navBox();
@@ -498,6 +511,22 @@ pub const View = struct {
         // fill the whole width.
         const both_panes_fit = if (constraint.max_size.width) |w| w >= list_max_width + detail_min_width else true;
         self.contentBox().children.values()[list_index].max_size = if (both_panes_fit) .{ .width = list_max_width, .height = null } else null;
+
+        // stretch the detail pane and its bordered scroll frame across the rest
+        // of the width so the pane fills the area rather than shrinking to its
+        // content, like the refs view's columns. the content scroll inside keeps
+        // its natural width: forcing it to the full inner width would make it one
+        // column too wide whenever the vertical scrollbar appears, leaving a
+        // phantom horizontal scroll. (height fills via the scroll clipping to the
+        // viewport.)
+        if (constraint.max_size.width) |w| {
+            const detail_w = if (both_panes_fit) w - list_max_width else w;
+            self.contentBox().children.values()[detail_index].min_size = .{ .width = detail_w, .height = null };
+            self.detailOuter().children.values()[detail_scroll_index].min_size = .{ .width = detail_w, .height = null };
+        } else {
+            self.contentBox().children.values()[detail_index].min_size = .{ .width = detail_min_width, .height = null };
+            self.detailOuter().children.values()[detail_scroll_index].min_size = null;
+        }
 
         // crossing panes only re-selects the content box's child (focusList /
         // focusDetail); when the window is too narrow to show both, the pane that
@@ -724,7 +753,7 @@ pub const View = struct {
         if (self.navBox().children.count() > 0) {
             frame.getFocus().child_id = self.navBox().getFocus().id;
         } else if (self.detailInner().children.count() > 0) {
-            frame.getFocus().child_id = self.detailScroll().getFocus().id;
+            frame.getFocus().child_id = self.detailScrollFrame().getFocus().id;
         } else return;
         root_focus.setFocus(frame.getFocus().id);
     }
