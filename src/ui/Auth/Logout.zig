@@ -31,7 +31,7 @@ pub const View = struct {
         errdefer box.deinit(allocator);
         // marks this subtree as an HTML form scope for the web overlay
         box.getFocus().kind = .{ .custom = switch (session.data.current_page) {
-            .user => |u| try std.fmt.allocPrint(session.page_arena.allocator(), "form:/user/{s}/logout", .{u.name.slice()}),
+            .user_repos => |u| try std.fmt.allocPrint(session.page_arena.allocator(), "form:/user/{s}/logout", .{u.name.slice()}),
             .user_settings, .user_auth => |name| try std.fmt.allocPrint(session.page_arena.allocator(), "form:/user/{s}/logout", .{name.slice()}),
             else => "form:/logout",
         } };

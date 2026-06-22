@@ -203,7 +203,7 @@ pub const View = struct {
                 // alone (nothing to mirror into the url).
                 .quit => {},
                 // the repos list (the default tab)
-                else => self.session.data.current_page = .{ .user = .{ .name = name, .after = self.data.repos_after } },
+                else => self.session.data.current_page = .{ .user_repos = .{ .name = name, .after = self.data.repos_after } },
             }
         }
         try self.box.build(allocator, constraint, root_focus);
