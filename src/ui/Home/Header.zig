@@ -163,7 +163,7 @@ pub const View = struct {
             else => {},
         }
         if (new_tab != current_tab) {
-            try root_focus.setFocus(self.tab_ids.keys()[new_tab]);
+            root_focus.setFocus(self.tab_ids.keys()[new_tab]);
         }
     }
 

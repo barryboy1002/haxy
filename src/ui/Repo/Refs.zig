@@ -316,7 +316,7 @@ pub const View = struct {
         const last: isize = @intCast(keys.len - 1);
         const next: usize = @intCast(std.math.clamp(cur + delta, 0, last));
         if (next == @as(usize, @intCast(cur))) return;
-        try root_focus.setFocus(keys[next]);
+        root_focus.setFocus(keys[next]);
         if (col.children.values()[next].rect) |rect| scroll.scrollToRect(rect);
     }
 
@@ -332,7 +332,7 @@ pub const View = struct {
         const cur = cur_col.children.getIndex(cur_id) orelse return;
         const last = target_col.children.count() - 1;
         const next = @min(cur, last);
-        try root_focus.setFocus(target_col.children.keys()[next]);
+        root_focus.setFocus(target_col.children.keys()[next]);
         if (target_col.children.values()[next].rect) |rect| target_scroll.scrollToRect(rect);
     }
 

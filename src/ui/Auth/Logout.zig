@@ -109,7 +109,7 @@ pub const View = struct {
         self.session.data.user_id = null;
         // jump focus back to the users tab — the logout button is about to
         // be hidden by the tab-label swap.
-        try root_focus.setFocus(self.users_tab_id);
+        root_focus.setFocus(self.users_tab_id);
     }
 
     pub fn clearGrid(self: *View) void {

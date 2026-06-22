@@ -147,12 +147,12 @@ fn onMouseClick(focus_id: usize) !void {
         navigate(url);
         return;
     }
-    try root_ptr.getFocus().setFocus(focus_id);
+    root_ptr.getFocus().setFocus(focus_id);
 }
 
 fn setFocus(focus_id: usize) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
-    try root_ptr.getFocus().setFocus(focus_id);
+    root_ptr.getFocus().setFocus(focus_id);
 }
 
 fn consoleLog(arg: []const u8) void {

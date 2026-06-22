@@ -140,13 +140,13 @@ pub const View = struct {
             // Shift+Tab walks backward through the form, matching the
             // typical UX; arrow_up does the same.
             .arrow_up, .back_tab => if (current > 0) {
-                try root_focus.setFocus(self.nav_ids[current - 1]);
+                root_focus.setFocus(self.nav_ids[current - 1]);
                 return;
             },
             // Tab moves to the next field, matching the form-style UX users
             // expect; arrow_down does the same.
             .arrow_down, .tab => if (current + 1 < self.nav_ids.len) {
-                try root_focus.setFocus(self.nav_ids[current + 1]);
+                root_focus.setFocus(self.nav_ids[current + 1]);
                 return;
             },
             // submit on Enter from any nav field — typical "press Enter in
@@ -268,7 +268,7 @@ pub const View = struct {
 
                 // jump focus back to the users tab — the login button we
                 // just pressed is about to be hidden by the tab-label swap
-                try root_focus.setFocus(self.success_redirect_tab_id);
+                root_focus.setFocus(self.success_redirect_tab_id);
             },
         }
     }

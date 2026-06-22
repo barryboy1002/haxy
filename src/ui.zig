@@ -787,7 +787,7 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, sessi
                     if (crossPageLink(root_focus, focus_id, session.data.current_page)) |route| {
                         return session.navigate(route);
                     }
-                    try root_focus.setFocus(focus_id);
+                    root_focus.setFocus(focus_id);
                 }
                 // forward the press into the widget tree so buttons (and any
                 // future click-aware widgets) can react. widgets that don't
@@ -901,7 +901,7 @@ pub const Nav = struct {
             while (iter.next()) |entry| {
                 switch (entry.value_ptr.focus.kind) {
                     .custom => |custom| if (std.mem.eql(u8, custom, Quit.tab_kind)) {
-                        try root_focus.setFocus(entry.key_ptr.*);
+                        root_focus.setFocus(entry.key_ptr.*);
                         // a Stack only builds its selected child, so the quit
                         // button isn't in the focus tree until a build runs with
                         // the quit tab selected. build once, then send a
@@ -990,9 +990,6 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
         .min_size = .{ .width = null, .height = 40 },
         .max_size = .{ .width = 80, .height = null },
     }, root.getFocus());
-    if (root.getFocus().child_id) |child_id| {
-        try root.getFocus().setFocus(child_id);
-    }
 
     return root;
 }
@@ -1308,7 +1305,7 @@ pub const FlowBox = struct {
             }
 
             if (index != current_index) {
-                try root_focus.setFocus(in.text_boxes.items[index].getFocus().id);
+                root_focus.setFocus(in.text_boxes.items[index].getFocus().id);
                 if (in.cellRect(index)) |rect| {
                     self.scroll.scrollToRect(rect);
                 }

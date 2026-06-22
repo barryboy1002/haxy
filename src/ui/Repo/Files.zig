@@ -265,6 +265,11 @@ pub const View = struct {
                 errdefer detail_scroll.deinit(allocator);
                 var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .direction = .vert });
                 errdefer frame.deinit(allocator);
+                // the frame's selected child is its scroll, so the focus chain
+                // reaches the content box (populateDetail points the scroll's
+                // inner box at it). this lets focus recovery descend into the
+                // detail pane after it's laid out beside a too-narrow list.
+                frame.getFocus().child_id = detail_scroll.getFocus().id;
                 try frame.children.put(allocator, detail_scroll.getFocus().id, .{ .widget = .{ .scroll = detail_scroll }, .rect = null, .min_size = null });
                 break :blk frame;
             };
@@ -386,19 +391,12 @@ pub const View = struct {
         const both_panes_fit = if (constraint.max_size.width) |w| w >= list_max_width + detail_min_width else true;
         self.contentBox().children.values()[list_index].max_size = if (both_panes_fit) .{ .width = list_max_width, .height = null } else null;
 
+        // crossing panes only re-selects the content box's child (focusList /
+        // focusDetail); when the window is too narrow to show both, the pane that
+        // was holding focus is dropped here. the framework recovers focus after
+        // the top-level build by re-deriving it down the selected-child chain, so
+        // there's nothing to fix up afterward.
         try self.box.build(allocator, constraint, root_focus);
-
-        // if the detail pane is selected but focus is still elsewhere in this
-        // view, the pane was too narrow to lay out when focus crossed over. it's
-        // laid out now, so focus its content box.
-        if (self.detailActive() and inner.children.count() > 0) {
-            if (root_focus.grandchild_id) |g| {
-                const in_view = self.box.getFocus().children.contains(g);
-                const in_detail = inner.children.contains(g);
-                if (in_view and !in_detail)
-                    try root_focus.setFocus(inner.getFocus().child_id orelse inner.children.keys()[0]);
-            }
-        }
     }
 
     fn refreshDetail(self: *View, allocator: std.mem.Allocator) !void {
@@ -427,6 +425,8 @@ pub const View = struct {
                 }
             }
         }
+        // point the pane at its content box so focus recovery can land here.
+        if (inner.children.count() > 0) inner.getFocus().child_id = inner.children.keys()[0];
 
         // reset the scroll to the top for the newly-shown file: directly on the
         // terminal (the wasm offset), and via a version bump on the web (so the
@@ -534,25 +534,17 @@ pub const View = struct {
         sc.x = std.math.clamp(sc.x, 0, max_x);
     }
 
-    // enter the detail pane by focusing its content box. the host arrives here on
-    // right-arrow or Enter from the list. an empty pane (a directory or ".." row
-    // is selected) can't be entered.
+    // enter the detail pane. a directory or ".." row has no content, so there's
+    // nothing to enter. setFocus handles the too-narrow case where the pane isn't
+    // laid out yet (it gets selected, then focused after the next build).
     fn focusDetail(self: *View, root_focus: *Focus) !void {
-        const inner = self.detailInner();
-        if (inner.children.count() == 0) return;
-        const target = inner.getFocus().child_id orelse inner.children.keys()[0];
-        try root_focus.setFocus(target);
-        if (root_focus.grandchild_id == target) return;
-        // the detail pane wasn't laid out last build (too narrow to show beside
-        // the list), so its content isn't in the focus tree yet. select the pane
-        // at the box level, and the content will be focused after the next build.
-        self.contentBox().getFocus().child_id = self.detailOuter().getFocus().id;
+        if (self.detailInner().children.count() == 0) return;
+        root_focus.setFocus(self.detailOuter().getFocus().id);
     }
 
+    // return to the list.
     fn focusList(self: *View, root_focus: *Focus) !void {
-        const lb = self.listBox();
-        const id = lb.getFocus().child_id orelse (if (lb.children.count() > 0) lb.children.keys()[0] else return);
-        try root_focus.setFocus(id);
+        root_focus.setFocus(self.listScroll().getFocus().id);
     }
 
     fn moveSelection(self: *View, root_focus: *Focus, delta: isize) !void {
@@ -564,7 +556,7 @@ pub const View = struct {
         const last: isize = @intCast(keys.len - 1);
         const next: usize = @intCast(std.math.clamp(cur + delta, 0, last));
         if (next == @as(usize, @intCast(cur))) return;
-        try root_focus.setFocus(keys[next]);
+        root_focus.setFocus(keys[next]);
         if (lb.children.values()[next].rect) |rect| self.listScroll().scrollToRect(rect);
     }
 

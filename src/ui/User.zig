@@ -268,7 +268,7 @@ pub const View = struct {
                 }
 
                 if (index != current_index) {
-                    try root_focus.setFocus(self.box.children.keys()[index]);
+                    root_focus.setFocus(self.box.children.keys()[index]);
                 }
             }
         }
