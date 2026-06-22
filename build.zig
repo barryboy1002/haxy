@@ -27,8 +27,10 @@ pub fn build(b: *std.Build) void {
         exe.export_memory = true;
         exe.stack_size = std.wasm.page_size;
 
+        // start small and let the allocator grow on demand up to wasm32's
+        // architectural ceiling (65536 pages = 4 GiB)
         const initial_pages = 16;
-        const max_pages = 256;
+        const max_pages = 65536;
         exe.initial_memory = std.wasm.page_size * initial_pages;
         exe.max_memory = std.wasm.page_size * max_pages;
 
