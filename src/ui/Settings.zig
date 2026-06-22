@@ -38,7 +38,8 @@ pub const View = struct {
 
             // on the web each control posts to a page-scoped form
             box.getFocus().kind = .{ .custom = switch (session.data.current_page) {
-                .user, .user_settings, .user_auth => |name| try std.fmt.allocPrint(session.page_arena.allocator(), "form:/user/{s}/ansi", .{name.slice()}),
+                .user => |u| try std.fmt.allocPrint(session.page_arena.allocator(), "form:/user/{s}/ansi", .{u.name.slice()}),
+                .user_settings, .user_auth => |name| try std.fmt.allocPrint(session.page_arena.allocator(), "form:/user/{s}/ansi", .{name.slice()}),
                 else => "form:/ansi",
             } };
 

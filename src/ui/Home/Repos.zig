@@ -33,10 +33,11 @@ pub fn init(
     const empty: Self = .{ .repos = &.{}, .owner_names = &.{}, .after = after, .next_after = null };
 
     // the repos ordered by creation time (oldest first); absent until the first
-    // repo exists. keyed by [timestamp][event-id], value = event-id.
-    const created_ts_to_repo_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "created-ts->repo-id")) orelse return empty;
-    const created_ts_to_repo_id = try DB.SortedMap(.read_only).init(created_ts_to_repo_id_cursor);
-    const count = try created_ts_to_repo_id.count();
+    // repo exists. keyed by orderKey ([timestamp][event-id]); the trailing bytes
+    // of each key are the repo event id.
+    const repo_id_set_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "repo-id-set")) orelse return empty;
+    const repo_id_set = try DB.SortedSet(.read_only).init(repo_id_set_cursor);
+    const count = try repo_id_set.count();
 
     const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return empty;
     const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
@@ -44,14 +45,15 @@ pub fn init(
     // read the window [after, after+page_size) with one seek to the start rank,
     // then a sequential walk
     const end = @min(after + page_size, count);
-    var iter = try created_ts_to_repo_id.iteratorFromIndex(after);
+    var iter = try repo_id_set.iteratorFromIndex(after);
     var i = after;
     while (i < end) : (i += 1) {
         var id_cursor = (try iter.next()) orelse break;
         const id_kv = try id_cursor.readKeyValuePair();
-        var event_id: [evt.event_id_size]u8 = undefined;
-        _ = try id_kv.value_cursor.readBytes(&event_id);
-        const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, &event_id)) orelse continue;
+        var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
+        _ = try id_kv.key_cursor.readBytes(&order_key);
+        const event_id = order_key[@sizeOf(u64)..];
+        const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, event_id)) orelse continue;
         const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
         const repo_event = try evt.read(evt.Repo, DB, hash_kind, arena, repo_map);
         try repos.append(arena.allocator(), repo_event);

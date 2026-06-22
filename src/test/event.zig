@@ -738,15 +738,17 @@ test "user and repo" {
         try std.testing.expectEqualStrings("ziglings", repo_event.name);
 
         // get the repos created by the user
-        const user_id_to_repos_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "user-id->repos")) orelse return error.NotFound;
-        const user_id_to_repos = try Repo.DB.HashMap(.read_only).init(user_id_to_repos_cursor);
+        const user_id_to_repo_id_set_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "user-id->repo-id-set")) orelse return error.NotFound;
+        const user_id_to_repo_id_set = try Repo.DB.HashMap(.read_only).init(user_id_to_repo_id_set_cursor);
 
-        const user_repos_cursor = try user_id_to_repos.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)) orelse return error.NotFound;
-        const user_repos = try Repo.DB.CountedHashSet(.read_only).init(user_repos_cursor);
+        const user_repos_cursor = try user_id_to_repo_id_set.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)) orelse return error.NotFound;
+        const user_repos = try Repo.DB.SortedSet(.read_only).init(user_repos_cursor);
 
         try std.testing.expectEqual(1, try user_repos.count());
 
-        try std.testing.expect(null != try user_repos.getCursor(hash.hashInt(repo_opts.hash, &repo_event_id)));
+        // the set is keyed by orderKey([created-ts][event-id])
+        const order_key = evt.orderKey(repo_event.created_ts, &repo_event_id);
+        try std.testing.expect(try user_repos.contains(&order_key));
     }
 
     //
@@ -773,14 +775,14 @@ test "user and repo" {
         try std.testing.expect(null == try event_id_to_repo.getCursor(hash.hashInt(repo_opts.hash, &repo_event_id)));
 
         // get the repos created by the user
-        const user_id_to_repos_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "user-id->repos")) orelse return error.NotFound;
-        const user_id_to_repos = try Repo.DB.HashMap(.read_only).init(user_id_to_repos_cursor);
+        const user_id_to_repo_id_set_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "user-id->repo-id-set")) orelse return error.NotFound;
+        const user_id_to_repo_id_set = try Repo.DB.HashMap(.read_only).init(user_id_to_repo_id_set_cursor);
 
-        const user_repos_cursor = try user_id_to_repos.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)) orelse return error.NotFound;
-        const user_repos = try Repo.DB.CountedHashSet(.read_only).init(user_repos_cursor);
+        const user_repos_cursor = try user_id_to_repo_id_set.getCursor(hash.hashInt(repo_opts.hash, &user_event_id)) orelse return error.NotFound;
+        const user_repos = try Repo.DB.SortedSet(.read_only).init(user_repos_cursor);
 
+        // removing the repo emptied the user's set
         try std.testing.expectEqual(0, try user_repos.count());
-        try std.testing.expect(null == try user_repos.getCursor(hash.hashInt(repo_opts.hash, &repo_event_id)));
     }
 
     //
@@ -844,7 +846,7 @@ test "repos and users paginate in creation order" {
     var pw_buf: [evt.User.password_hash_max_len]u8 = undefined;
     const pw = try evt.User.hashPassword("pw", &pw_buf, io);
 
-    // asserts the timestamp->repo-id map holds exactly `expected` ids in that order
+    // asserts the repo-id-set holds exactly `expected` ids in that order
     const Check = struct {
         fn order(
             comptime DB: type,
@@ -852,14 +854,15 @@ test "repos and users paginate in creation order" {
             moment: DB.HashMap(.read_only),
             expected: []const *const [evt.event_id_size]u8,
         ) !void {
-            const cursor = try moment.getCursor(hash.hashInt(hash_kind, "created-ts->repo-id")) orelse return error.NotFound;
-            const map = try DB.SortedMap(.read_only).init(cursor);
-            try std.testing.expectEqual(expected.len, try map.count());
+            const cursor = try moment.getCursor(hash.hashInt(hash_kind, "repo-id-set")) orelse return error.NotFound;
+            const set = try DB.SortedSet(.read_only).init(cursor);
+            try std.testing.expectEqual(expected.len, try set.count());
             for (expected, 0..) |id, i| {
-                const kv = (try map.getIndexKeyValuePair(@intCast(i))) orelse return error.NotFound;
-                var buf: [evt.event_id_size]u8 = undefined;
-                _ = try kv.value_cursor.readBytes(&buf);
-                try std.testing.expectEqualSlices(u8, id, &buf);
+                const kv = (try set.getIndexKeyValuePair(@intCast(i))) orelse return error.NotFound;
+                // the key is orderKey ([timestamp][event-id]); its trailing bytes are the id
+                var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
+                _ = try kv.key_cursor.readBytes(&order_key);
+                try std.testing.expectEqualSlices(u8, id, order_key[@sizeOf(u64)..]);
             }
         }
     };
@@ -879,10 +882,10 @@ test "repos and users paginate in creation order" {
         const moment = try evt.currentMoment(repo_opts, &repo);
         try Check.order(Repo.DB, repo_opts.hash, moment, &.{ &repo_ids[0], &repo_ids[1], &repo_ids[2], &repo_ids[3] });
 
-        // the single user shows up in its own ordered map
-        const ucur = try moment.getCursor(hash.hashInt(repo_opts.hash, "created-ts->user-id")) orelse return error.NotFound;
-        const umap = try Repo.DB.SortedMap(.read_only).init(ucur);
-        try std.testing.expectEqual(1, try umap.count());
+        // the single user shows up in its own ordered set
+        const ucur = try moment.getCursor(hash.hashInt(repo_opts.hash, "user-id-set")) orelse return error.NotFound;
+        const uset = try Repo.DB.SortedSet(.read_only).init(ucur);
+        try std.testing.expectEqual(1, try uset.count());
     }
 
     // delete repo1 -> dense order (no tombstone)

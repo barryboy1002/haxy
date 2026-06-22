@@ -83,13 +83,14 @@ pub fn consume(
 
         try name_to_user_id.put(hash.hashInt(hash_kind, event.name), .{ .bytes = event_id });
 
-        // first time we've seen this user: add it to the ordered map the users
-        // view paginates through
+        // first time we've seen this user: add it to the ordered set the users
+        // view paginates through. the key (orderKey) embeds the event id, so the
+        // set needs no value.
         if (existing_cursor_maybe == null) {
-            const created_ts_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->user-id"));
-            const created_ts_to_user_id = try DB.SortedMap(.read_write).init(created_ts_to_user_id_cursor);
+            const user_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id-set"));
+            const user_id_set = try DB.SortedSet(.read_write).init(user_id_set_cursor);
             const order_key = evt.orderKey(event_to_write.created_ts, event_id);
-            try created_ts_to_user_id.put(&order_key, .{ .bytes = event_id });
+            try user_id_set.put(&order_key);
         }
     } else {
         // read the user's name so we can drop its name->id index entry
@@ -98,18 +99,18 @@ pub fn consume(
             const existing_event = try evt.read(@This(), DB, hash_kind, arena, existing_user);
             _ = try name_to_user_id.remove(hash.hashInt(hash_kind, existing_event.name));
 
-            // drop it from the ordered map using its recorded creation timestamp
-            const created_ts_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->user-id"));
-            const created_ts_to_user_id = try DB.SortedMap(.read_write).init(created_ts_to_user_id_cursor);
+            // drop it from the ordered set using its recorded creation timestamp
+            const user_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id-set"));
+            const user_id_set = try DB.SortedSet(.read_write).init(user_id_set_cursor);
             const order_key = evt.orderKey(existing_event.created_ts, event_id);
-            _ = try created_ts_to_user_id.remove(&order_key);
+            _ = try user_id_set.remove(&order_key);
         }
 
         if (!try event_id_to_user.remove(user_key)) return error.EventNotFound;
 
-        const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
-        const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
-        _ = try user_id_to_repos.remove(user_key);
+        const user_id_to_repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"));
+        const user_id_to_repo_id_set = try DB.HashMap(.read_write).init(user_id_to_repo_id_set_cursor);
+        _ = try user_id_to_repo_id_set.remove(user_key);
     }
 }
 

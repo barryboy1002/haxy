@@ -371,7 +371,7 @@ pub fn commitAndConsume(
     try consume(repo_opts, io, allocator, repo, ref);
 }
 
-// build the key for SortedMaps sorted by timestamp. the big-endian timestamp
+// build the key for SortedSets sorted by timestamp. the big-endian timestamp
 // makes byte order match creation order; the event id breaks ties and keeps
 // keys unique within the same timestamp.
 pub fn orderKey(timestamp: u64, event_id: *const [event_id_size]u8) [@sizeOf(u64) + event_id_size]u8 {

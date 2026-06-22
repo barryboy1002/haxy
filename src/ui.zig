@@ -41,7 +41,8 @@ pub const Page = union(PageKind) {
                 else => 0,
             }) },
             .user => switch (route) {
-                .user, .user_settings, .user_auth => |name| .{ .user = try User.init(arena, haxy_moment, name) },
+                .user => |u| .{ .user = try User.init(arena, haxy_moment, u.name, u.after) },
+                .user_settings, .user_auth => |name| .{ .user = try User.init(arena, haxy_moment, name, 0) },
                 else => return error.UnexpectedRoute,
             },
             .repo => switch (route) {
@@ -68,7 +69,7 @@ pub const RoutablePage = union(enum) {
     home_repos: usize, // 0 = first page
     home_settings,
     home_auth,
-    user: Array(evt.User.name_max_len),
+    user: struct { name: Array(evt.User.name_max_len), after: usize = 0 },
     user_settings: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
     repo: Array(repo_route_max_len),
@@ -232,7 +233,10 @@ pub const RoutablePage = union(enum) {
         return switch (self) {
             .home_users => |after| if (after == 0) @as([]const u8, "/users") else try std.fmt.allocPrint(arena.allocator(), "/users?after={d}", .{after}),
             .home_repos => |after| if (after == 0) @as([]const u8, "/repos") else try std.fmt.allocPrint(arena.allocator(), "/repos?after={d}", .{after}),
-            .user => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}", .{name.slice()}),
+            .user => |u| if (u.after == 0)
+                try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}", .{u.name.slice()})
+            else
+                try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}?after={d}", .{ u.name.slice(), u.after }),
             .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name.slice()}),
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
             .repo => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{name.slice()}),
@@ -279,7 +283,7 @@ pub const RoutablePage = union(enum) {
                 if (std.mem.eql(u8, sub, "auth")) return .{ .user_auth = parsed };
                 return null; // unknown sub-path
             }
-            return .{ .user = parsed };
+            return .{ .user = .{ .name = parsed, .after = after } };
         }
         // /repo/<username>/<reponame> (files root), then optionally /settings,
         // /auth, or /files/<dir> for a directory in the files tab. the `repo`
@@ -362,7 +366,7 @@ pub const RoutablePage = union(enum) {
         return switch (a) {
             .home_users => |a_after| a_after == b.home_users,
             .home_repos => |a_after| a_after == b.home_repos,
-            .user => |a_name| std.mem.eql(u8, a_name.slice(), b.user.slice()),
+            .user => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user.name.slice()) and a_u.after == b.user.after,
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
             .repo => |a_name| std.mem.eql(u8, a_name.slice(), b.repo.slice()),
@@ -382,6 +386,19 @@ pub const RoutablePage = union(enum) {
             a.repo_refs.after == 0 and b.repo_refs.after == 0)
             return !std.mem.eql(u8, a.repo_refs.name.slice(), b.repo_refs.name.slice());
         return !a.eql(b);
+    }
+
+    // true when `a` and `b` are the same user paginated to a different repos
+    // window. switching between a user's tabs is in-page (header-handled), so
+    // only a changed `after` on the repos list navigates.
+    pub fn userPageChanged(a: RoutablePage, b: RoutablePage) bool {
+        return switch (a) {
+            .user => |aa| switch (b) {
+                .user => |bb| std.mem.eql(u8, aa.name.slice(), bb.name.slice()) and aa.after != bb.after,
+                else => false,
+            },
+            else => false,
+        };
     }
 
     // true when `a` and `b` are the same home list tab paginated to a different
@@ -410,7 +427,13 @@ pub const RoutablePage = union(enum) {
         try jw.objectField("kind");
         try jw.write(@tagName(self));
         switch (self) {
-            .user, .user_settings, .user_auth => |name| {
+            .user => |u| {
+                try jw.objectField("name");
+                try jw.write(u.name.slice());
+                try jw.objectField("after");
+                try jw.write(u.after);
+            },
+            .user_settings, .user_auth => |name| {
                 try jw.objectField("name");
                 try jw.write(name.slice());
             },
@@ -458,7 +481,7 @@ pub const RoutablePage = union(enum) {
             .home_repos => .{ .home_repos = helper.after },
             .home_settings => .home_settings,
             .home_auth => .home_auth,
-            .user => .{ .user = try parseName(evt.User.name_max_len, helper.name) },
+            .user => .{ .user = .{ .name = try parseName(evt.User.name_max_len, helper.name), .after = helper.after } },
             .user_settings => .{ .user_settings = try parseName(evt.User.name_max_len, helper.name) },
             .user_auth => .{ .user_auth = try parseName(evt.User.name_max_len, helper.name) },
             .repo => .{ .repo = try parseName(repo_route_max_len, helper.name) },
@@ -796,7 +819,7 @@ pub fn crossPageLink(root_focus: *Focus, focus_id: usize, current: RoutablePage)
     // a link to a different parent page always navigates; within a page, a
     // files-directory / commits-page / list-window change navigates while tab
     // links stay in-page (header-handled).
-    if (route.parent() != current.parent() or RoutablePage.repoPageChanged(route, current) or RoutablePage.homePageChanged(route, current)) return route;
+    if (route.parent() != current.parent() or RoutablePage.repoPageChanged(route, current) or RoutablePage.homePageChanged(route, current) or RoutablePage.userPageChanged(route, current)) return route;
     return null;
 }
 

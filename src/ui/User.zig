@@ -15,9 +15,13 @@ pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
+pub const page_size = 20; // how many repos one window of the repos tab shows
+
 header: Header,
 user: evt.User.Safe,
 repos: []const evt.Repo,
+repos_after: usize, // the repos window this page was built with, mirrored into the url
+repos_next_after: ?usize, // the `after` for the "next" row, or null on the last window
 settings: Settings,
 auth: Auth,
 quit: Quit,
@@ -29,6 +33,7 @@ pub fn init(
     arena: *std.heap.ArenaAllocator,
     haxy_moment: evt.AdminDB.HashMap(.read_only),
     name: ui.RoutablePage.Array(evt.User.name_max_len),
+    after: usize,
 ) !Self {
     const DB = evt.AdminDB;
     const hash_kind = evt.admin_repo_opts.hash;
@@ -45,26 +50,39 @@ pub fn init(
     const user = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, user_id)) orelse return error.NotFound;
 
     var repos: std.ArrayList(evt.Repo) = .empty;
+    var repos_next_after: ?usize = null;
 
-    // the user-id->repos index maps each user to the set of repo event ids they
-    // own; it only exists once a repo has been consumed, so a user with no repos
-    // simply yields an empty list.
-    if (try haxy_moment.getCursor(hash.hashInt(hash_kind, "user-id->repos"))) |user_id_to_repos_cursor| {
-        const user_id_to_repos = try DB.HashMap(.read_only).init(user_id_to_repos_cursor);
-        if (try user_id_to_repos.getCursor(hash.hashInt(hash_kind, user_id))) |user_repos_cursor| {
-            const user_repos = try DB.CountedHashSet(.read_only).init(user_repos_cursor);
+    // the user-id->repo-id-set index maps each user to a set of their repo event
+    // ids ordered by creation time (oldest first); it only exists once a repo has
+    // been consumed, so a user with no repos simply yields an empty list.
+    if (try haxy_moment.getCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"))) |user_id_to_repo_id_set_cursor| {
+        const user_id_to_repo_id_set = try DB.HashMap(.read_only).init(user_id_to_repo_id_set_cursor);
+        if (try user_id_to_repo_id_set.getCursor(hash.hashInt(hash_kind, user_id))) |user_repos_cursor| {
+            const user_repos = try DB.SortedSet(.read_only).init(user_repos_cursor);
+            const count = try user_repos.count();
 
             const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return error.NotFound;
             const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
 
-            var repos_iter = try user_repos.iterator();
-            while (try repos_iter.next()) |kv_cursor| {
+            // read the window [after, after+page_size) with one seek to the start
+            // rank, then a sequential walk.
+            const end = @min(after + page_size, count);
+            var repos_iter = try user_repos.iteratorFromIndex(after);
+            var i = after;
+            while (i < end) : (i += 1) {
+                var kv_cursor = (try repos_iter.next()) orelse break;
                 const kv = try kv_cursor.readKeyValuePair();
-                const repo_cursor = try event_id_to_repo.getCursor(kv.hash) orelse continue;
+                // the set key is orderKey = [timestamp][event-id]; its trailing
+                // bytes are the repo event id.
+                var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
+                _ = try kv.key_cursor.readBytes(&order_key);
+                const event_id = order_key[@sizeOf(u64)..];
+                const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, event_id)) orelse continue;
                 const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
                 const repo_event = try evt.read(evt.Repo, DB, hash_kind, arena, repo_map);
                 try repos.append(arena.allocator(), repo_event);
             }
+            repos_next_after = if (end < count) end else null;
         }
     }
 
@@ -72,6 +90,8 @@ pub fn init(
         .header = try Header.init(arena, user.name),
         .user = evt.User.Safe.init(user),
         .repos = repos.items,
+        .repos_after = after,
+        .repos_next_after = repos_next_after,
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
@@ -114,7 +134,12 @@ pub const View = struct {
                 defer arena.deinit();
                 const aa = arena.allocator();
 
+                // a leading "previous" row off the first window, one row per repo,
+                // then a trailing "next" row when more remain. each window row
+                // navigates to the adjacent window of this user's repos.
                 var items: std.ArrayList(ui.FlowBox.Item) = .empty;
+                if (data.repos_after > 0)
+                    try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:/user/{s}?after={d}", .{ data.user.name, data.repos_after -| page_size }) });
                 for (data.repos) |repo|
                     // clicking a repo opens its page; the "a:" prefix makes the web
                     // renderer emit an <a href="/repo/alice/foo"> anchor.
@@ -122,6 +147,8 @@ pub const View = struct {
                         .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.name, repo.description }),
                         .link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.user.name, repo.name }),
                     });
+                if (data.repos_next_after) |next_after|
+                    try items.append(aa, .{ .text = "next →", .link = try std.fmt.allocPrint(aa, "a:/user/{s}?after={d}", .{ data.user.name, next_after }) });
                 try list.setItems(allocator, items.items);
 
                 try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
@@ -176,7 +203,7 @@ pub const View = struct {
                 // alone (nothing to mirror into the url).
                 .quit => {},
                 // the repos list (the default tab)
-                else => self.session.data.current_page = .{ .user = name },
+                else => self.session.data.current_page = .{ .user = .{ .name = name, .after = self.data.repos_after } },
             }
         }
         try self.box.build(allocator, constraint, root_focus);

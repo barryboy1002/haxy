@@ -74,21 +74,25 @@ pub fn consume(
 
         try name_to_repo_id.put(hash.hashInt(hash_kind, repo_path), .{ .bytes = event_id });
 
-        // first time we've seen this repo: add it to the ordered map the repos
-        // view paginates through
+        // first time we've seen this repo: add it to the ordered set the repos
+        // view paginates through. the key (orderKey) embeds the event id, so the
+        // set needs no value.
         if (existing_cursor_maybe == null) {
-            const created_ts_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->repo-id"));
-            const created_ts_to_repo_id = try DB.SortedMap(.read_write).init(created_ts_to_repo_id_cursor);
+            const repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "repo-id-set"));
+            const repo_id_set = try DB.SortedSet(.read_write).init(repo_id_set_cursor);
             const order_key = evt.orderKey(event_to_write.created_ts, event_id);
-            try created_ts_to_repo_id.put(&order_key, .{ .bytes = event_id });
+            try repo_id_set.put(&order_key);
         }
 
-        const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
-        const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
+        const user_id_to_repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"));
+        const user_id_to_repo_id_set = try DB.HashMap(.read_write).init(user_id_to_repo_id_set_cursor);
 
-        const user_repos_cursor = try user_id_to_repos.putCursor(hash.hashInt(hash_kind, event.user_id));
-        const user_repos = try DB.CountedHashSet(.read_write).init(user_repos_cursor);
-        try user_repos.put(repo_key, .{ .bytes = event_id });
+        // each user's repos are a set ordered by creation time (oldest first), so
+        // the user page paginates them the same way the home repos list does.
+        const user_repos_cursor = try user_id_to_repo_id_set.putCursor(hash.hashInt(hash_kind, event.user_id));
+        const user_repos = try DB.SortedSet(.read_write).init(user_repos_cursor);
+        const user_repo_order_key = evt.orderKey(event_to_write.created_ts, event_id);
+        try user_repos.put(&user_repo_order_key);
     } else {
         if (try event_id_to_repo.getCursor(repo_key)) |existing_repo_cursor| {
             const existing_repo = try DB.HashMap(.read_only).init(existing_repo_cursor);
@@ -97,19 +101,19 @@ pub fn consume(
             const existing_path = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ existing_repo_event.user_id, existing_repo_event.name });
             _ = try name_to_repo_id.remove(hash.hashInt(hash_kind, existing_path));
 
-            // drop it from the ordered map using its recorded creation timestamp
-            const created_ts_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "created-ts->repo-id"));
-            const created_ts_to_repo_id = try DB.SortedMap(.read_write).init(created_ts_to_repo_id_cursor);
+            // drop it from the ordered set using its recorded creation timestamp
+            const repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "repo-id-set"));
+            const repo_id_set = try DB.SortedSet(.read_write).init(repo_id_set_cursor);
             const order_key = evt.orderKey(existing_repo_event.created_ts, event_id);
-            _ = try created_ts_to_repo_id.remove(&order_key);
+            _ = try repo_id_set.remove(&order_key);
 
-            const user_id_to_repos_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repos"));
-            const user_id_to_repos = try DB.HashMap(.read_write).init(user_id_to_repos_cursor);
+            const user_id_to_repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"));
+            const user_id_to_repo_id_set = try DB.HashMap(.read_write).init(user_id_to_repo_id_set_cursor);
 
             const user_key = hash.hashInt(hash_kind, existing_repo_event.user_id);
-            const user_repos_cursor = try user_id_to_repos.putCursor(user_key);
-            const user_repos = try DB.CountedHashSet(.read_write).init(user_repos_cursor);
-            _ = try user_repos.remove(repo_key);
+            const user_repos_cursor = try user_id_to_repo_id_set.putCursor(user_key);
+            const user_repos = try DB.SortedSet(.read_write).init(user_repos_cursor);
+            _ = try user_repos.remove(&order_key);
         }
         if (!try event_id_to_repo.remove(repo_key)) return error.EventNotFound;
     }

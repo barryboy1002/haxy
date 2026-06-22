@@ -29,11 +29,12 @@ pub fn init(
     var users: std.ArrayList(evt.User.Safe) = .empty;
 
     // the users ordered by creation time (oldest first); absent until the first
-    // user exists. keyed by [timestamp][event-id], value = event-id.
-    const created_ts_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "created-ts->user-id")) orelse
+    // user exists. keyed by orderKey ([timestamp][event-id]); the trailing bytes
+    // of each key are the user event id.
+    const user_id_set_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "user-id-set")) orelse
         return .{ .users = &.{}, .after = after, .next_after = null };
-    const created_ts_to_user_id = try DB.SortedMap(.read_only).init(created_ts_to_user_id_cursor);
-    const count = try created_ts_to_user_id.count();
+    const user_id_set = try DB.SortedSet(.read_only).init(user_id_set_cursor);
+    const count = try user_id_set.count();
 
     const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->user")) orelse
         return .{ .users = &.{}, .after = after, .next_after = null };
@@ -42,14 +43,15 @@ pub fn init(
     // read the window [after, after+page_size) with one seek to the start rank,
     // then a sequential walk
     const end = @min(after + page_size, count);
-    var iter = try created_ts_to_user_id.iteratorFromIndex(after);
+    var iter = try user_id_set.iteratorFromIndex(after);
     var i = after;
     while (i < end) : (i += 1) {
         var id_cursor = (try iter.next()) orelse break;
         const id_kv = try id_cursor.readKeyValuePair();
-        var event_id: [evt.event_id_size]u8 = undefined;
-        _ = try id_kv.value_cursor.readBytes(&event_id);
-        const user_cursor = try event_id_to_user.getCursor(hash.hashInt(hash_kind, &event_id)) orelse continue;
+        var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
+        _ = try id_kv.key_cursor.readBytes(&order_key);
+        const event_id = order_key[@sizeOf(u64)..];
+        const user_cursor = try event_id_to_user.getCursor(hash.hashInt(hash_kind, event_id)) orelse continue;
         const user_map = try DB.HashMap(.read_only).init(user_cursor);
         const user_event = try evt.read(evt.User, DB, hash_kind, arena, user_map);
         try users.append(arena.allocator(), evt.User.Safe.init(user_event));
