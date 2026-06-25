@@ -395,17 +395,23 @@ fn renderIndexHtml(
     const overlay = try generateOverlay(allocator, &root, &session);
     defer allocator.free(overlay);
 
-    // serialize the snapshot so the wasm side can parse it back without
-    // making a second request. base64-encoded so the json can be embedded
-    // safely inside the host html.
+    // serialize the snapshot so the wasm side can parse it back without making
+    // a second request. it's embedded raw in a <script type="application/json">
+    // block, whose content is raw text terminated only by "</script". in json,
+    // '<' appears solely inside string values, so escaping every '<' (and '>'
+    // for good measure) to its \uXXXX form yields equivalent json that can't
+    // break out of the tag.
     var json: std.Io.Writer.Allocating = .init(allocator);
     defer json.deinit();
     try std.json.Stringify.value(snapshot, .{}, &json.writer);
 
-    const b64 = std.base64.standard.Encoder;
-    const json_b64 = try allocator.alloc(u8, b64.calcSize(json.written().len));
-    defer allocator.free(json_b64);
-    _ = b64.encode(json_b64, json.written());
+    var json_escaped: std.ArrayList(u8) = .empty;
+    defer json_escaped.deinit(allocator);
+    for (json.written()) |c| switch (c) {
+        '<' => try json_escaped.appendSlice(allocator, "\\u003c"),
+        '>' => try json_escaped.appendSlice(allocator, "\\u003e"),
+        else => try json_escaped.append(allocator, c),
+    };
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -414,7 +420,7 @@ fn renderIndexHtml(
         for (&[_]struct { needle: []const u8, replacement: []const u8 }{
             .{ .needle = "{{{ HAXY_HTML }}}", .replacement = content },
             .{ .needle = "{{{ HAXY_OVERLAY }}}", .replacement = overlay },
-            .{ .needle = "{{{ HAXY_JSON }}}", .replacement = json_b64 },
+            .{ .needle = "{{{ HAXY_JSON }}}", .replacement = json_escaped.items },
         }) |sub| {
             const idx = std.mem.indexOfPos(u8, template, cursor, sub.needle) orelse return error.MissingTemplateToken;
             try out.appendSlice(allocator, template[cursor..idx]);

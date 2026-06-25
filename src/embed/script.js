@@ -1,6 +1,6 @@
 const grid = document.getElementById("grid");
 const overlay = document.getElementById("overlay");
-const pageJsonBase64 = document.getElementById("page-data").textContent;
+const pageJson = document.getElementById("page-data").textContent;
 
 let wasmInstance;
 const decoder = new TextDecoder();
@@ -159,10 +159,9 @@ WebAssembly.instantiateStreaming(fetch("/haxy.wasm"), importObject).then(async (
         await document.fonts.ready;
     }
 
-    // the page is embedded as base64 so it can sit inside the host html
-    // without worrying about characters that would terminate the script tag.
-    // decode here and hand the raw json bytes to the wasm.
-    const jsonBytes = Uint8Array.from(atob(pageJsonBase64), (c) => c.charCodeAt(0));
+    // the page is embedded as raw json in a script tag.
+    // encode to utf-8 bytes and hand it to the wasm.
+    const jsonBytes = encoder.encode(pageJson);
     const ptr = wasmInstance.exports._alloc(jsonBytes.length);
     new Uint8Array(wasmInstance.exports.memory.buffer, ptr, jsonBytes.length).set(jsonBytes);
     wasmInstance.exports._init(ptr, jsonBytes.length, minRows(), maxCols());
