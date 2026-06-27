@@ -71,16 +71,21 @@ pub fn init(
     // open with the arena's backing allocator (transient; the ref names are
     // duped into the page arena so they outlive the repo handle).
     const gpa = arena.child_allocator;
-    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return empty;
-    defer repo.deinit(io, gpa);
+    var any_repo = rp.AnyRepo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return empty;
+    defer any_repo.deinit(io, gpa);
 
-    var branch_iter = repo.listBranches(io, gpa, .{ .index = branches_after }) catch return empty;
-    defer branch_iter.deinit(io);
-    const branches = try collectWindow(io, aa, &branch_iter, branches_after);
+    const branches, const tags = switch (any_repo) {
+        inline else => |*repo| blk: {
+            var branch_iter = repo.listBranches(io, gpa, .{ .index = branches_after }) catch return empty;
+            defer branch_iter.deinit(io);
+            const b = try collectWindow(io, aa, &branch_iter, branches_after);
 
-    var tag_iter = repo.listTags(io, gpa, .{ .index = tags_after }) catch return empty;
-    defer tag_iter.deinit(io);
-    const tags = try collectWindow(io, aa, &tag_iter, tags_after);
+            var tag_iter = repo.listTags(io, gpa, .{ .index = tags_after }) catch return empty;
+            defer tag_iter.deinit(io);
+            const t = try collectWindow(io, aa, &tag_iter, tags_after);
+            break :blk .{ b, t };
+        },
+    };
 
     return .{
         .identity = empty.identity,
@@ -374,7 +379,7 @@ fn refLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.
         .branch => .branch,
         .tag => .tag,
     };
-    const value = try ui.ResolvedRefOrOid.urlEncode(aa, name);
+    const value = try ui.urlEncodeRef(aa, name);
     const route = ui.RoutablePage.repoFilesRoute(identity, ref_or_oid, value, "", 0) orelse return error.RouteTooLong;
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(aa, "a:{s}", .{url});

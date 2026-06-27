@@ -14,8 +14,6 @@ const Focus = xitui.focus.Focus;
 
 const SubHeader = @import("SubHeader.zig");
 
-const RefOrOid = ui.RoutablePage.RefOrOid;
-
 // how many lines of a file's content one window shows before a "next" link.
 const file_page = 2000;
 
@@ -54,7 +52,7 @@ pub const Entry = struct {
 identity: []const u8,
 // the resolved ref this listing is read at (the default branch when the route
 // didn't name one), so the view's directory links stay pinned to it.
-ref_or_oid: RefOrOid,
+ref_or_oid: ui.RoutablePage.RefOrOid,
 ref_or_oid_value: []const u8,
 // the directory being viewed, relative to the repo root ("" at the root).
 dir: []const u8,
@@ -73,7 +71,7 @@ pub fn init(
     session: *ui.Session,
     event_id: *const [evt.event_id_size]u8,
     identity: []const u8,
-    requested_ref_or_oid: ?RefOrOid,
+    requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
     requested_value: []const u8,
     path: []const u8,
     // the line offset the selected file's content window starts at (0 = first).
@@ -93,15 +91,36 @@ pub fn init(
 
     // open + read the committed file list with the arena's backing allocator
     // (transient; freed before init returns); the listing is built into the
-    // page arena so it outlives them.
+    // page arena so it outlives them. AnyRepo opens both sha1 and sha256 repos.
     const gpa = arena.child_allocator;
-    var repo = rp.Repo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
-    defer repo.deinit(io, gpa);
+    var any_repo = rp.AnyRepo(.xit, .{}).open(io, gpa, .{ .path = repo_path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
+    defer any_repo.deinit(io, gpa);
+
+    return switch (any_repo) {
+        inline else => |*repo| listing(repo.self_repo_opts, arena, repo, io, gpa, identity, requested_ref_or_oid, requested_value, path, after),
+    };
+}
+
+// build the listing for an opened repo. generic over the repo's hash kind so
+// the tree/diff types it threads through match the repo's opts.
+fn listing(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    arena: *std.heap.ArenaAllocator,
+    repo: *rp.Repo(.xit, repo_opts),
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    identity: []const u8,
+    requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
+    requested_value: []const u8,
+    path: []const u8,
+    after: usize,
+) !Self {
+    const aa = arena.allocator();
 
     // resolve the requested ref (or the default branch) to the commit oid whose
     // tree we list. a ref the route named explicitly that doesn't resolve is a
     // bad url (NotFound -> 404); the default-branch path falls through to empty.
-    const resolved = (try ui.ResolvedRefOrOid.init(&repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
+    const resolved = (try ui.ResolvedRefOrOid(repo_opts).init(repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null) return error.NotFound;
         return emptyResult(aa, identity, .branch, requested_value, path);
     };
@@ -109,8 +128,8 @@ pub fn init(
     // read the tree at that commit. building the read-only state mirrors what
     // repo.status does internally, but for an arbitrary commit rather than HEAD.
     var moment = repo.core.latestMoment() catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
-    const state = rp.Repo(.xit, .{}).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
-    var tree = tr.Tree(.xit, .{}).init(state, io, gpa, &resolved.oid) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
+    const state = rp.Repo(.xit, repo_opts).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
+    var tree = tr.Tree(.xit, repo_opts).init(state, io, gpa, &resolved.oid) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
     defer tree.deinit();
 
     // `path` names a file when it's an exact tree entry: list its parent
@@ -165,7 +184,7 @@ pub fn init(
                     // their first window (for the in-page detail when selected).
                     const is_selected = if (selected_file) |sf| std.mem.eql(u8, sf, name) else false;
                     const window_start = if (is_selected) after else 0;
-                    const content = readFileContent(state, io, gpa, aa, file_path, tree_entry, window_start) catch
+                    const content = readFileContent(repo_opts, state, io, gpa, aa, file_path, tree_entry, window_start) catch
                         FileContent{ .lines = &.{} };
                     entry.lines = content.lines;
                     entry.is_binary = content.is_binary;
@@ -200,15 +219,16 @@ const FileContent = struct {
 // line iterator flags binary files (its source becomes `.binary`), in which case
 // we report no lines and let the view show a placeholder.
 fn readFileContent(
-    state: rp.Repo(.xit, .{}).State(.read_only),
+    comptime repo_opts: rp.RepoOpts(.xit),
+    state: rp.Repo(.xit, repo_opts).State(.read_only),
     io: std.Io,
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     path: []const u8,
-    tree_entry: tr.TreeEntry((rp.RepoOpts(.xit){}).hash),
+    tree_entry: tr.TreeEntry(repo_opts.hash),
     start: usize,
 ) !FileContent {
-    var line_iter = try df.LineIterator(.xit, .{}).initFromTree(state, io, gpa, path, tree_entry);
+    var line_iter = try df.LineIterator(.xit, repo_opts).initFromTree(state, io, gpa, path, tree_entry);
     defer line_iter.deinit();
     if (line_iter.source == .binary) return .{ .lines = &.{}, .is_binary = true };
 
@@ -231,7 +251,7 @@ fn readFileContent(
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
-fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
+fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
     return .{
         .identity = try aa.dupe(u8, identity),
         .ref_or_oid = ref_or_oid,
