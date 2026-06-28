@@ -56,10 +56,10 @@ fn handleConnection(
     var conn_bw = stream.writer(io, &send_buffer);
     var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
 
-    while (http_server.reader.state == .ready) {
+    if (http_server.reader.state == .ready) {
         var request = http_server.receiveHead() catch |receive_err| switch (receive_err) {
-            error.HttpConnectionClosing => break,
-            error.ReadFailed => break,
+            error.HttpConnectionClosing => return,
+            error.ReadFailed => return,
             else => |e| return e,
         };
 
@@ -72,7 +72,6 @@ fn handleConnection(
             try writeSimpleResponse(&http_server, 500, "Internal Server Error", "text/plain", @errorName(request_err));
         };
         try http_server.out.flush();
-        break;
     }
 }
 
@@ -148,11 +147,13 @@ fn handleGitRequest(
         .protocol_version = protocol_version,
     };
 
-    try openRepoAndServe(repo_kind, any_repo_opts, io, allocator, repo_path, GitService{
+    // serve the existing on-disk repo at its event-id directory; HTTP only
+    // handles fetch/clone, so a missing repo is simply not found
+    if (!try serveIfExists(repo_kind, any_repo_opts, io, allocator, repo_path, GitService{
         .body_reader = &body_reader,
         .writer = http_server.out,
         .options = http_backend_options,
-    });
+    })) return error.RepoNotFound;
 }
 
 fn findRoute(path: []const u8) ?struct { xit.net_server_http_backend.HandlerKind, []const u8 } {
@@ -162,20 +163,6 @@ fn findRoute(path: []const u8) ?struct { xit.net_server_http_backend.HandlerKind
         }
     }
     return null;
-}
-
-fn openRepoAndServe(
-    comptime repo_kind: rp.RepoKind,
-    comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    repo_path: []const u8,
-    service: anytype,
-) !void {
-    // serve the existing on-disk repo at its event-id directory; HTTP only
-    // handles fetch/clone, so a missing repo is simply not found
-    if (try serveIfExists(repo_kind, any_repo_opts, io, allocator, repo_path, service)) return;
-    return error.RepoNotFound;
 }
 
 // serve an existing repo at `repo_path`, or return false if none is there
