@@ -92,7 +92,7 @@ pub const View = struct {
         box.getFocus().child_id = nav_ids[username_index];
 
         return .{
-            .center = try ui.Center.init(allocator, .{ .box = box }, .both),
+            .center = try ui.Center.init(allocator, .{ .box = box }),
             .data = data,
             .session = session,
             .nav_ids = nav_ids,

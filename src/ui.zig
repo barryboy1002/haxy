@@ -1027,7 +1027,6 @@ pub const Widget = union(enum) {
     flow_box_scroll: FlowBox.Scroll,
     spacer: Spacer,
     center: Center,
-    ansi_art: AnsiArt,
     background: AnsiBackground,
     home: Home.View,
     user: User.View,
@@ -1488,11 +1487,8 @@ pub const Center = struct {
     focus: *Focus,
     grid: ?Grid,
     child: *Widget,
-    direction: Direction,
 
-    pub const Direction = enum { both, horiz, vert };
-
-    pub fn init(allocator: std.mem.Allocator, child_widget: Widget, direction: Direction) !Center {
+    pub fn init(allocator: std.mem.Allocator, child_widget: Widget) !Center {
         const child = try allocator.create(Widget);
         errdefer allocator.destroy(child);
         child.* = child_widget;
@@ -1500,7 +1496,6 @@ pub const Center = struct {
             .focus = try Focus.create(allocator, .container),
             .grid = null,
             .child = child,
-            .direction = direction,
         };
     }
 
@@ -1535,14 +1530,8 @@ pub const Center = struct {
         const height = if (constraint.max_size.height) |h| h else if (constraint.min_size.height) |min_h| @max(min_h, child_grid.size.height) else child_grid.size.height;
         if (width == 0 or height == 0) return;
 
-        const offset_x: usize = if (self.direction == .horiz or self.direction == .both)
-            (width -| child_grid.size.width) / 2
-        else
-            0;
-        const offset_y: usize = if (self.direction == .vert or self.direction == .both)
-            (height -| child_grid.size.height) / 2
-        else
-            0;
+        const offset_x: usize = (width -| child_grid.size.width) / 2;
+        const offset_y: usize = (height -| child_grid.size.height) / 2;
 
         var grid = try Grid.init(allocator, .{ .width = width, .height = height });
         errdefer grid.deinit();
@@ -1667,13 +1656,6 @@ pub const AnsiArt = struct {
             }
         }
         self.grid = grid;
-    }
-
-    pub fn input(self: *AnsiArt, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
-        _ = self;
-        _ = allocator;
-        _ = key;
-        _ = root_focus;
     }
 
     pub fn clearGrid(self: *AnsiArt) void {

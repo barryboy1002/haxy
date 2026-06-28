@@ -22,11 +22,10 @@ pub fn init() Self {
 
 pub const View = struct {
     center: ui.Center,
-    data: *const Self,
     session: *ui.Session,
     button_id: usize,
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .rounded_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
 
@@ -56,8 +55,7 @@ pub const View = struct {
         box.getFocus().child_id = button_id;
 
         return .{
-            .center = try ui.Center.init(allocator, .{ .box = box }, .both),
-            .data = data,
+            .center = try ui.Center.init(allocator, .{ .box = box }),
             .session = session,
             .button_id = button_id,
         };

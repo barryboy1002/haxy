@@ -250,8 +250,6 @@ pub const CommandDispatch = union(enum) {
             }
         } else if (cmd_args.command_name) |command_name| {
             return .{ .invalid = .{ .command = command_name } };
-        } else if (show_help) {
-            return .{ .help = null };
         } else {
             return .{ .help = null };
         }

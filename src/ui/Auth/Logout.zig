@@ -65,7 +65,7 @@ pub const View = struct {
         box.getFocus().child_id = button_id;
 
         return .{
-            .center = try ui.Center.init(allocator, .{ .box = box }, .both),
+            .center = try ui.Center.init(allocator, .{ .box = box }),
             .data = data,
             .session = session,
             .button_id = button_id,

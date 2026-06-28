@@ -85,7 +85,7 @@ pub const View = struct {
             }
             // auth
             else if (std.mem.eql(u8, "ai:/auth", focus_name)) {
-                var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
+                var auth_tab = try AuthTab.View.init(allocator, session);
                 errdefer auth_tab.deinit(allocator);
                 try tab_ids.put(allocator, auth_tab.getFocus().id, {});
                 if (std.mem.eql(u8, focus_name, current_link)) selected_tab = auth_tab.getFocus().id;

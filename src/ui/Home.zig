@@ -81,7 +81,7 @@ pub const View = struct {
             }
 
             {
-                var settings_view = try Settings.View.init(allocator, &data.settings, session);
+                var settings_view = try Settings.View.init(allocator, session);
                 errdefer settings_view.deinit(allocator);
                 try stack.children.put(allocator, settings_view.getFocus().id, .{ .home_settings = settings_view });
             }
@@ -93,7 +93,7 @@ pub const View = struct {
             }
 
             if (session.is_terminal) {
-                var quit_view = try Quit.View.init(allocator, &data.quit, session);
+                var quit_view = try Quit.View.init(allocator, session);
                 errdefer quit_view.deinit(allocator);
                 try stack.children.put(allocator, quit_view.getFocus().id, .{ .quit = quit_view });
             }

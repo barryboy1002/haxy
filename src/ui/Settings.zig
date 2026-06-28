@@ -16,7 +16,6 @@ pub fn init() Self {
 
 pub const View = struct {
     center: ui.Center,
-    data: *const Self,
     session: *ui.Session,
     button_id: usize,
 
@@ -26,7 +25,7 @@ pub const View = struct {
     const logged_in_index: usize = 0;
     const logged_out_index: usize = 1;
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         var stack = try wgt.Stack(ui.Widget).init(allocator);
         errdefer stack.deinit(allocator);
 
@@ -76,8 +75,7 @@ pub const View = struct {
         }
 
         return .{
-            .center = try ui.Center.init(allocator, .{ .stack = stack }, .both),
-            .data = data,
+            .center = try ui.Center.init(allocator, .{ .stack = stack }),
             .session = session,
             .button_id = button_id,
         };

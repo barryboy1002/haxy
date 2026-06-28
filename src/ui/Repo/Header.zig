@@ -194,7 +194,7 @@ pub const View = struct {
         // auth tab (login / logout). AuthTab defaults to the global ai:/auth
         // link; repoint its instance at this repo's auth route so it stays local.
         {
-            var auth_tab = try AuthTab.View.init(allocator, &data.auth_tab, session);
+            var auth_tab = try AuthTab.View.init(allocator, session);
             errdefer auth_tab.deinit(allocator);
             auth_tab.text_box.getFocus().kind = .{ .custom = auth_link };
             try tab_ids.put(allocator, auth_tab.getFocus().id, {});

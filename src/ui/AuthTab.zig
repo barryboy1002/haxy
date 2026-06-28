@@ -18,17 +18,15 @@ pub fn init() Self {
 
 pub const View = struct {
     text_box: wgt.TextBox(ui.Widget),
-    data: *const Self,
     session: *ui.Session,
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         var text_box = try wgt.TextBox(ui.Widget).init(allocator, "login", .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
         errdefer text_box.deinit(allocator);
         text_box.getFocus().focusable = true;
         text_box.getFocus().kind = .{ .custom = "ai:/auth" };
         return .{
             .text_box = text_box,
-            .data = data,
             .session = session,
         };
     }
