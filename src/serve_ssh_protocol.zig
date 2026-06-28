@@ -995,8 +995,6 @@ pub fn computeExchangeHash(
 // + 32-byte header key); SHA256 produces 32, so each encrypt key is two hash
 // blocks chained per RFC 4253.
 pub const SessionKeys = struct {
-    cs_iv: [16]u8,
-    sc_iv: [16]u8,
     cs_enc: [64]u8,
     sc_enc: [64]u8,
 };
@@ -1020,8 +1018,6 @@ pub fn deriveSessionKeys(
     }
     try prefix.appendSlice(allocator, exchange_hash);
 
-    try deriveKey(allocator, prefix.items, 'A', session_id, &out.cs_iv);
-    try deriveKey(allocator, prefix.items, 'B', session_id, &out.sc_iv);
     try deriveKey(allocator, prefix.items, 'C', session_id, &out.cs_enc);
     try deriveKey(allocator, prefix.items, 'D', session_id, &out.sc_enc);
 }
@@ -1438,7 +1434,6 @@ const Channel = struct {
     local_window: u32, // bytes peer may still send us before we adjust
     remote_window: u32, // bytes we may still send to peer before they adjust
     max_packet: u32, // max CHANNEL_DATA payload the peer accepts in one packet
-    eof_received: bool = false,
     pty: ?PtySize = null,
 };
 
@@ -1522,10 +1517,7 @@ fn runChannelLayer(
             },
 
             SSH_MSG_CHANNEL_EOF => {
-                if (channel) |*c| {
-                    try parseChannelId(packet, c.local_id);
-                    c.eof_received = true;
-                }
+                if (channel) |*c| try parseChannelId(packet, c.local_id);
             },
 
             SSH_MSG_CHANNEL_CLOSE => {
