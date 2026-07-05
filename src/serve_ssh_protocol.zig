@@ -1131,12 +1131,11 @@ pub const Cipher = struct {
         ChaCha20.stream(&poly_key, 0, self.main_key, nonce);
 
         // mac over encrypted_length || encrypted_body
-        const mac_input = try allocator.alloc(u8, 4 + body_len);
-        defer allocator.free(mac_input);
-        @memcpy(mac_input[0..4], &enc_length);
-        @memcpy(mac_input[4..], body);
+        var poly = Poly1305.init(&poly_key);
+        poly.update(&enc_length);
+        poly.update(body);
         var tag: [Poly1305.mac_length]u8 = undefined;
-        Poly1305.create(&tag, mac_input, &poly_key);
+        poly.final(&tag);
 
         try writer.writeAll(&enc_length);
         try writer.writeAll(body);
@@ -1171,27 +1170,23 @@ pub const Cipher = struct {
         var poly_key: [Poly1305.key_length]u8 = undefined;
         ChaCha20.stream(&poly_key, 0, self.main_key, nonce);
 
-        const mac_input = try allocator.alloc(u8, 4 + body_len);
-        defer allocator.free(mac_input);
-        @memcpy(mac_input[0..4], &enc_length);
-        @memcpy(mac_input[4..], enc_body);
+        var poly = Poly1305.init(&poly_key);
+        poly.update(&enc_length);
+        poly.update(enc_body);
         var tag_computed: [Poly1305.mac_length]u8 = undefined;
-        Poly1305.create(&tag_computed, mac_input, &poly_key);
+        poly.final(&tag_computed);
         if (!std.crypto.timing_safe.eql([Poly1305.mac_length]u8, tag_recv, tag_computed)) {
             return error.MacVerificationFailed;
         }
 
-        // decrypt body in place into a separate buffer (caller owns)
-        const body = try allocator.alloc(u8, body_len);
-        errdefer allocator.free(body);
-        ChaCha20.xor(body, enc_body, 1, self.main_key, nonce);
+        // decrypt the body in place, then copy out the payload (caller owns)
+        ChaCha20.xor(enc_body, enc_body, 1, self.main_key, nonce);
 
-        const padding_len = body[0];
+        const padding_len = enc_body[0];
         if (padding_len < 4 or 1 + @as(u32, padding_len) > body_len) return error.InvalidPadding;
         const payload_len = body_len - 1 - @as(u32, padding_len);
 
-        const payload = try allocator.dupe(u8, body[1 .. 1 + payload_len]);
-        allocator.free(body);
+        const payload = try allocator.dupe(u8, enc_body[1 .. 1 + payload_len]);
 
         self.seq += 1;
         return payload;
