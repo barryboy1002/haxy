@@ -205,7 +205,7 @@ pub fn consumeInTransaction(
 
         if (is_rebased) {
             const oldest_object_id = commit_iter.oldest_object_id orelse return error.OidNotFound;
-            var oldest_object = try obj.Object(.xit, repo_opts, .full).init(state.readOnly(), io, allocator, &std.fmt.bytesToHex(oldest_object_id, .lower));
+            var oldest_object = try obj.Object(.xit, repo_opts).init(state.readOnly(), io, allocator, &std.fmt.bytesToHex(oldest_object_id, .lower));
             defer oldest_object.deinit();
 
             const parent_oids = oldest_object.content.commit.metadata.parent_oids orelse return error.ParentOidsNotFound;
@@ -250,7 +250,7 @@ pub fn consumeInTransaction(
     }
 
     while (try commit_iter.next()) |repo_event_oid| {
-        var commit_object = try obj.Object(.xit, repo_opts, .full).init(state.readOnly(), io, allocator, &std.fmt.bytesToHex(repo_event_oid, .lower));
+        var commit_object = try obj.Object(.xit, repo_opts).init(state.readOnly(), io, allocator, &std.fmt.bytesToHex(repo_event_oid, .lower));
         defer commit_object.deinit();
 
         const parent_oids = commit_object.content.commit.metadata.parent_oids orelse return error.ParentOidsNotFound;
@@ -865,7 +865,7 @@ pub fn CommitIterator(comptime repo_opts: rp.RepoOpts(.xit)) type {
 
                 try seen_object_ids.put(oid_int, .{ .bytes = &oid });
 
-                var commit_object = try obj.Object(.xit, repo_opts, .full).init(state, io, allocator, &std.fmt.bytesToHex(oid, .lower));
+                var commit_object = try obj.Object(.xit, repo_opts).init(state, io, allocator, &std.fmt.bytesToHex(oid, .lower));
                 defer commit_object.deinit();
 
                 // if this object id has already been consumed, skip it
