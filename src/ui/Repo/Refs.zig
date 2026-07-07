@@ -6,9 +6,10 @@ const rp = xit.repo;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
+const inp = @import("../input.zig");
 
 // how many refs one window of a column shows.
 pub const page_size = 20;
@@ -270,25 +271,18 @@ pub const View = struct {
         }, root_focus);
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = allocator;
         // up/down (and the scroll wheel) move within the active column a row;
         // page up/down and home/end jump; left/right switch columns, keeping the
         // same row offset. the parent (Repo) intercepts up at the top row to move
         // focus to the header.
+        if (inp.rowDelta(key, self.columnRowCount())) |delta| {
+            return self.moveRow(root_focus, delta);
+        }
         switch (key) {
-            .arrow_up => try self.moveRow(root_focus, -1),
-            .arrow_down => try self.moveRow(root_focus, 1),
             .arrow_left => try self.switchColumn(root_focus, left_col),
             .arrow_right => try self.switchColumn(root_focus, right_col),
-            .page_down => try self.moveRow(root_focus, 10),
-            .page_up => try self.moveRow(root_focus, -10),
-            .end => try self.moveRow(root_focus, self.columnRowCount()),
-            .home => try self.moveRow(root_focus, -self.columnRowCount()),
-            .mouse => |mouse| switch (mouse.action) {
-                .scroll => |dir| try self.moveRow(root_focus, if (dir == .up) -1 else 1),
-                else => {},
-            },
             else => {},
         }
     }

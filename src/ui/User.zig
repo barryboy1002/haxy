@@ -6,9 +6,10 @@ const hash = xit.hash;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
+const inp = @import("./input.zig");
 
 pub const Header = @import("./User/Header.zig");
 pub const Settings = @import("./Settings.zig");
@@ -209,22 +210,13 @@ pub const View = struct {
         try self.box.build(allocator, constraint, root_focus);
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         if (self.getFocus().child_id) |child_id| {
             if (self.box.children.getIndex(child_id)) |current_index| {
                 const child = &self.box.children.values()[current_index].widget;
                 var index = current_index;
 
-                const Direction = enum { up, down, none };
-                const direction: Direction = switch (key) {
-                    .arrow_up => .up,
-                    .arrow_down => .down,
-                    .mouse => |mouse| if (mouse.action == .scroll)
-                        (if (mouse.action.scroll == .up) .up else .down)
-                    else
-                        .none,
-                    else => .none,
-                };
+                const direction = inp.vertDirection(key);
 
                 switch (direction) {
                     .up => {

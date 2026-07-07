@@ -3,7 +3,7 @@ const ui = @import("../ui.zig");
 const xit = @import("xit");
 const xitui = xit.xitui;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
@@ -68,7 +68,7 @@ pub const View = struct {
         }
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         if (self.session.data.user_id != null) {
             try self.logout.input(allocator, key, root_focus);
         } else {

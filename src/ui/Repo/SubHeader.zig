@@ -4,7 +4,7 @@ const xit = @import("xit");
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
@@ -45,7 +45,7 @@ pub const View = struct {
         }, root_focus);
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = self;
         _ = allocator;
         _ = key;

@@ -7,7 +7,7 @@ const xitui = xit.xitui;
 const term = xitui.terminal;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const evt = @import("./event.zig");
@@ -774,7 +774,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session, repo: *r
     }
 }
 
-pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: inp.Key, session: *Session) !void {
+pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: Key, session: *Session) !void {
     switch (key) {
         // request a navigation pop; the host's Nav.sync goes back a page, or
         // quits when there's no history left.
@@ -1087,7 +1087,7 @@ pub const Widget = union(enum) {
         }
     }
 
-    pub fn input(self: *Widget, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) anyerror!void {
+    pub fn input(self: *Widget, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) anyerror!void {
         switch (self.*) {
             inline else => |*case| try case.input(allocator, key, root_focus),
         }
@@ -1236,7 +1236,7 @@ pub const FlowBox = struct {
         self.grid = grid;
     }
 
-    pub fn input(self: *FlowBox, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *FlowBox, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = self;
         _ = allocator;
         _ = key;
@@ -1303,7 +1303,7 @@ pub const FlowBox = struct {
             try self.scroll.build(allocator, constraint, root_focus);
         }
 
-        pub fn input(self: *Scroll, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+        pub fn input(self: *Scroll, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
             _ = allocator;
             const in = self.inner();
             const child_id = in.focus.child_id orelse return;
@@ -1414,7 +1414,7 @@ pub const Spacer = struct {
         self.grid = try Grid.init(allocator, .{ .width = width, .height = 1 });
     }
 
-    pub fn input(self: *Spacer, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *Spacer, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = self;
         _ = allocator;
         _ = key;
@@ -1485,7 +1485,7 @@ pub const Footer = struct {
         self.grid = grid;
     }
 
-    pub fn input(self: *Footer, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *Footer, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = self;
         _ = allocator;
         _ = key;
@@ -1569,7 +1569,7 @@ pub const Center = struct {
         self.grid = grid;
     }
 
-    pub fn input(self: *Center, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *Center, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         try self.child.input(allocator, key, root_focus);
     }
 
@@ -1787,7 +1787,7 @@ pub const AnsiBackground = struct {
         }
     }
 
-    pub fn input(self: *AnsiBackground, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *AnsiBackground, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         try self.child.input(allocator, key, root_focus);
     }
 

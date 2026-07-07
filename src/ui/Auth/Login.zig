@@ -8,7 +8,7 @@ const hash = xit.hash;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const bcrypt = std.crypto.pwhash.bcrypt;
@@ -131,7 +131,7 @@ pub const View = struct {
         try self.center.build(allocator, constraint, root_focus);
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         const box = &self.center.child.box;
         const child_id = box.focus.child_id orelse return;
         const current = self.indexOf(child_id) orelse return;

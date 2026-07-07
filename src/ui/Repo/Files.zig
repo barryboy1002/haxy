@@ -8,9 +8,10 @@ const df = xit.diff;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
+const inp = @import("../input.zig");
 
 const SubHeader = @import("SubHeader.zig");
 
@@ -517,10 +518,10 @@ pub const View = struct {
         self.detailScrollFrame().options.border_style = if (!has_content) null else if (content_focused) .double else .single;
 
         // same for the "next" link above the content.
-        const nav = self.navBox();
-        for (nav.children.keys(), nav.children.values()) |id, *child| {
+        const nav_box = self.navBox();
+        for (nav_box.children.keys(), nav_box.children.values()) |id, *child| {
             switch (child.widget) {
-                .text_box => |*tb| tb.options.border_style = if (nav.getFocus().child_id == id) .single else .hidden,
+                .text_box => |*tb| tb.options.border_style = if (nav_box.getFocus().child_id == id) .single else .hidden,
                 else => {},
             }
         }
@@ -564,12 +565,12 @@ pub const View = struct {
     }
 
     fn populateDetail(self: *View, allocator: std.mem.Allocator) !void {
-        const nav = self.navBox();
+        const nav_box = self.navBox();
         const inner = self.detailInner();
 
-        for (nav.children.values()) |*child| child.widget.deinit(allocator);
-        nav.children.clearAndFree(allocator);
-        nav.getFocus().child_id = null;
+        for (nav_box.children.values()) |*child| child.widget.deinit(allocator);
+        nav_box.children.clearAndFree(allocator);
+        nav_box.getFocus().child_id = null;
         for (inner.children.values()) |*child| child.widget.deinit(allocator);
         inner.children.clearAndFree(allocator);
         inner.getFocus().child_id = null;
@@ -580,7 +581,7 @@ pub const View = struct {
             if (!entry.is_dir) {
                 // the "next" window link sits above the scroll, so it stays put
                 // while the content scrolls.
-                if (entry.has_more) try self.addNavLink(allocator, nav, "next lines →", entry, entry.window_start + file_page);
+                if (entry.has_more) try self.addNavLink(allocator, nav_box, "next lines →", entry, entry.window_start + file_page);
                 if (entry.is_binary) {
                     try self.addContentBox(allocator, inner, "(binary file)");
                 } else {
@@ -590,7 +591,7 @@ pub const View = struct {
             }
         }
         // point each box at its first child so focus can descend into it.
-        if (nav.children.count() > 0) nav.getFocus().child_id = nav.children.keys()[0];
+        if (nav_box.children.count() > 0) nav_box.getFocus().child_id = nav_box.children.keys()[0];
         if (inner.children.count() > 0) inner.getFocus().child_id = inner.children.keys()[0];
 
         // reset the scroll to the top for the newly-shown file: directly on the
@@ -617,7 +618,7 @@ pub const View = struct {
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = allocator;
         if (self.detailActive()) {
             try self.detailInput(key, root_focus);
@@ -626,23 +627,16 @@ pub const View = struct {
         }
     }
 
-    fn listInput(self: *View, key: inp.Key, root_focus: *Focus) !void {
+    fn listInput(self: *View, key: Key, root_focus: *Focus) !void {
         // up/down (and the scroll wheel) move the selection; page up/down jump a
         // fixed amount. right/Enter cross into the detail pane. Enter/clicks on a
         // directory (or "..") row are turned into navigation by the host
         // (crossPageLink) before reaching here.
+        if (inp.rowDelta(key, @intCast(self.listBox().children.count()))) |delta| {
+            return self.moveSelection(root_focus, delta);
+        }
         switch (key) {
             .enter, .arrow_right => try self.focusDetail(root_focus),
-            .arrow_down => try self.moveSelection(root_focus, 1),
-            .arrow_up => try self.moveSelection(root_focus, -1),
-            .page_down => try self.moveSelection(root_focus, 10),
-            .page_up => try self.moveSelection(root_focus, -10),
-            .end => try self.moveSelection(root_focus, @intCast(self.listBox().children.count())),
-            .home => try self.moveSelection(root_focus, -@as(isize, @intCast(self.listBox().children.count()))),
-            .mouse => |mouse| switch (mouse.action) {
-                .scroll => |dir| try self.moveSelection(root_focus, if (dir == .up) -1 else 1),
-                else => {},
-            },
             else => {},
         }
     }
@@ -653,7 +647,7 @@ pub const View = struct {
         return self.detailInner().children.contains(g);
     }
 
-    fn detailInput(self: *View, key: inp.Key, root_focus: *Focus) !void {
+    fn detailInput(self: *View, key: Key, root_focus: *Focus) !void {
         const sc = self.detailScroll();
         const on_content = self.focusOnContent(root_focus);
         // the "next" link sits above the content scroll. on the link, left returns
@@ -724,9 +718,9 @@ pub const View = struct {
     // focus the first (left-most) nav link; a no-op when there are none, leaving
     // focus on the content.
     fn focusNav(self: *View, root_focus: *Focus) void {
-        const nav = self.navBox();
-        if (nav.children.count() == 0) return;
-        root_focus.setFocus(nav.children.keys()[0]);
+        const nav_box = self.navBox();
+        if (nav_box.children.count() == 0) return;
+        root_focus.setFocus(nav_box.children.keys()[0]);
     }
 
     fn focusContent(self: *View, root_focus: *Focus) void {
@@ -738,10 +732,10 @@ pub const View = struct {
     // move focus `delta` rows within the nav box; returns false (without moving)
     // when that would step off either end.
     fn moveNav(self: *View, root_focus: *Focus, delta: isize) bool {
-        const nav = self.navBox();
-        const keys = nav.children.keys();
-        const cur_id = nav.getFocus().child_id orelse return false;
-        const cur: isize = @intCast(nav.children.getIndex(cur_id) orelse return false);
+        const nav_box = self.navBox();
+        const keys = nav_box.children.keys();
+        const cur_id = nav_box.getFocus().child_id orelse return false;
+        const cur: isize = @intCast(nav_box.children.getIndex(cur_id) orelse return false);
         const target = cur + delta;
         if (target < 0 or target >= @as(isize, @intCast(keys.len))) return false;
         root_focus.setFocus(keys[@intCast(target)]);

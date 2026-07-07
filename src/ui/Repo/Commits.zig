@@ -8,9 +8,10 @@ const df = xit.diff;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
-const inp = xitui.input;
+const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
+const inp = @import("../input.zig");
 
 const SubHeader = @import("SubHeader.zig");
 
@@ -619,7 +620,7 @@ pub const View = struct {
         sc.getFocus().version +%= 1;
     }
 
-    pub fn input(self: *View, allocator: std.mem.Allocator, key: inp.Key, root_focus: *Focus) !void {
+    pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = allocator;
         if (self.diffActive()) {
             try self.diffInput(key, root_focus);
@@ -628,10 +629,13 @@ pub const View = struct {
         }
     }
 
-    fn listInput(self: *View, key: inp.Key, root_focus: *Focus) !void {
+    fn listInput(self: *View, key: Key, root_focus: *Focus) !void {
         // up/down (and the scroll wheel) move the selection a row; page up/down
         // jump a fixed amount. right/Enter cross into the diff pane. Enter/clicks
         // on the "next" row become navigation in the host before reaching here.
+        if (inp.rowDelta(key, @intCast(self.listBox().children.count()))) |delta| {
+            return self.moveSelection(root_focus, delta);
+        }
         switch (key) {
             .enter => if (self.selectedCommitIndex() != null)
                 try self.focusDiff(root_focus)
@@ -640,21 +644,11 @@ pub const View = struct {
                     try self.session.navigate(route);
             },
             .arrow_right => try self.focusDiff(root_focus),
-            .arrow_down => try self.moveSelection(root_focus, 1),
-            .arrow_up => try self.moveSelection(root_focus, -1),
-            .page_down => try self.moveSelection(root_focus, 10),
-            .page_up => try self.moveSelection(root_focus, -10),
-            .end => try self.moveSelection(root_focus, @intCast(self.listBox().children.count())),
-            .home => try self.moveSelection(root_focus, -@as(isize, @intCast(self.listBox().children.count()))),
-            .mouse => |mouse| switch (mouse.action) {
-                .scroll => |dir| try self.moveSelection(root_focus, if (dir == .up) -1 else 1),
-                else => {},
-            },
             else => {},
         }
     }
 
-    fn diffInput(self: *View, key: inp.Key, root_focus: *Focus) !void {
+    fn diffInput(self: *View, key: Key, root_focus: *Focus) !void {
         const sc = self.diffScroll();
         switch (key) {
             // left scrolls horizontally, then leaves for the list once flush left.
