@@ -656,12 +656,12 @@ pub const View = struct {
             .arrow_left => {
                 if (sc.x > 0) {
                     sc.x -= 1;
-                    ui.clampScroll(self.diffScroll());
+                    self.diffScroll().clampToContent();
                 } else try self.focusList(root_focus);
             },
             .arrow_right => {
                 sc.x += 1;
-                ui.clampScroll(self.diffScroll());
+                self.diffScroll().clampToContent();
             },
             .arrow_up => try self.moveDiff(root_focus, -1),
             .arrow_down => try self.moveDiff(root_focus, 1),
@@ -698,7 +698,7 @@ pub const View = struct {
 
             const sc = self.diffScroll();
             sc.y += delta * 5; // magnify because it's a line count
-            ui.clampScroll(self.diffScroll());
+            self.diffScroll().clampToContent();
             if (in_range and self.hunkVisible(@intCast(target))) {
                 root_focus.setFocus(keys[@intCast(target)]);
             }
@@ -716,7 +716,7 @@ pub const View = struct {
         if (self.session.is_terminal) {
             const sc = self.diffScroll();
             sc.y += delta * 5; // magnify because it's a line count
-            ui.clampScroll(self.diffScroll());
+            self.diffScroll().clampToContent();
             try self.focusVisible(root_focus, delta > 0);
         } else {
             const inner = self.diffInner();
@@ -737,7 +737,7 @@ pub const View = struct {
         if (self.session.is_terminal) {
             const sc = self.diffScroll();
             sc.y = if (to_end) std.math.maxInt(isize) else 0;
-            ui.clampScroll(self.diffScroll());
+            self.diffScroll().clampToContent();
         }
         root_focus.setFocus(if (to_end) keys[keys.len - 1] else keys[0]);
     }

@@ -661,7 +661,7 @@ pub const View = struct {
                 if (on_content) {
                     if (sc.x > 0) {
                         sc.x -= 1;
-                        ui.clampScroll(self.detailScroll());
+                        self.detailScroll().clampToContent();
                     } else try self.focusList(root_focus);
                 } else if (!self.moveNav(root_focus, -1)) {
                     try self.focusList(root_focus);
@@ -670,14 +670,14 @@ pub const View = struct {
             .arrow_right => {
                 if (on_content) {
                     sc.x += 1;
-                    ui.clampScroll(self.detailScroll());
+                    self.detailScroll().clampToContent();
                 } else _ = self.moveNav(root_focus, 1);
             },
             .arrow_up => {
                 if (on_content) {
                     if (self.session.is_terminal and sc.y > 0) {
                         sc.y -= 1;
-                        ui.clampScroll(self.detailScroll());
+                        self.detailScroll().clampToContent();
                     } else self.focusNav(root_focus); // cross up to the links
                 }
             },
@@ -685,30 +685,30 @@ pub const View = struct {
                 if (on_content) {
                     if (self.session.is_terminal) {
                         sc.y += 1;
-                        ui.clampScroll(self.detailScroll());
+                        self.detailScroll().clampToContent();
                     }
                 } else self.focusContent(root_focus); // links -> content
             },
             .page_up => if (on_content and self.session.is_terminal) {
                 sc.y -= 10;
-                ui.clampScroll(self.detailScroll());
+                self.detailScroll().clampToContent();
             },
             .page_down => if (on_content and self.session.is_terminal) {
                 sc.y += 10;
-                ui.clampScroll(self.detailScroll());
+                self.detailScroll().clampToContent();
             },
             .home => if (on_content and self.session.is_terminal) {
                 sc.y = 0;
-                ui.clampScroll(self.detailScroll());
+                self.detailScroll().clampToContent();
             },
             .end => if (on_content and self.session.is_terminal) {
                 sc.y = std.math.maxInt(isize);
-                ui.clampScroll(self.detailScroll());
+                self.detailScroll().clampToContent();
             },
             .mouse => |mouse| switch (mouse.action) {
                 .scroll => |dir| if (on_content and self.session.is_terminal) {
                     sc.y += if (dir == .up) -5 else 5;
-                    ui.clampScroll(self.detailScroll());
+                    self.detailScroll().clampToContent();
                 },
                 else => {},
             },

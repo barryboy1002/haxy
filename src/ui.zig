@@ -1126,20 +1126,6 @@ pub fn moveRowFocus(box: *wgt.Box(Widget), scroll: *wgt.Scroll(Widget), root_foc
     if (box.children.values()[next].rect) |rect| scroll.scrollToRect(rect);
 }
 
-// keep a scroll within its content, using the last build's grids. the scroll
-// bar's reserved column/row isn't part of the content viewport, so exclude it
-// (as scrollToRect does) or the last column/row stays unreachable.
-pub fn clampScroll(sc: *wgt.Scroll(Widget)) void {
-    const vp = sc.grid orelse return;
-    const content = sc.child.box.grid orelse return;
-    const view_w = vp.size.width - sc.bar_w;
-    const view_h = vp.size.height - sc.bar_h;
-    const max_y: isize = if (content.size.height > view_h) @intCast(content.size.height - view_h) else 0;
-    const max_x: isize = if (content.size.width > view_w) @intCast(content.size.width - view_w) else 0;
-    sc.y = std.math.clamp(sc.y, 0, max_y);
-    sc.x = std.math.clamp(sc.x, 0, max_x);
-}
-
 pub const FlowBox = struct {
     focus: *Focus,
     grid: ?Grid,
