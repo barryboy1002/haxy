@@ -242,7 +242,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
         defer req.deinit(allocator);
         try req.append(allocator, proto.SSH_MSG_SERVICE_REQUEST);
         try proto.writeStringField(&req, allocator, "ssh-userauth");
-        try cs_cipher.writePacket(io, allocator, cw, req.items);
+        try cs_cipher.writePacket(io, cw, req.items);
     }
     {
         const accept = try sc_cipher.readPacket(allocator, cr);
@@ -271,7 +271,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
         try req.append(allocator, 0); // has_signature = false
         try proto.writeStringField(&req, allocator, "ssh-ed25519");
         try proto.writeStringField(&req, allocator, user_pubkey_blob.items);
-        try cs_cipher.writePacket(io, allocator, cw, req.items);
+        try cs_cipher.writePacket(io, cw, req.items);
     }
     {
         const pk_ok = try sc_cipher.readPacket(allocator, cr);
@@ -307,7 +307,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
         try proto.writeStringField(&req, allocator, "ssh-ed25519");
         try proto.writeStringField(&req, allocator, user_pubkey_blob.items);
         try proto.writeStringField(&req, allocator, sig_wire.items);
-        try cs_cipher.writePacket(io, allocator, cw, req.items);
+        try cs_cipher.writePacket(io, cw, req.items);
     }
     {
         const success = try sc_cipher.readPacket(allocator, cr);
@@ -333,7 +333,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
         try proto.writeU32(&req, allocator, client_channel_id);
         try proto.writeU32(&req, allocator, 1 << 20); // initial window
         try proto.writeU32(&req, allocator, 32768); // max packet
-        try cs_cipher.writePacket(io, allocator, cw, req.items);
+        try cs_cipher.writePacket(io, cw, req.items);
     }
     var server_channel_id: u32 = undefined;
     {
@@ -360,7 +360,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
         try proto.writeStringField(&req, allocator, "exec");
         try req.append(allocator, 1); // want_reply
         try proto.writeStringField(&req, allocator, exec_command);
-        try cs_cipher.writePacket(io, allocator, cw, req.items);
+        try cs_cipher.writePacket(io, cw, req.items);
     }
     {
         const success = try sc_cipher.readPacket(allocator, cr);
@@ -407,7 +407,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
         defer pkt.deinit(allocator);
         try pkt.append(allocator, proto.SSH_MSG_CHANNEL_CLOSE);
         try proto.writeU32(&pkt, allocator, server_channel_id);
-        try cs_cipher.writePacket(io, allocator, cw, pkt.items);
+        try cs_cipher.writePacket(io, cw, pkt.items);
     }
 
     // simulate the client's TCP FIN so the server's teardown drain reads EOF
@@ -541,7 +541,7 @@ test "auth + channel layer failure modes" {
             defer req.deinit(allocator);
             try req.append(allocator, proto.SSH_MSG_SERVICE_REQUEST);
             try proto.writeStringField(&req, allocator, "ssh-userauth");
-            try cs.writePacket(io, allocator, cw, req.items);
+            try cs.writePacket(io, cw, req.items);
         }
         {
             const accept = try sc.readPacket(allocator, cr);
@@ -568,7 +568,7 @@ test "auth + channel layer failure modes" {
             try req.append(allocator, 0);
             try proto.writeStringField(&req, allocator, "ssh-ed25519");
             try proto.writeStringField(&req, allocator, pubkey_blob.items);
-            try cs.writePacket(io, allocator, cw, req.items);
+            try cs.writePacket(io, cw, req.items);
         }
         {
             const pk_ok = try sc.readPacket(allocator, cr);
@@ -614,7 +614,7 @@ test "auth + channel layer failure modes" {
             try proto.writeStringField(&req, allocator, "ssh-ed25519");
             try proto.writeStringField(&req, allocator, pubkey_blob.items);
             try proto.writeStringField(&req, allocator, sig_wire.items);
-            try cs.writePacket(io, allocator, cw, req.items);
+            try cs.writePacket(io, cw, req.items);
 
             const reply = try sc.readPacket(allocator, cr);
             defer allocator.free(reply);
@@ -635,7 +635,7 @@ test "auth + channel layer failure modes" {
         try proto.writeU32(&req, allocator, case.id);
         try proto.writeU32(&req, allocator, 1 << 20);
         try proto.writeU32(&req, allocator, 32768);
-        try cs.writePacket(io, allocator, cw, req.items);
+        try cs.writePacket(io, cw, req.items);
 
         const reply = try sc.readPacket(allocator, cr);
         defer allocator.free(reply);
@@ -654,7 +654,7 @@ test "auth + channel layer failure modes" {
 
     var tmp_buf: [512]u8 = undefined;
     var sink = std.Io.Writer.fixed(&tmp_buf);
-    try cs.writePacket(io, allocator, &sink, req.items);
+    try cs.writePacket(io, &sink, req.items);
     const written = sink.buffered();
     tmp_buf[written.len - 1] ^= 0x01;
     try cw.writeAll(tmp_buf[0..written.len]);

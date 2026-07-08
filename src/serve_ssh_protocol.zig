@@ -187,16 +187,48 @@ pub const SessionCtx = struct {
     fingerprint: [fingerprint_len]u8,
     closed: bool = false,
 
-    // shared state for the blocking I/O mode (SessionReader + writeBytes
-    // window-stall pump). incoming CHANNEL_DATA bytes accumulate here
-    // until the consumer drains them via SessionReader.
+    // shared state for the packet pump. incoming CHANNEL_DATA bytes
+    // accumulate in incoming_buffer (already-consumed prefix tracked by
+    // incoming_start) until drained via SessionReader or nextEvent.
     incoming_buffer: std.ArrayList(u8) = .empty,
+    incoming_start: usize = 0,
     incoming_eof: bool = false,
     // resize seen by the background pump, returned by the next nextEvent call
     pending_resize: ?PtySize = null,
+    // reused per-chunk message buffer for writeChannel
+    write_scratch: std.ArrayList(u8) = .empty,
 
     pub fn deinit(self: *SessionCtx) void {
         self.incoming_buffer.deinit(self.allocator);
+        self.write_scratch.deinit(self.allocator);
+    }
+
+    fn incomingBytes(self: *const SessionCtx) []const u8 {
+        return self.incoming_buffer.items[self.incoming_start..];
+    }
+
+    // mark n incoming bytes as consumed; the buffer is recycled once empty
+    fn consumeIncoming(self: *SessionCtx, n: usize) void {
+        self.incoming_start += n;
+        if (self.incoming_start == self.incoming_buffer.items.len) {
+            self.incoming_buffer.clearRetainingCapacity();
+            self.incoming_start = 0;
+        }
+    }
+
+    // append to the incoming buffer, first compacting away the consumed
+    // prefix so the buffer only ever holds unread bytes
+    fn appendIncoming(self: *SessionCtx, payload: []const u8) !void {
+        if (self.incoming_start > 0) {
+            const remaining = self.incoming_buffer.items.len - self.incoming_start;
+            std.mem.copyForwards(u8, self.incoming_buffer.items[0..remaining], self.incoming_buffer.items[self.incoming_start..]);
+            self.incoming_buffer.shrinkRetainingCapacity(remaining);
+            self.incoming_start = 0;
+        }
+        if (payload.len > max_incoming_buffered - self.incoming_buffer.items.len) {
+            return error.IncomingBufferExceeded;
+        }
+        try self.incoming_buffer.appendSlice(self.allocator, payload);
     }
 
     /// interactive sessions idle legitimately; tell the host's idle
@@ -207,63 +239,25 @@ pub const SessionCtx = struct {
 
     /// pump SSH packets until something interesting (data / resize / close)
     /// arrives. background traffic (window adjusts, env requests, etc.) is
-    /// handled silently. used by pumped-event consumers (e.g. the TUI path);
-    /// do not mix with SessionReader, which has its own packet pump.
+    /// handled silently. drains the same incoming state as SessionReader,
+    /// so a session should consume through one or the other, not both.
     pub fn nextEvent(self: *SessionCtx) !Event {
-        if (self.pending_resize) |sz| {
-            self.pending_resize = null;
-            return .{ .resize = sz };
-        }
         while (true) {
-            const packet = readSessionPacket(self.io, self.allocator, self.reader, self.writer, self.cs_cipher, self.sc_cipher, self.rekey) catch |err| switch (err) {
-                error.EndOfStream => {
-                    self.closed = true;
-                    return .close;
-                },
-                else => return err,
-            };
-            defer self.allocator.free(packet);
-            if (packet.len < 1) return error.EmptyPacket;
-
-            switch (packet[0]) {
-                SSH_MSG_CHANNEL_DATA => {
-                    const payload = try parseChannelData(packet, false, self.channel.local_id);
-                    const data_len: u32 = @intCast(payload.len);
-                    if (data_len > self.channel.local_window) return error.WindowExceeded;
-                    self.channel.local_window -= data_len;
-                    try maybeRefillRecvWindow(self.io, self.allocator, self.sc_cipher, self.writer, self.channel);
-                    // hand the payload bytes to the caller (caller owns)
-                    return .{ .data = try self.allocator.dupe(u8, payload) };
-                },
-                SSH_MSG_CHANNEL_EXTENDED_DATA => {
-                    // stderr from the client is unusual; discard, but adjust window
-                    try discardChannelData(self.io, self.allocator, self.sc_cipher, self.writer, self.channel, packet, true);
-                },
-                SSH_MSG_CHANNEL_WINDOW_ADJUST => try handleWindowAdjust(self.channel, packet),
-                SSH_MSG_CHANNEL_REQUEST => {
-                    var r = std.Io.Reader.fixed(packet[1..]);
-                    const recipient_channel = try r.takeInt(u32, .big);
-                    if (recipient_channel != self.channel.local_id) return error.UnknownChannel;
-                    const req_type = try takeStringField(self.allocator, &r, 64);
-                    defer self.allocator.free(req_type);
-                    const want_reply = (try r.takeByte()) != 0;
-                    if (std.mem.eql(u8, req_type, "window-change")) {
-                        const sz = try takePtySize(&r);
-                        if (self.channel.pty != null) self.channel.pty = sz;
-                        try replyChannelRequest(self.io, self.allocator, self.sc_cipher, self.writer, self.channel, want_reply, true);
-                        return .{ .resize = sz };
-                    }
-                    // unknown / not interesting — fail it and keep going
-                    try replyChannelRequest(self.io, self.allocator, self.sc_cipher, self.writer, self.channel, want_reply, false);
-                },
-                SSH_MSG_CHANNEL_EOF, SSH_MSG_CHANNEL_CLOSE => {
-                    try parseChannelId(packet, self.channel.local_id);
-                    self.closed = true;
-                    return .close;
-                },
-                SSH_MSG_GLOBAL_REQUEST => try handleGlobalRequest(self.io, self.allocator, self.sc_cipher, self.writer, packet),
-                else => {},
+            if (self.pending_resize) |sz| {
+                self.pending_resize = null;
+                return .{ .resize = sz };
             }
+            if (self.incomingBytes().len > 0) {
+                // hand the buffered bytes to the caller (caller owns)
+                const payload = try self.allocator.dupe(u8, self.incomingBytes());
+                self.consumeIncoming(payload.len);
+                return .{ .data = payload };
+            }
+            if (self.incoming_eof) {
+                self.closed = true;
+                return .close;
+            }
+            try self.processOneBackgroundPacket();
         }
     }
 
@@ -292,29 +286,28 @@ pub const SessionCtx = struct {
                 if (self.incoming_eof) return error.RemoteClosed;
                 try self.processOneBackgroundPacket();
             }
-            const cap = @min(@min(rest.len, self.channel.max_packet), self.channel.remote_window);
+            // also clamp to our own max so the chunk fits writePacket's buffer
+            const cap = @min(rest.len, self.channel.max_packet, self.channel.remote_window, max_packet_size);
             const chunk_len: u32 = @intCast(cap);
 
-            var msg: std.ArrayList(u8) = .empty;
-            defer msg.deinit(self.allocator);
-            try msg.append(self.allocator, if (extended) SSH_MSG_CHANNEL_EXTENDED_DATA else SSH_MSG_CHANNEL_DATA);
-            try writeU32(&msg, self.allocator, self.channel.remote_id);
-            if (extended) try writeU32(&msg, self.allocator, SSH_EXTENDED_DATA_STDERR);
-            try writeStringField(&msg, self.allocator, rest[0..chunk_len]);
-            try self.sc_cipher.writePacket(self.io, self.allocator, self.writer, msg.items);
+            self.write_scratch.clearRetainingCapacity();
+            try self.write_scratch.append(self.allocator, if (extended) SSH_MSG_CHANNEL_EXTENDED_DATA else SSH_MSG_CHANNEL_DATA);
+            try writeU32(&self.write_scratch, self.allocator, self.channel.remote_id);
+            if (extended) try writeU32(&self.write_scratch, self.allocator, SSH_EXTENDED_DATA_STDERR);
+            try writeStringField(&self.write_scratch, self.allocator, rest[0..chunk_len]);
+            try self.sc_cipher.writePacket(self.io, self.writer, self.write_scratch.items);
 
             self.channel.remote_window -= chunk_len;
             rest = rest[chunk_len..];
         }
     }
 
-    /// process exactly one SSH packet for side effects only. CHANNEL_DATA
-    /// payloads accumulate in incoming_buffer; CHANNEL_EOF/CLOSE flips
-    /// incoming_eof; WINDOW_ADJUST updates the channel state; window-change
-    /// is stashed in pending_resize for the next nextEvent call; other
-    /// channel/global requests get a polite failure. used both by
-    /// SessionReader (waiting for inbound bytes) and writeBytes (waiting
-    /// for send-window).
+    /// the session's packet pump: process exactly one SSH packet for side
+    /// effects only. CHANNEL_DATA payloads accumulate in incoming_buffer;
+    /// CHANNEL_EOF/CLOSE flips incoming_eof; WINDOW_ADJUST updates the
+    /// channel state; window-change is stashed in pending_resize; other
+    /// channel/global requests get a polite failure. driven by nextEvent,
+    /// SessionReader, and writeBytes (waiting for send-window).
     fn processOneBackgroundPacket(self: *SessionCtx) !void {
         const packet = readSessionPacket(self.io, self.allocator, self.reader, self.writer, self.cs_cipher, self.sc_cipher, self.rekey) catch |err| switch (err) {
             error.EndOfStream => {
@@ -332,10 +325,7 @@ pub const SessionCtx = struct {
                 const data_len: u32 = @intCast(payload.len);
                 if (data_len > self.channel.local_window) return error.WindowExceeded;
                 self.channel.local_window -= data_len;
-                if (payload.len > max_incoming_buffered - self.incoming_buffer.items.len) {
-                    return error.IncomingBufferExceeded;
-                }
-                try self.incoming_buffer.appendSlice(self.allocator, payload);
+                try self.appendIncoming(payload);
                 try self.maybeRefillRecvWindowForBufferedInput();
             },
             SSH_MSG_CHANNEL_EXTENDED_DATA => {
@@ -369,7 +359,7 @@ pub const SessionCtx = struct {
     }
 
     fn maybeRefillRecvWindowForBufferedInput(self: *SessionCtx) !void {
-        if (self.incoming_buffer.items.len >= incoming_refill_threshold) return;
+        if (self.incomingBytes().len >= incoming_refill_threshold) return;
         try maybeRefillRecvWindow(self.io, self.allocator, self.sc_cipher, self.writer, self.channel);
     }
 
@@ -388,7 +378,7 @@ pub const SessionCtx = struct {
             try writeStringField(&req, self.allocator, "exit-status");
             try req.append(self.allocator, 0); // want_reply MUST be false
             try writeU32(&req, self.allocator, status);
-            try self.sc_cipher.writePacket(self.io, self.allocator, self.writer, req.items);
+            try self.sc_cipher.writePacket(self.io, self.writer, req.items);
         }
 
         // EOF then CLOSE
@@ -396,13 +386,13 @@ pub const SessionCtx = struct {
         defer eof.deinit(self.allocator);
         try eof.append(self.allocator, SSH_MSG_CHANNEL_EOF);
         try writeU32(&eof, self.allocator, self.channel.remote_id);
-        try self.sc_cipher.writePacket(self.io, self.allocator, self.writer, eof.items);
+        try self.sc_cipher.writePacket(self.io, self.writer, eof.items);
 
         var close: std.ArrayList(u8) = .empty;
         defer close.deinit(self.allocator);
         try close.append(self.allocator, SSH_MSG_CHANNEL_CLOSE);
         try writeU32(&close, self.allocator, self.channel.remote_id);
-        try self.sc_cipher.writePacket(self.io, self.allocator, self.writer, close.items);
+        try self.sc_cipher.writePacket(self.io, self.writer, close.items);
 
         // read and discard until the peer closes (TCP FIN) before letting the
         // caller close the socket. a git client, after our CHANNEL_CLOSE, still
@@ -502,17 +492,16 @@ pub const SessionReader = struct {
         const self: *SessionReader = @fieldParentPtr("interface", r);
 
         // wait for data to arrive (or EOF)
-        while (self.sess.incoming_buffer.items.len == 0) {
+        while (self.sess.incomingBytes().len == 0) {
             if (self.sess.incoming_eof) return error.EndOfStream;
             self.sess.processOneBackgroundPacket() catch return error.ReadFailed;
         }
 
-        // drain as much of incoming_buffer as the limit allows, in one go
-        const chunk = limit.sliceConst(self.sess.incoming_buffer.items);
+        // drain as much buffered input as the limit allows, in one go
+        const chunk = limit.sliceConst(self.sess.incomingBytes());
         const written = try w.write(chunk);
 
-        std.mem.copyForwards(u8, self.sess.incoming_buffer.items, self.sess.incoming_buffer.items[written..]);
-        self.sess.incoming_buffer.shrinkRetainingCapacity(self.sess.incoming_buffer.items.len - written);
+        self.sess.consumeIncoming(written);
         self.sess.maybeRefillRecvWindowForBufferedInput() catch return error.ReadFailed;
 
         return written;
@@ -521,13 +510,13 @@ pub const SessionReader = struct {
     fn readVec(r: *std.Io.Reader, data: [][]u8) std.Io.Reader.Error!usize {
         const self: *SessionReader = @fieldParentPtr("interface", r);
 
-        // wait until something is in incoming_buffer (or EOF)
-        while (self.sess.incoming_buffer.items.len == 0) {
+        // wait until some input is buffered (or EOF)
+        while (self.sess.incomingBytes().len == 0) {
             if (self.sess.incoming_eof) return error.EndOfStream;
             self.sess.processOneBackgroundPacket() catch return error.ReadFailed;
         }
 
-        const src = self.sess.incoming_buffer.items;
+        const src = self.sess.incomingBytes();
 
         // vtable.readVec contract: if data[0] is empty, write into r.buffer
         // instead and return 0. without this branch the caller spins,
@@ -538,8 +527,7 @@ pub const SessionReader = struct {
             const copy = @min(dest.len, src.len);
             @memcpy(dest[0..copy], src[0..copy]);
             r.end += copy;
-            std.mem.copyForwards(u8, self.sess.incoming_buffer.items, src[copy..]);
-            self.sess.incoming_buffer.shrinkRetainingCapacity(src.len - copy);
+            self.sess.consumeIncoming(copy);
             self.sess.maybeRefillRecvWindowForBufferedInput() catch return error.ReadFailed;
             return 0;
         }
@@ -547,8 +535,7 @@ pub const SessionReader = struct {
         const dest = data[0];
         const copy = @min(dest.len, src.len);
         @memcpy(dest[0..copy], src[0..copy]);
-        std.mem.copyForwards(u8, self.sess.incoming_buffer.items, src[copy..]);
-        self.sess.incoming_buffer.shrinkRetainingCapacity(src.len - copy);
+        self.sess.consumeIncoming(copy);
         self.sess.maybeRefillRecvWindowForBufferedInput() catch return error.ReadFailed;
         return copy;
     }
@@ -687,10 +674,10 @@ const KexTransport = union(enum) {
         }
     }
 
-    fn writePacket(self: KexTransport, io: std.Io, allocator: std.mem.Allocator, writer: *std.Io.Writer, payload: []const u8) !void {
+    fn writePacket(self: KexTransport, io: std.Io, writer: *std.Io.Writer, payload: []const u8) !void {
         switch (self) {
             .plain => try writePlainPacket(io, writer, payload),
-            .encrypted => |ciphers| try ciphers.sc.writePacket(io, allocator, writer, payload),
+            .encrypted => |ciphers| try ciphers.sc.writePacket(io, writer, payload),
         }
     }
 };
@@ -979,7 +966,7 @@ fn runRekey(
 ) !void {
     const server_kex_init = try buildServerKexInit(io, allocator);
     defer allocator.free(server_kex_init);
-    try sc_cipher.writePacket(io, allocator, writer, server_kex_init);
+    try sc_cipher.writePacket(io, writer, server_kex_init);
 
     const negotiated = try exchangeKeys(
         io,
@@ -1121,11 +1108,11 @@ fn exchangeKeys(
     try writeStringField(&reply, allocator, host_key_blob.items);
     try writeStringField(&reply, allocator, server_blob);
     try writeStringField(&reply, allocator, signature_blob.items);
-    try transport.writePacket(io, allocator, writer, reply.items);
+    try transport.writePacket(io, writer, reply.items);
 
     // NEWKEYS — both sides switch to the new keys after this is sent and
     // the peer's NEWKEYS is received.
-    try transport.writePacket(io, allocator, writer, &[_]u8{SSH_MSG_NEWKEYS});
+    try transport.writePacket(io, writer, &[_]u8{SSH_MSG_NEWKEYS});
 
     const peer_newkeys = try transport.readPacket(allocator, reader, strict);
     defer allocator.free(peer_newkeys);
@@ -1299,7 +1286,6 @@ pub const Cipher = struct {
     pub fn writePacket(
         self: *Cipher,
         io: std.Io,
-        allocator: std.mem.Allocator,
         writer: *std.Io.Writer,
         payload: []const u8,
     ) !void {
@@ -1310,9 +1296,11 @@ pub const Cipher = struct {
 
         const nonce = makeNonce(self.seq);
 
-        // plaintext body = padding_length || payload || random padding
-        const body = try allocator.alloc(u8, body_len);
-        defer allocator.free(body);
+        // plaintext body = padding_length || payload || random padding.
+        // stack-allocated to avoid a heap alloc on every packet.
+        var body_buf: [max_packet_len]u8 = undefined;
+        if (body_len > body_buf.len) return error.PacketTooLarge;
+        const body = body_buf[0..body_len];
         body[0] = padding_len;
         @memcpy(body[1 .. 1 + payload.len], payload);
         io.random(body[1 + payload.len ..]);
@@ -1440,7 +1428,7 @@ fn runAuth(
         defer accept.deinit(allocator);
         try accept.append(allocator, SSH_MSG_SERVICE_ACCEPT);
         try writeStringField(&accept, allocator, "ssh-userauth");
-        try sc_cipher.writePacket(io, allocator, writer, accept.items);
+        try sc_cipher.writePacket(io, writer, accept.items);
     }
 
     // step 2: USERAUTH loop until SUCCESS. accept any ed25519 key whose
@@ -1498,7 +1486,7 @@ fn runAuth(
             try pk_ok.append(allocator, SSH_MSG_USERAUTH_PK_OK);
             try writeStringField(&pk_ok, allocator, algo);
             try writeStringField(&pk_ok, allocator, pubkey_blob);
-            try sc_cipher.writePacket(io, allocator, writer, pk_ok.items);
+            try sc_cipher.writePacket(io, writer, pk_ok.items);
             continue;
         }
 
@@ -1523,7 +1511,7 @@ fn runAuth(
             continue;
         }
 
-        try sc_cipher.writePacket(io, allocator, writer, &[_]u8{SSH_MSG_USERAUTH_SUCCESS});
+        try sc_cipher.writePacket(io, writer, &[_]u8{SSH_MSG_USERAUTH_SUCCESS});
         return formatFingerprint(pubkey_blob);
     }
 }
@@ -1539,7 +1527,7 @@ fn sendUserauthFailure(
     try buf.append(allocator, SSH_MSG_USERAUTH_FAILURE);
     try writeNameList(&buf, allocator, &.{"publickey"}); // allowed methods
     try buf.append(allocator, 0); // partial_success = false
-    try sc_cipher.writePacket(io, allocator, writer, buf.items);
+    try sc_cipher.writePacket(io, writer, buf.items);
 }
 
 /// Append the canonical publickey-signed-data bytes (RFC 4252 §7) to `buf`.
@@ -1737,7 +1725,7 @@ fn handleGlobalRequest(
     defer allocator.free(name);
     const want_reply = (try r.takeByte()) != 0;
     if (want_reply) {
-        try sc_cipher.writePacket(io, allocator, writer, &[_]u8{SSH_MSG_REQUEST_FAILURE});
+        try sc_cipher.writePacket(io, writer, &[_]u8{SSH_MSG_REQUEST_FAILURE});
     }
 }
 
@@ -1782,7 +1770,7 @@ fn handleChannelOpen(
     try writeU32(&reply, allocator, local_id);
     try writeU32(&reply, allocator, initial_recv_window);
     try writeU32(&reply, allocator, max_packet_size);
-    try sc_cipher.writePacket(io, allocator, writer, reply.items);
+    try sc_cipher.writePacket(io, writer, reply.items);
 
     return .{
         .local_id = local_id,
@@ -1816,7 +1804,7 @@ fn sendChannelOpenFailure(
     try writeU32(&reply, allocator, reason);
     try writeStringField(&reply, allocator, description);
     try writeStringField(&reply, allocator, ""); // language tag
-    try sc_cipher.writePacket(io, allocator, writer, reply.items);
+    try sc_cipher.writePacket(io, writer, reply.items);
 }
 
 const RequestKind = enum { shell, exec };
@@ -1901,7 +1889,7 @@ fn replyChannelRequest(
     defer reply.deinit(allocator);
     try reply.append(allocator, if (success) SSH_MSG_CHANNEL_SUCCESS else SSH_MSG_CHANNEL_FAILURE);
     try writeU32(&reply, allocator, ch.remote_id);
-    try sc_cipher.writePacket(io, allocator, writer, reply.items);
+    try sc_cipher.writePacket(io, writer, reply.items);
 }
 
 fn handleWindowAdjust(ch: *Channel, packet: []const u8) !void {
@@ -1978,7 +1966,7 @@ fn maybeRefillRecvWindow(
     try adj.append(allocator, SSH_MSG_CHANNEL_WINDOW_ADJUST);
     try writeU32(&adj, allocator, ch.remote_id);
     try writeU32(&adj, allocator, add);
-    try sc_cipher.writePacket(io, allocator, writer, adj.items);
+    try sc_cipher.writePacket(io, writer, adj.items);
 }
 
 pub fn writeU32(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) !void {
