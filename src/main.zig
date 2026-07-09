@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const xit = @import("xit");
 const rp = xit.repo;
 const cmd = @import("./command.zig");

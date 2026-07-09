@@ -75,7 +75,7 @@ fn tick(min_height: u32, max_width: u32) !void {
 
     const html = try web.generateHtml(allocator, root_ptr);
     defer allocator.free(html);
-    setHtml(html);
+    _setHtml(html.ptr, @intCast(html.len));
 
     // emit the overlay (form + inputs + button) on every tick so the wasm
     // layout drives positions, not just the server's initial render. JS
@@ -85,7 +85,7 @@ fn tick(min_height: u32, max_width: u32) !void {
     // form submission.
     const overlay = try web.generateOverlay(allocator, root_ptr, &session);
     defer allocator.free(overlay);
-    setOverlay(overlay);
+    _setOverlay(overlay.ptr, @intCast(overlay.len));
 
     const root_focus = root_ptr.getFocus();
     if (root_focus.grandchild_id) |gid| {
@@ -130,7 +130,7 @@ fn onKeyDown(key_code: u32) !void {
             // follow a cross-page link
             if (ui.crossPageLink(root_ptr.getFocus(), gid, session.data.current_page)) |route| {
                 const url = try route.urlAlloc(&page_arena);
-                navigate(url);
+                _navigate(url.ptr, @intCast(url.len));
                 return;
             }
         }
@@ -144,7 +144,7 @@ fn onMouseClick(focus_id: usize) !void {
     // follow a cross-page link
     if (ui.crossPageLink(root_ptr.getFocus(), focus_id, session.data.current_page)) |route| {
         const url = try route.urlAlloc(&page_arena);
-        navigate(url);
+        _navigate(url.ptr, @intCast(url.len));
         return;
     }
     root_ptr.getFocus().setFocus(focus_id);
@@ -157,18 +157,6 @@ fn setFocus(focus_id: usize) !void {
 
 fn consoleLog(arg: []const u8) void {
     _consoleLog(arg.ptr, @intCast(arg.len));
-}
-
-fn setHtml(arg: []const u8) void {
-    _setHtml(arg.ptr, @intCast(arg.len));
-}
-
-fn setOverlay(arg: []const u8) void {
-    _setOverlay(arg.ptr, @intCast(arg.len));
-}
-
-fn navigate(arg: []const u8) void {
-    _navigate(arg.ptr, @intCast(arg.len));
 }
 
 extern fn _consoleLog(arg: [*]const u8, len: u32) void;

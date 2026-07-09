@@ -220,21 +220,12 @@ pub const RoutablePage = union(enum) {
         };
     }
 
-    pub fn url(comptime self: RoutablePage) []const u8 {
-        return switch (self) {
-            .home_users => "/users",
-            .home_repos => "/repos",
-            .home_settings => "/settings",
-            .home_auth => "/auth",
-            .user_repos, .user_settings, .user_auth => @compileError("user routes are dynamic; use urlAlloc"),
-            .repo_files, .repo_commits, .repo_refs, .repo_settings, .repo_auth => @compileError("repo routes are dynamic; use urlAlloc"),
-        };
-    }
-
     pub fn urlAlloc(self: RoutablePage, arena: *std.heap.ArenaAllocator) ![]const u8 {
         return switch (self) {
             .home_users => |after| if (after == 0) @as([]const u8, "/users") else try std.fmt.allocPrint(arena.allocator(), "/users?after={d}", .{after}),
             .home_repos => |after| if (after == 0) @as([]const u8, "/repos") else try std.fmt.allocPrint(arena.allocator(), "/repos?after={d}", .{after}),
+            .home_settings => "/settings",
+            .home_auth => "/auth",
             .user_repos => |u| if (u.after == 0)
                 try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/repos", .{u.name.slice()})
             else
@@ -255,7 +246,6 @@ pub const RoutablePage = union(enum) {
                 try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/refs?kind={s}&after={d}", .{ r.name.slice(), @tagName(r.kind), r.after }),
             .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/settings", .{name.slice()}),
             .repo_auth => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/auth", .{name.slice()}),
-            inline else => |_, tag| url(tag),
         };
     }
 
