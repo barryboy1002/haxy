@@ -91,13 +91,15 @@ const max_packet_size: u32 = 32768;
 const max_incoming_buffered: usize = initial_recv_window;
 const incoming_refill_threshold: usize = max_incoming_buffered / 2;
 
-/// shared with the host's idle watchdog. `activity` is bumped on every
-/// successfully decrypted packet so the watchdog can tell an idle connection
-/// from a slow one; `exempt` is set once an interactive session starts,
-/// since users idle in a TUI legitimately.
+/// shared with the host's watchdog. `activity` is bumped only for non-ignored
+/// session packets, `authenticated` releases the hard pre-auth deadline, and
+/// `closing` starts the bounded close drain. `exempt` is set once an
+/// interactive session starts, since users idle in a TUI legitimately.
 pub const IdleState = struct {
     activity: std.atomic.Value(u64) = .init(0),
+    authenticated: std.atomic.Value(bool) = .init(false),
     exempt: std.atomic.Value(bool) = .init(false),
+    closing: std.atomic.Value(bool) = .init(false),
 };
 
 // ---------------------------------------------------------------------------
@@ -377,6 +379,7 @@ pub const SessionCtx = struct {
         if (self.closed) return;
         self.closed = true;
         const conn = self.conn;
+        if (conn.cs_cipher.idle) |idle| idle.closing.store(true, .release);
 
         // exit-status request (informational; client uses it as the
         // command's exit code)
@@ -593,6 +596,7 @@ pub fn handleConnection(
     conn.cs_cipher.idle = idle;
 
     const fingerprint = try runAuth(&conn);
+    if (idle) |state| state.authenticated.store(true, .release);
 
     try runChannelLayer(&conn, &fingerprint, handler);
 }
@@ -664,13 +668,13 @@ fn isIgnorableMsg(msg_type: u8) bool {
 
 // transport for KEX packets: the initial exchange runs in plaintext, a rekey
 // runs under the current session ciphers.
-const KexTransport = union(enum) {
+pub const KexTransport = union(enum) {
     plain: *u64, // counts packets read so the caller can seed cipher seqnos
     encrypted: struct { cs: *Cipher, sc: *Cipher },
 
     // read one packet, skipping ignorable messages — unless strict kex is in
     // force, which bans them mid-handshake
-    fn readPacket(self: KexTransport, allocator: std.mem.Allocator, reader: *std.Io.Reader, strict: bool) ![]u8 {
+    pub fn readPacket(self: KexTransport, allocator: std.mem.Allocator, reader: *std.Io.Reader, strict: bool) ![]u8 {
         while (true) {
             const packet = switch (self) {
                 .plain => |count| packet: {
@@ -699,7 +703,7 @@ const KexTransport = union(enum) {
 
 // read one encrypted packet for the auth and channel layers, transparently
 // skipping ignorable messages and servicing client-initiated rekeys.
-fn readSessionPacket(conn: *Conn) ![]u8 {
+pub fn readSessionPacket(conn: *Conn) ![]u8 {
     while (true) {
         const packet = try conn.cs_cipher.readPacket(conn.allocator, conn.reader);
         if (packet.len >= 1 and isIgnorableMsg(packet[0])) {
@@ -708,11 +712,17 @@ fn readSessionPacket(conn: *Conn) ![]u8 {
         }
         if (packet.len >= 1 and packet[0] == SSH_MSG_KEXINIT) {
             defer conn.allocator.free(packet);
+            recordActivity(conn);
             try runRekey(conn, packet);
             continue;
         }
+        recordActivity(conn);
         return packet;
     }
+}
+
+fn recordActivity(conn: *Conn) void {
+    if (conn.cs_cipher.idle) |idle| _ = idle.activity.fetchAdd(1, .monotonic);
 }
 
 // ---------------------------------------------------------------------------
@@ -972,7 +982,7 @@ fn runRekey(conn: *Conn, client_kex_init: []const u8) !void {
         conn.reader,
         conn.writer,
         .{ .encrypted = .{ .cs = &conn.cs_cipher, .sc = &conn.sc_cipher } },
-        false,
+        false, // strict kex message rules apply to the initial exchange only
         conn.rekey.host_key,
         conn.rekey.client_version,
         client_kex_init,
@@ -1375,7 +1385,6 @@ pub const Cipher = struct {
         const payload = try allocator.dupe(u8, enc_body[1 .. 1 + payload_len]);
 
         self.seq += 1;
-        if (self.idle) |idle| _ = idle.activity.fetchAdd(1, .monotonic);
         return payload;
     }
 };

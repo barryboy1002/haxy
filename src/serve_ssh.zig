@@ -10,13 +10,15 @@ const ssh = @import("./serve_ssh_protocol.zig");
 const evt = @import("./event.zig");
 const serve_common = @import("./serve_common.zig");
 
-// listener resource limits. idle enforcement is coarse: the watchdog wakes
-// once per interval and shuts the connection down if no SSH packet arrived
-// during the entire previous interval. each connection holds two OS threads
-// under std.Io.Threaded (session + watchdog), so the cap is sized to keep
-// the worst-case thread count in comfortable territory, not by RAM.
+// listener resource limits. the watchdog gives unauthenticated peers a hard
+// deadline, detects idle non-interactive sessions from protocol progress, and
+// bounds the post-CLOSE drain. each connection holds two OS threads under
+// std.Io.Threaded (session + watchdog), so the cap is sized by thread count.
 const max_connections: u32 = 4096;
-const idle_interval = std.Io.Duration.fromSeconds(120);
+const watchdog_interval = std.Io.Duration.fromSeconds(5);
+const preauth_timeout_ticks: u32 = 6; // 30 seconds
+const idle_timeout_ticks: u32 = 24; // 120 seconds
+const close_drain_timeout_ticks: u32 = 2; // 5-10 seconds
 
 var active_connections: std.atomic.Value(u32) = .init(0);
 
@@ -110,17 +112,46 @@ pub fn runListener(
     }, handle);
 }
 
-// shut down connections that made no SSH packet progress for a whole
-// interval. exempt connections (interactive TUIs) end enforcement instead.
+// enforce a hard pre-auth deadline, an idle timeout for non-interactive
+// sessions, and a bounded close drain. interactive sessions are exempt only
+// from the idle timeout; the watchdog remains available to break a stalled
+// teardown.
 fn watchdog(io: std.Io, stream: *const std.Io.net.Stream, idle_state: *ssh.IdleState) void {
     var last_seen: u64 = 0;
+    var preauth_ticks: u32 = 0;
+    var idle_ticks: u32 = 0;
+    var closing_ticks: u32 = 0;
     while (true) {
-        io.sleep(idle_interval, .awake) catch return; // canceled — connection is done
-        if (idle_state.exempt.load(.monotonic)) return;
+        io.sleep(watchdog_interval, .awake) catch return; // canceled — connection is done
+
+        if (idle_state.closing.load(.acquire)) {
+            closing_ticks += 1;
+            if (closing_ticks >= close_drain_timeout_ticks) {
+                stream.shutdown(io, .both) catch {};
+                return;
+            }
+            continue;
+        }
+
+        if (!idle_state.authenticated.load(.acquire)) {
+            preauth_ticks += 1;
+            if (preauth_ticks >= preauth_timeout_ticks) {
+                stream.shutdown(io, .both) catch {};
+                return;
+            }
+            continue;
+        }
+
+        if (idle_state.exempt.load(.monotonic)) continue;
         const seen = idle_state.activity.load(.monotonic);
         if (seen == last_seen) {
-            stream.shutdown(io, .both) catch {};
-            return;
+            idle_ticks += 1;
+            if (idle_ticks >= idle_timeout_ticks) {
+                stream.shutdown(io, .both) catch {};
+                return;
+            }
+        } else {
+            idle_ticks = 0;
         }
         last_seen = seen;
     }

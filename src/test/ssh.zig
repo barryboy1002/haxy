@@ -86,6 +86,51 @@ test "extended channel data parser accepts only stderr type" {
     try std.testing.expectError(error.UnsupportedExtendedData, proto.parseChannelData(packet.items, true, 0));
 }
 
+test "initial strict kex rejects ignored packets" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    var encoded_buf: [128]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&encoded_buf);
+    try proto.writePlainPacket(io, &writer, &.{proto.SSH_MSG_IGNORE});
+
+    var reader = std.Io.Reader.fixed(writer.buffered());
+    var client_seq: u64 = 0;
+    const transport = proto.KexTransport{ .plain = &client_seq };
+    try std.testing.expectError(error.StrictKexViolation, transport.readPacket(allocator, &reader, true));
+    try std.testing.expectEqual(@as(u64, 1), client_seq);
+}
+
+test "ignored packets do not count as connection activity" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const key_material = [_]u8{0x5A} ** 64;
+
+    var sender = proto.Cipher.init(&key_material, 0);
+    var encoded_buf: [128]u8 = undefined;
+    var encoded_writer = std.Io.Writer.fixed(&encoded_buf);
+    try sender.writePacket(io, &encoded_writer, &.{proto.SSH_MSG_IGNORE});
+
+    var idle = proto.IdleState{};
+    var receiver = proto.Cipher.init(&key_material, 0);
+    receiver.idle = &idle;
+    var reader = std.Io.Reader.fixed(encoded_writer.buffered());
+    var output_buf: [1]u8 = undefined;
+    var output_writer = std.Io.Writer.fixed(&output_buf);
+    var conn = proto.Conn{
+        .io = io,
+        .allocator = allocator,
+        .reader = &reader,
+        .writer = &output_writer,
+        .cs_cipher = receiver,
+        .sc_cipher = sender,
+        .rekey = undefined,
+    };
+
+    try std.testing.expectError(error.EndOfStream, proto.readSessionPacket(&conn));
+    try std.testing.expectEqual(@as(u64, 0), idle.activity.load(.monotonic));
+}
+
 test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> channel -> exec)" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
