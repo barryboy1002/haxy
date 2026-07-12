@@ -15,11 +15,11 @@ const inp = @import("../input.zig");
 // how many issues one window shows before a "next" link appears.
 pub const page_size = 20;
 
-// one issue from the repo's consumed event database.
-pub const Issue = struct {
-    id: []const u8, // hex event id
-    title: []const u8,
-    description: []const u8,
+// one issue from the repo's consumed event database, with its hex event id
+// (the id lives in the event envelope, not the payload).
+pub const IssueWithId = struct {
+    id: []const u8,
+    issue: evt.Issue,
 };
 
 // "owner/name", so the view can build /repo/owner/name/issues/... links.
@@ -27,7 +27,7 @@ identity: []const u8,
 // the hex event id of the issue this window is rooted at ("" = the first
 // window), mirrored into the url.
 selected_id: []const u8,
-issues: []const Issue,
+issues: []const IssueWithId,
 // the id of the previous window's first issue ("" = the bare first window), or
 // null when this window is already the first.
 prev_id: ?[]const u8,
@@ -141,7 +141,7 @@ fn collect(
     // the next window's start). the set's keys are orderKey
     // ([timestamp][event-id]); the trailing bytes of each key are the issue
     // event id.
-    var issues: std.ArrayList(Issue) = .empty;
+    var issues: std.ArrayList(IssueWithId) = .empty;
     var next_id: ?[]const u8 = null;
     while (try iter.next()) |id_cursor_val| {
         var id_cursor = id_cursor_val;
@@ -155,11 +155,9 @@ fn collect(
         }
         const issue_cursor = try event_id_to_issue.getCursor(hash.hashInt(repo_opts.hash, order_key[@sizeOf(u64)..])) orelse continue;
         const issue_map = try DB.HashMap(.read_only).init(issue_cursor);
-        const issue_event = try evt.read(evt.Issue, DB, repo_opts.hash, arena, issue_map);
         try issues.append(aa, .{
             .id = try aa.dupe(u8, &id_hex),
-            .title = issue_event.title,
-            .description = issue_event.description,
+            .issue = try evt.read(evt.Issue, DB, repo_opts.hash, arena, issue_map),
         });
     }
 
@@ -198,8 +196,8 @@ pub const View = struct {
                 errdefer list_box.deinit(allocator);
                 if (data.prev_id) |prev|
                     try addRow(allocator, &list_box, "← previous", try issuesLink(session.page_arena, data.identity, prev));
-                for (data.issues) |issue|
-                    try addRow(allocator, &list_box, issue.title, try issueRowLink(session.page_arena, data.identity, issue.id));
+                for (data.issues) |entry|
+                    try addRow(allocator, &list_box, entry.issue.title, try issueRowLink(session.page_arena, data.identity, entry.id));
                 if (data.next_id) |next|
                     try addRow(allocator, &list_box, "next →", try issuesLink(session.page_arena, data.identity, next));
                 // select the window's first issue (past a leading "previous"
@@ -360,7 +358,7 @@ pub const View = struct {
     }
 
     fn populateDetail(self: *View, allocator: std.mem.Allocator, sel: usize) !void {
-        const issue = self.data.issues[sel];
+        const entry = self.data.issues[sel];
         const inner = self.detailInner();
 
         for (inner.children.values()) |*child| child.widget.deinit(allocator);
@@ -371,7 +369,7 @@ pub const View = struct {
         // border reserves the space the border occupies when focused, so
         // focusing doesn't shift layout.
         {
-            var tb = try wgt.TextBox(ui.Widget).init(allocator, issue.description, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .word });
+            var tb = try wgt.TextBox(ui.Widget).init(allocator, entry.issue.description, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .word });
             errdefer tb.deinit(allocator);
             tb.getFocus().focusable = true;
             try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
