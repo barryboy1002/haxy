@@ -108,7 +108,11 @@ pub fn init(
         .repo_refs => |r| r.after,
         else => 0,
     };
-    // the issue the issues tab's window is rooted at ("" = the first window).
+    // the issues tab's tag filter and the issue its window is rooted at.
+    const issues_tag: []const u8 = switch (route) {
+        .repo_issues => |i| i.tag.slice(),
+        else => "",
+    };
     const issues_selected: []const u8 = switch (route) {
         .repo_issues => |i| i.selected.slice(),
         else => "",
@@ -142,12 +146,12 @@ pub fn init(
     return .{
         // files and commits resolve the same ref, so either's serves the header,
         // which points both tabs at it.
-        .header = try Header.init(arena, repo.name, owner.name, files.ref_or_oid, files.ref_or_oid_value),
+        .header = try Header.init(arena, repo.name, owner.name, files.ref_or_oid, files.ref_or_oid_value, issues_tag),
         .repo = repo,
         .files = files,
         .commits = commits,
         .refs = try Refs.init(arena, session, &found.event_id, rf.identity, refs_kind, refs_after),
-        .issues = try Issues.init(arena, session, &found.event_id, rf.identity, issues_selected),
+        .issues = try Issues.init(arena, session, &found.event_id, rf.identity, issues_tag, issues_selected),
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
@@ -260,8 +264,9 @@ pub const View = struct {
                 .repo_commits => self.session.data.current_page = .{ .repo_commits = .{ .name = self.data.commits_route_name, .after = self.data.commits_after } },
                 // the refs tab mirrors this page's paginated column + offset.
                 .repo_refs => self.session.data.current_page = .{ .repo_refs = .{ .name = self.data.identity, .kind = self.data.refs.kind, .after = self.data.refs.after } },
-                // the issues tab mirrors the issue this page's window is rooted at.
-                .repo_issues => self.session.data.current_page = ui.RoutablePage.repoIssuesRoute(self.data.identity.slice(), self.data.issues.selected_id) orelse self.session.data.current_page,
+                // the issues tab mirrors this page's tag filter (issue urls
+                // themselves never carry the tag).
+                .repo_issues => self.session.data.current_page = ui.RoutablePage.repoIssuesRoute(self.data.identity.slice(), self.data.issues.tag, "") orelse self.session.data.current_page,
                 .home_settings => self.session.data.current_page = .{ .repo_settings = self.data.identity },
                 .home_auth => self.session.data.current_page = .{ .repo_auth = self.data.identity },
                 // the quit tab is tty-only and not a route, so leave current_page

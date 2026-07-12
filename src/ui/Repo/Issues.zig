@@ -24,6 +24,8 @@ pub const IssueWithId = struct {
 
 // "owner/name", so the view can build /repo/owner/name/issues/... links.
 identity: []const u8,
+// the url-encoded tag the list is filtered to ("" = unfiltered).
+tag: []const u8,
 // the hex event id of the issue this window is rooted at ("" = the first
 // window), mirrored into the url.
 selected_id: []const u8,
@@ -41,11 +43,13 @@ pub fn init(
     session: *ui.Session,
     event_id: *const [evt.event_id_size]u8,
     identity: []const u8,
+    tag: []const u8,
     selected_id: []const u8,
 ) !Self {
     const aa = arena.allocator();
     const empty: Self = .{
         .identity = try aa.dupe(u8, identity),
+        .tag = try aa.dupe(u8, tag),
         .selected_id = try aa.dupe(u8, selected_id),
         .issues = &.{},
         .prev_id = null,
@@ -72,8 +76,9 @@ pub fn init(
     };
 }
 
-// read one window of the repo's issues, ordered by creation time (oldest
-// first), starting at the issue empty.selected_id names ("" = the beginning).
+// read one window of the repo's issues (filtered to empty.tag when set),
+// ordered by creation time (oldest first), starting at the issue
+// empty.selected_id names ("" = the beginning).
 fn collect(
     comptime repo_opts: rp.RepoOpts(.xit),
     arena: *std.heap.ArenaAllocator,
@@ -82,24 +87,36 @@ fn collect(
 ) !Self {
     const aa = arena.allocator();
     const DB = rp.Repo(.xit, repo_opts).DB;
-    // an explicitly named issue that doesn't exist is a bad url (NotFound ->
-    // 404); the bare route falls through to an empty listing.
     const rooted = empty.selected_id.len != 0;
+    const tagged = empty.tag.len != 0;
+    // an explicitly named issue or tag that doesn't exist is a bad url
+    // (NotFound -> 404); the bare route falls through to an empty listing.
+    const strict = rooted or tagged;
 
     // a repo with no consumed events has no moment yet.
     const haxy_moment = evt.currentMoment(repo_opts, repo) catch {
-        if (rooted) return error.NotFound;
+        if (strict) return error.NotFound;
         return empty;
     };
 
-    const issue_id_set_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "issue-id-set")) orelse {
-        if (rooted) return error.NotFound;
-        return empty;
+    // the ordered set to window: the tag's issue set when filtered, else the
+    // full issue set.
+    const issue_id_set_cursor = blk: {
+        if (tagged) {
+            const tag_to_issues_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "tag->issue-id-set")) orelse return error.NotFound;
+            const tag_to_issues = try DB.SortedMap(.read_only).init(tag_to_issues_cursor);
+            const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, empty.tag));
+            break :blk (try tag_to_issues.getCursor(decoded)) orelse return error.NotFound;
+        }
+        break :blk (try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "issue-id-set"))) orelse {
+            if (strict) return error.NotFound;
+            return empty;
+        };
     };
     const issue_id_set = try DB.SortedSet(.read_only).init(issue_id_set_cursor);
 
     const event_id_to_issue_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "event-id->issue")) orelse {
-        if (rooted) return error.NotFound;
+        if (strict) return error.NotFound;
         return empty;
     };
     const event_id_to_issue = try DB.HashMap(.read_only).init(event_id_to_issue_cursor);
@@ -118,6 +135,10 @@ fn collect(
         const issue_map = try DB.HashMap(.read_only).init(issue_cursor);
         const issue_event = try evt.read(evt.Issue, DB, repo_opts.hash, arena, issue_map);
         const order_key = evt.orderKey(issue_event.created_ts, &id_bytes);
+
+        // the named issue must be in the windowed set (a tag url can name an
+        // issue that doesn't carry the tag).
+        if (!try issue_id_set.contains(&order_key)) return error.NotFound;
 
         // the previous window starts page_size ranks back.
         const rank = try issue_id_set.rank(&order_key);
@@ -163,6 +184,7 @@ fn collect(
 
     return .{
         .identity = empty.identity,
+        .tag = empty.tag,
         .selected_id = empty.selected_id,
         .issues = issues.items,
         .prev_id = prev_id,
@@ -195,11 +217,11 @@ pub const View = struct {
                 var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
                 errdefer list_box.deinit(allocator);
                 if (data.prev_id) |prev|
-                    try addRow(allocator, &list_box, "← previous", try issuesLink(session.page_arena, data.identity, prev));
+                    try addRow(allocator, &list_box, "← previous", try issuesLink(session.page_arena, data.identity, data.tag, prev));
                 for (data.issues) |entry|
                     try addRow(allocator, &list_box, entry.issue.title, try issueRowLink(session.page_arena, data.identity, entry.id));
                 if (data.next_id) |next|
-                    try addRow(allocator, &list_box, "next →", try issuesLink(session.page_arena, data.identity, next));
+                    try addRow(allocator, &list_box, "next →", try issuesLink(session.page_arena, data.identity, data.tag, next));
                 // select the window's first issue (past a leading "previous"
                 // row) so its description shows on load.
                 if (data.issues.len > 0)
@@ -303,10 +325,12 @@ pub const View = struct {
         // mirror the focused issue into the url so it updates as the selection
         // moves, but only while focus is inside this view (the list or detail).
         // when focus sits on the header tab, use the page's base /issues route.
+        // an issue's url is the same whether or not the list is filtered, so
+        // the mirror drops the tag.
         if (root_focus.grandchild_id) |g| {
             if (self.box.getFocus().children.contains(g)) {
                 if (self.selectedIssueIndex()) |sel| {
-                    if (ui.RoutablePage.repoIssuesRoute(self.data.identity, self.data.issues[sel].id)) |route|
+                    if (ui.RoutablePage.repoIssuesRoute(self.data.identity, "", self.data.issues[sel].id)) |route|
                         self.session.data.current_page = route;
                 }
             }
@@ -375,6 +399,24 @@ pub const View = struct {
             try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
         }
 
+        // the issue's tags flow under the description like a paragraph; each
+        // links to the list filtered to that tag.
+        {
+            var items: std.ArrayList(ui.TagFlow.Item) = .empty;
+            defer items.deinit(allocator);
+            var tag_iter = evt.Issue.tagIterator(entry.issue.tags);
+            while (tag_iter.next()) |tag| {
+                if (tag.len == 0) continue;
+                try items.append(allocator, .{ .text = tag, .link = try tagLink(self.session.page_arena, self.data.identity, tag) });
+            }
+            if (items.items.len > 0) {
+                var tf = try ui.TagFlow.init(allocator);
+                errdefer tf.deinit(allocator);
+                try tf.setItems(allocator, items.items);
+                try inner.children.put(allocator, tf.getFocus().id, .{ .widget = .{ .tag_flow = tf }, .rect = null, .min_size = null });
+            }
+        }
+
         // point the pane at its row so focus recovery can land here.
         inner.getFocus().child_id = inner.children.keys()[0];
 
@@ -410,11 +452,27 @@ pub const View = struct {
     }
 
     fn detailInput(self: *View, key: Key, root_focus: *Focus) !void {
+        if (self.tagsFocused()) {
+            try self.tagsInput(key, root_focus);
+        } else {
+            try self.descriptionInput(key, root_focus);
+        }
+    }
+
+    fn descriptionInput(self: *View, key: Key, root_focus: *Focus) !void {
         const sc = self.detailScroll();
         switch (key) {
-            .arrow_left => try self.focusList(root_focus),
+            .arrow_left => return self.focusList(root_focus),
             .arrow_up => sc.y -= 1,
-            .arrow_down => sc.y += 1,
+            // scroll through the description; once it can't scroll further
+            // (always, on the web's native scroll), move into the tags.
+            .arrow_down => {
+                const before = sc.y;
+                sc.y += 1;
+                sc.clampToContent();
+                if (sc.y == before) try self.focusTags(root_focus);
+                return;
+            },
             .page_up => sc.y -= 10,
             .page_down => sc.y += 10,
             .home => sc.y = 0,
@@ -426,6 +484,78 @@ pub const View = struct {
             else => return,
         }
         sc.clampToContent();
+    }
+
+    // left/right step through the tags (left exits to the list at the first);
+    // up/down move to the first tag of the adjacent row, up escaping to the
+    // description from the top row.
+    fn tagsInput(self: *View, key: Key, root_focus: *Focus) !void {
+        const tf = self.tagFlow() orelse return;
+        const cid = tf.focus.child_id orelse return;
+        const cur = tf.indexOfFocusId(cid) orelse return;
+        const count = tf.text_boxes.items.len;
+        const sc = self.detailScroll();
+        switch (key) {
+            .arrow_left => if (cur > 0) self.focusTag(tf, root_focus, cur - 1) else try self.focusList(root_focus),
+            .arrow_right => if (cur + 1 < count) self.focusTag(tf, root_focus, cur + 1),
+            .arrow_up => if (tf.rowStep(cur, false)) |i| self.focusTag(tf, root_focus, i) else try self.focusDescription(root_focus),
+            .arrow_down => if (tf.rowStep(cur, true)) |i| self.focusTag(tf, root_focus, i),
+            .home => self.focusTag(tf, root_focus, 0),
+            .end => self.focusTag(tf, root_focus, count - 1),
+            .mouse => |mouse| switch (mouse.action) {
+                .scroll => |dir| {
+                    sc.y += if (dir == .up) @as(isize, -1) else 1;
+                    sc.clampToContent();
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    const tags_child_index: usize = 1;
+
+    fn tagFlow(self: *View) ?*ui.TagFlow {
+        const inner = self.detailInner();
+        if (inner.children.count() <= tags_child_index) return null;
+        return switch (inner.children.values()[tags_child_index].widget) {
+            .tag_flow => |*tf| tf,
+            else => null,
+        };
+    }
+
+    fn tagsFocused(self: *View) bool {
+        const inner = self.detailInner();
+        const cid = inner.getFocus().child_id orelse return false;
+        return inner.children.getIndex(cid) == tags_child_index;
+    }
+
+    fn focusTag(self: *View, tf: *ui.TagFlow, root_focus: *Focus, index: usize) void {
+        root_focus.setFocus(tf.text_boxes.items[index].getFocus().id);
+        // keep the tag visible on the terminal: its rect offset by the flow's
+        // position in the pane.
+        if (self.session.is_terminal and index < tf.rects.items.len) {
+            if (self.detailInner().children.values()[tags_child_index].rect) |flow_rect| {
+                var rect = tf.rects.items[index];
+                rect.x += flow_rect.x;
+                rect.y += flow_rect.y;
+                self.detailScroll().scrollToRect(rect);
+            }
+        }
+    }
+
+    fn focusTags(self: *View, root_focus: *Focus) !void {
+        const tf = self.tagFlow() orelse return;
+        if (tf.text_boxes.items.len == 0) return;
+        const cid = tf.focus.child_id orelse tf.text_boxes.items[0].getFocus().id;
+        const index = tf.indexOfFocusId(cid) orelse 0;
+        self.focusTag(tf, root_focus, index);
+    }
+
+    fn focusDescription(self: *View, root_focus: *Focus) !void {
+        const inner = self.detailInner();
+        if (inner.children.count() == 0) return;
+        root_focus.setFocus(inner.children.keys()[0]);
     }
 
     // enter the detail pane. an empty pane (no issues) can't be entered.
@@ -452,11 +582,13 @@ pub const View = struct {
     }
 
     // for the parent's "scroll up at the top jumps to the header" check. in the
-    // detail pane that means it can't scroll up any further; otherwise up-arrow
-    // stays in the pane. when the list holds focus, report its selected row
-    // directly (window-navigation rows included).
+    // detail pane that means the description is focused and can't scroll up any
+    // further; up from the tags moves to the description instead. when the list
+    // holds focus, report its selected row directly (window-navigation rows
+    // included).
     pub fn getSelectedIndex(self: *View) ?usize {
         if (self.detailActive()) {
+            if (self.tagsFocused()) return 1;
             return if (self.detailScroll().y == 0) 0 else 1;
         }
         const lb = self.listBox();
@@ -465,10 +597,10 @@ pub const View = struct {
     }
 };
 
-// the "a:" navigation link for the issues page rooted at issue `id` within
-// `identity` ("owner/name").
-fn issuesLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: []const u8) ![]const u8 {
-    const route = ui.RoutablePage.repoIssuesRoute(identity, id) orelse return error.RouteTooLong;
+// the "a:" navigation link for the issues page filtered to the url-encoded
+// `tag` and rooted at issue `id` within `identity` ("owner/name").
+fn issuesLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, tag: []const u8, id: []const u8) ![]const u8 {
+    const route = ui.RoutablePage.repoIssuesRoute(identity, tag, id) orelse return error.RouteTooLong;
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
@@ -476,7 +608,15 @@ fn issuesLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: []
 // the in-page "ai:" anchor for selecting issue `id` in `identity`'s list; the
 // href is only followed with js off.
 fn issueRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: []const u8) ![]const u8 {
-    const route = ui.RoutablePage.repoIssuesRoute(identity, id) orelse return error.RouteTooLong;
+    const route = ui.RoutablePage.repoIssuesRoute(identity, "", id) orelse return error.RouteTooLong;
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
+}
+
+// the "a:" link to the issues list filtered to `tag` (raw; encoded here).
+fn tagLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, tag: []const u8) ![]const u8 {
+    const encoded = try ui.urlEncodeRef(page_arena.allocator(), tag);
+    const route = ui.RoutablePage.repoIssuesRoute(identity, encoded, "") orelse return error.RouteTooLong;
+    const url = try route.urlAlloc(page_arena);
+    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }

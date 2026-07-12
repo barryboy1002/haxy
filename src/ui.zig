@@ -75,7 +75,12 @@ pub const RoutablePage = union(enum) {
     repo_files: struct { name: Array(repo_route_max_len), after: usize = 0 },
     repo_commits: struct { name: Array(repo_route_max_len), after: usize = 0 },
     repo_refs: struct { name: Array(repo_route_max_len), kind: RefKind = .branch, after: usize = 0 },
-    repo_issues: struct { name: Array(repo_route_max_len), selected: Array(evt.event_id_size * 2) = .{} },
+    repo_issues: struct {
+        name: Array(repo_route_max_len),
+        // the tag the list is filtered to, url-encoded ("" = unfiltered).
+        tag: Array(issue_tag_route_max_len) = .{},
+        selected: Array(evt.event_id_size * 2) = .{},
+    },
     repo_settings: Array(repo_route_max_len),
     repo_auth: Array(repo_route_max_len),
 
@@ -103,6 +108,9 @@ pub const RoutablePage = union(enum) {
     // is read at). the bare "username/reponame" (and "username/reponame/files")
     // mean the files root of the repo's default branch.
     pub const repo_route_max_len = 1024;
+
+    // a url-encoded tag can grow to three bytes per source byte.
+    pub const issue_tag_route_max_len = evt.Issue.tag_max_len * 3;
 
     // the parts of a `.repo_files` route. all slices point into the route's
     // stored string. ref_kind is null (and ref_value/dir empty) for the bare
@@ -200,11 +208,13 @@ pub const RoutablePage = union(enum) {
         return .{ .repo_refs = .{ .name = Array(repo_route_max_len).from(identity) orelse return null, .kind = kind, .after = after } };
     }
 
-    // build a `.repo_issues` route for "owner/name" (identity) rooted at the
-    // issue with hex event id `selected` ("" = the first window).
-    pub fn repoIssuesRoute(identity: []const u8, selected: []const u8) ?RoutablePage {
+    // build a `.repo_issues` route for "owner/name" (identity) filtered to the
+    // url-encoded `tag` ("" = unfiltered) and rooted at the issue with hex
+    // event id `selected` ("" = the first window).
+    pub fn repoIssuesRoute(identity: []const u8, tag: []const u8, selected: []const u8) ?RoutablePage {
         return .{ .repo_issues = .{
             .name = Array(repo_route_max_len).from(identity) orelse return null,
+            .tag = Array(issue_tag_route_max_len).from(tag) orelse return null,
             .selected = Array(evt.event_id_size * 2).from(selected) orelse return null,
         } };
     }
@@ -254,10 +264,15 @@ pub const RoutablePage = union(enum) {
                 try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/refs", .{r.name.slice()})
             else
                 try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/refs?kind={s}&after={d}", .{ r.name.slice(), @tagName(r.kind), r.after }),
-            .repo_issues => |i| if (i.selected.len == 0)
-                try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/issues", .{i.name.slice()})
+            .repo_issues => |i| if (i.tag.len == 0)
+                (if (i.selected.len == 0)
+                    try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/issues", .{i.name.slice()})
+                else
+                    try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/issues/{s}", .{ i.name.slice(), i.selected.slice() }))
+            else if (i.selected.len == 0)
+                try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/issues/tag/{s}", .{ i.name.slice(), i.tag.slice() })
             else
-                try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/issues/{s}", .{ i.name.slice(), i.selected.slice() }),
+                try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/issues/tag/{s}/{s}", .{ i.name.slice(), i.tag.slice(), i.selected.slice() }),
             .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/settings", .{name.slice()}),
             .repo_auth => |name| try std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}/auth", .{name.slice()}),
         };
@@ -315,12 +330,24 @@ pub const RoutablePage = union(enum) {
                     .kind = refsKind(query),
                     .after = after,
                 } };
-                if (std.mem.eql(u8, sub, "issues")) return repoIssuesRoute(pair, "");
-                if (std.mem.startsWith(u8, sub, "issues/")) {
-                    // "issues/<issue event id>"
-                    const id = sub["issues/".len..];
-                    if (id.len == 0) return null;
-                    return repoIssuesRoute(pair, id);
+                if (std.mem.eql(u8, sub, "issues") or std.mem.startsWith(u8, sub, "issues/")) {
+                    // "issues[/tag/<tag>][/<issue event id>]"
+                    var segments = std.mem.splitScalar(u8, sub, '/');
+                    _ = segments.next(); // "issues"
+                    var tag_value: []const u8 = "";
+                    var id: []const u8 = "";
+                    if (segments.next()) |segment| {
+                        if (std.mem.eql(u8, segment, "tag")) {
+                            tag_value = segments.next() orelse return null;
+                            if (tag_value.len == 0) return null;
+                            id = segments.next() orelse "";
+                        } else {
+                            if (segment.len == 0) return null;
+                            id = segment;
+                        }
+                    }
+                    if (segments.next() != null) return null;
+                    return repoIssuesRoute(pair, tag_value, id);
                 }
                 if (std.mem.eql(u8, sub, "settings")) return .{ .repo_settings = Array(repo_route_max_len).from(pair) orelse return null };
                 if (std.mem.eql(u8, sub, "auth")) return .{ .repo_auth = Array(repo_route_max_len).from(pair) orelse return null };
@@ -389,7 +416,9 @@ pub const RoutablePage = union(enum) {
             .repo_files => |a_f| std.mem.eql(u8, a_f.name.slice(), b.repo_files.name.slice()) and a_f.after == b.repo_files.after,
             .repo_commits => |a_c| std.mem.eql(u8, a_c.name.slice(), b.repo_commits.name.slice()) and a_c.after == b.repo_commits.after,
             .repo_refs => |a_r| std.mem.eql(u8, a_r.name.slice(), b.repo_refs.name.slice()) and a_r.kind == b.repo_refs.kind and a_r.after == b.repo_refs.after,
-            .repo_issues => |a_i| std.mem.eql(u8, a_i.name.slice(), b.repo_issues.name.slice()) and std.mem.eql(u8, a_i.selected.slice(), b.repo_issues.selected.slice()),
+            .repo_issues => |a_i| std.mem.eql(u8, a_i.name.slice(), b.repo_issues.name.slice()) and
+                std.mem.eql(u8, a_i.tag.slice(), b.repo_issues.tag.slice()) and
+                std.mem.eql(u8, a_i.selected.slice(), b.repo_issues.selected.slice()),
             .repo_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_settings.slice()),
             .repo_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_auth.slice()),
             else => true,
@@ -462,6 +491,8 @@ pub const RoutablePage = union(enum) {
             .repo_issues => |i| {
                 try jw.objectField("name");
                 try jw.write(i.name.slice());
+                try jw.objectField("tag");
+                try jw.write(i.tag.slice());
                 try jw.objectField("selected");
                 try jw.write(i.selected.slice());
             },
@@ -497,7 +528,7 @@ pub const RoutablePage = union(enum) {
     }
 
     pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !RoutablePage {
-        const Helper = struct { kind: std.meta.Tag(RoutablePage), name: ?[]const u8 = null, after: usize = 0, ref_kind: ?[]const u8 = null, selected: ?[]const u8 = null };
+        const Helper = struct { kind: std.meta.Tag(RoutablePage), name: ?[]const u8 = null, after: usize = 0, ref_kind: ?[]const u8 = null, tag: ?[]const u8 = null, selected: ?[]const u8 = null };
         const helper = try std.json.innerParse(Helper, allocator, source, options);
         const parseName = struct {
             // errors must stay within std.json's ParseError set; ValueTooLong
@@ -523,6 +554,7 @@ pub const RoutablePage = union(enum) {
             } },
             .repo_issues => .{ .repo_issues = .{
                 .name = try parseName(repo_route_max_len, helper.name),
+                .tag = Array(issue_tag_route_max_len).from(helper.tag orelse "") orelse return error.ValueTooLong,
                 .selected = Array(evt.event_id_size * 2).from(helper.selected orelse "") orelse return error.ValueTooLong,
             } },
             .repo_settings => .{ .repo_settings = try parseName(repo_route_max_len, helper.name) },
@@ -1074,6 +1106,7 @@ pub const Widget = union(enum) {
     stack: wgt.Stack(Widget),
     flow_box: FlowBox,
     flow_box_scroll: FlowBox.Scroll,
+    tag_flow: TagFlow,
     spacer: Spacer,
     center: Center,
     background: AnsiBackground,
@@ -1419,6 +1452,179 @@ pub const FlowBox = struct {
             return &self.scroll.child.flow_box;
         }
     };
+};
+
+// a left-to-right flow of variable-width focusable items that wraps at the
+// available width, like words in a paragraph. unlike FlowBox there is no cell
+// grid: each item is as wide as its text. selection movement is driven by the
+// owning view via indexOfFocusId/verticalNeighbor.
+pub const TagFlow = struct {
+    focus: *Focus,
+    grid: ?Grid,
+    text_boxes: std.ArrayList(wgt.TextBox(Widget)),
+    // last build's item rects (content space), for vertical navigation and
+    // scroll-into-view.
+    rects: std.ArrayList(layout.IRect),
+    // backs the per-item strings the text boxes borrow.
+    arena: std.heap.ArenaAllocator,
+
+    pub const Item = struct { text: []const u8, link: []const u8 = "" };
+
+    pub fn init(allocator: std.mem.Allocator) !TagFlow {
+        return .{
+            .focus = try Focus.create(allocator, .container),
+            .grid = null,
+            .text_boxes = .empty,
+            .rects = .empty,
+            .arena = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TagFlow, allocator: std.mem.Allocator) void {
+        self.focus.destroy(allocator);
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        for (self.text_boxes.items) |*tb| tb.deinit(allocator);
+        self.text_boxes.deinit(allocator);
+        self.rects.deinit(allocator);
+        self.arena.deinit();
+    }
+
+    // both the item text and the link are copied into the arena, so the caller's
+    // slices needn't outlive this call.
+    pub fn setItems(self: *TagFlow, allocator: std.mem.Allocator, items: []const Item) !void {
+        for (self.text_boxes.items) |*tb| tb.deinit(allocator);
+        self.text_boxes.clearAndFree(allocator);
+
+        _ = self.arena.reset(.retain_capacity);
+        const aa = self.arena.allocator();
+
+        self.focus.clear();
+        self.focus.child_id = null;
+
+        for (items) |item| {
+            const line = try aa.dupe(u8, item.text);
+
+            var text_box = try wgt.TextBox(Widget).init(allocator, line, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().focusable = true;
+
+            if (item.link.len > 0) {
+                text_box.getFocus().kind = .{ .custom = try aa.dupe(u8, item.link) };
+            }
+
+            try self.text_boxes.append(allocator, text_box);
+        }
+
+        if (self.text_boxes.items.len > 0) {
+            self.focus.child_id = self.text_boxes.items[0].getFocus().id;
+        }
+    }
+
+    pub fn build(self: *TagFlow, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+        self.focus.clear();
+
+        if (self.text_boxes.items.len == 0) return;
+        const max_width = constraint.max_size.width orelse 80;
+        if (max_width == 0) return;
+
+        // lay the items out left to right, wrapping to a new row when the next
+        // one wouldn't fit.
+        self.rects.clearRetainingCapacity();
+        var x: usize = 0;
+        var y: usize = 0;
+        var row_height: usize = 0;
+        var total_width: usize = 0;
+        for (self.text_boxes.items) |*tb| {
+            tb.options.border_style = if (self.focus.child_id == tb.getFocus().id) .single else .hidden;
+            try tb.build(allocator, .{
+                .min_size = .{ .width = null, .height = null },
+                .max_size = .{ .width = max_width, .height = null },
+            }, root_focus);
+            const tb_grid_maybe = tb.getGrid();
+            const w: usize = if (tb_grid_maybe) |g| g.size.width else 0;
+            const h: usize = if (tb_grid_maybe) |g| g.size.height else 0;
+            if (x > 0 and x + w > max_width) {
+                x = 0;
+                y += row_height;
+                row_height = 0;
+            }
+            try self.rects.append(allocator, .{ .x = @intCast(x), .y = @intCast(y), .size = .{ .width = w, .height = h } });
+            if (h > row_height) row_height = h;
+            x += w;
+            if (x > total_width) total_width = x;
+        }
+
+        const total_height = y + row_height;
+        if (total_width == 0 or total_height == 0) return;
+
+        var grid = try Grid.init(allocator, .{ .width = total_width, .height = total_height });
+        errdefer grid.deinit();
+
+        for (self.text_boxes.items, self.rects.items) |*tb, rect| {
+            const tb_grid = tb.getGrid() orelse continue;
+            try self.focus.addChild(allocator, tb.getFocus(), tb_grid.size, @intCast(rect.x), @intCast(rect.y));
+            try grid.drawGrid(tb_grid, @intCast(rect.x), @intCast(rect.y));
+        }
+
+        self.grid = grid;
+    }
+
+    pub fn input(self: *TagFlow, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        _ = self;
+        _ = allocator;
+        _ = key;
+        _ = root_focus;
+    }
+
+    pub fn clearGrid(self: *TagFlow) void {
+        if (self.grid) |*grid| {
+            grid.deinit();
+            self.grid = null;
+        }
+        for (self.text_boxes.items) |*tb| tb.clearGrid();
+    }
+
+    pub fn getGrid(self: TagFlow) ?Grid {
+        return self.grid;
+    }
+
+    pub fn getFocus(self: *TagFlow) *Focus {
+        return self.focus;
+    }
+
+    pub fn indexOfFocusId(self: TagFlow, focus_id: usize) ?usize {
+        for (self.text_boxes.items, 0..) |tb, i| {
+            if (tb.box.focus.id == focus_id) return i;
+        }
+        return null;
+    }
+
+    // the first item of the row below (when `downward`) or above, or null at
+    // the flow's edge. items are laid out in order, so y is nondecreasing.
+    pub fn rowStep(self: TagFlow, index: usize, downward: bool) ?usize {
+        const rects = self.rects.items;
+        if (index >= rects.len) return null;
+        const cur_y = rects[index].y;
+        if (downward) {
+            for (rects[index + 1 ..], index + 1..) |r, i| {
+                if (r.y > cur_y) return i;
+            }
+            return null;
+        }
+        // walk the earlier rows; the last one visited is the row above.
+        var prev_first: ?usize = null;
+        var i: usize = 0;
+        while (i < rects.len and rects[i].y < cur_y) {
+            prev_first = i;
+            const y = rects[i].y;
+            while (i < rects.len and rects[i].y == y) i += 1;
+        }
+        return prev_first;
+    }
 };
 
 // an invisible widget that fills the horizontal space granted by its parent.

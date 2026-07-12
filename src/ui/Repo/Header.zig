@@ -21,10 +21,13 @@ auth_tab: AuthTab,
 // it (switching tabs keeps the same ref). the value is url-encoded.
 ref_or_oid: RefOrOid,
 ref_or_oid_value: []const u8,
+// the issues tab's tag filter, url-encoded ("" = unfiltered), so the tab links
+// back to the filtered list.
+issues_tag: []const u8,
 
 const Self = @This();
 
-pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, ref_or_oid: RefOrOid, ref_or_oid_value: []const u8) !Self {
+pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, ref_or_oid: RefOrOid, ref_or_oid_value: []const u8, issues_tag: []const u8) !Self {
     return .{
         .name = name,
         .owner_name = owner_name,
@@ -32,6 +35,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []con
         .auth_tab = AuthTab.init(),
         .ref_or_oid = ref_or_oid,
         .ref_or_oid_value = ref_or_oid_value,
+        .issues_tag = issues_tag,
     };
 }
 
@@ -107,7 +111,10 @@ pub const View = struct {
         const commits_route = ui.RoutablePage.repoCommitsRoute(identity, data.ref_or_oid, data.ref_or_oid_value, 0) orelse return error.RouteTooLong;
         const commits_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try commits_route.urlAlloc(session.page_arena)});
         const refs_link = try std.fmt.allocPrint(aa, "ai:/repo/{s}/{s}/refs", .{ data.owner_name, data.name });
-        const issues_link = try std.fmt.allocPrint(aa, "ai:/repo/{s}/{s}/issues", .{ data.owner_name, data.name });
+        const issues_link = if (data.issues_tag.len == 0)
+            try std.fmt.allocPrint(aa, "ai:/repo/{s}/{s}/issues", .{ data.owner_name, data.name })
+        else
+            try std.fmt.allocPrint(aa, "ai:/repo/{s}/{s}/issues/tag/{s}", .{ data.owner_name, data.name, data.issues_tag });
         const settings_link = try std.fmt.allocPrint(aa, "ai:/repo/{s}/{s}/settings", .{ data.owner_name, data.name });
         const auth_link = try std.fmt.allocPrint(aa, "ai:/repo/{s}/{s}/auth", .{ data.owner_name, data.name });
 

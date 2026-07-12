@@ -617,6 +617,17 @@ fn mergeChangedMapEntries(
             const parent_child = try DB.SortedSet(.read_only).init(kv_pair.value_cursor);
             const baseline_child = try DB.SortedSet(.read_only).init(baseline_value_cursor);
             try mergeChangedSetEntries(DB, allocator, target_child, parent_child, baseline_child);
+        } else if (tag == .sorted_map) {
+            const target_existing_cursor = try target.getCursor(kv_pair.hash) orelse return error.MergeConflict;
+            if (target_existing_cursor.slot().tag != .sorted_map) {
+                return error.UnexpectedTag;
+            }
+
+            const target_child_cursor = try target.putCursor(kv_pair.hash);
+            const target_child = try DB.SortedMap(.read_write).init(target_child_cursor);
+            const parent_child = try DB.SortedMap(.read_only).init(kv_pair.value_cursor);
+            const baseline_child = try DB.SortedMap(.read_only).init(baseline_value_cursor);
+            try mergeChangedSortedMapEntries(DB, allocator, target_child, parent_child, baseline_child);
         } else if (is_top_level) {
             // the moment-index is a top-level key in the haxy moment
             // and is not a map. we don't want to do any merge of this.
@@ -631,6 +642,85 @@ fn mergeChangedMapEntries(
             }
 
             try target.put(kv_pair.hash, .{ .slot = kv_pair.value_cursor.slot() });
+        }
+    }
+}
+
+// three-way merge of a sorted map keyed by byte strings, like
+// mergeChangedMapEntries but recursing into sorted-set values.
+fn mergeChangedSortedMapEntries(
+    comptime DB: type,
+    allocator: std.mem.Allocator,
+    target: DB.SortedMap(.read_write),
+    parent: DB.SortedMap(.read_only),
+    baseline: DB.SortedMap(.read_only),
+) !void {
+    var parent_iter = try parent.iterator();
+    while (try parent_iter.next()) |kv_pair_cursor| {
+        const kv_pair = try kv_pair_cursor.readKeyValuePair();
+        const key = try kv_pair.key_cursor.readBytesAlloc(allocator, null);
+        defer allocator.free(key);
+
+        const baseline_value_cursor = try baseline.getCursor(key) orelse {
+            if (try target.getCursor(key)) |target_existing_cursor| {
+                // both parents created this key. sets union (they hold
+                // independently added members); anything else conflicts.
+                const parent_tag = kv_pair.value_cursor.slot().tag;
+                if (target_existing_cursor.slot().tag != parent_tag) {
+                    return error.UnexpectedTag;
+                }
+                if (parent_tag != .sorted_set) {
+                    return error.MergeConflict;
+                }
+
+                const target_child_cursor = try target.putCursor(key);
+                const target_child = try DB.SortedSet(.read_write).init(target_child_cursor);
+                const parent_child = try DB.SortedSet(.read_only).init(kv_pair.value_cursor);
+                var set_iter = try parent_child.iterator();
+                while (try set_iter.next()) |set_kv_cursor| {
+                    const set_kv = try set_kv_cursor.readKeyValuePair();
+                    const set_key = try set_kv.key_cursor.readBytesAlloc(allocator, null);
+                    defer allocator.free(set_key);
+                    try target_child.put(set_key);
+                }
+                continue;
+            }
+
+            try target.put(key, .{ .slot = kv_pair.value_cursor.slot() });
+            continue;
+        };
+
+        const tag = kv_pair.value_cursor.slot().tag;
+
+        if (tag != baseline_value_cursor.slot().tag) {
+            return error.UnexpectedTag;
+        }
+
+        if (kv_pair.value_cursor.slot().value == baseline_value_cursor.slot().value) {
+            continue;
+        }
+
+        if (tag == .sorted_set) {
+            const target_existing_cursor = try target.getCursor(key) orelse return error.MergeConflict;
+            if (target_existing_cursor.slot().tag != .sorted_set) {
+                return error.UnexpectedTag;
+            }
+
+            const target_child_cursor = try target.putCursor(key);
+            const target_child = try DB.SortedSet(.read_write).init(target_child_cursor);
+            const parent_child = try DB.SortedSet(.read_only).init(kv_pair.value_cursor);
+            const baseline_child = try DB.SortedSet(.read_only).init(baseline_value_cursor);
+            try mergeChangedSetEntries(DB, allocator, target_child, parent_child, baseline_child);
+        } else {
+            const target_value_cursor = try target.getCursor(key) orelse return error.MergeConflict;
+            if (target_value_cursor.slot().tag != baseline_value_cursor.slot().tag) {
+                return error.UnexpectedTag;
+            }
+            if (target_value_cursor.slot().value != baseline_value_cursor.slot().value) {
+                return error.MergeConflict;
+            }
+
+            try target.put(key, .{ .slot = kv_pair.value_cursor.slot() });
         }
     }
 }
