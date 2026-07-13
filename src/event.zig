@@ -144,17 +144,26 @@ pub fn LocalEventDB(comptime hash_kind: hash.HashKind) type {
 
         // open the db in `repo_dir`, creating it if it doesn't exist
         pub fn create(io: std.Io, allocator: std.mem.Allocator, repo_dir: std.Io.Dir) !Self {
-            const file = try repo_dir.createFile(io, db_name, .{ .truncate = false, .read = true });
+            const file = try repo_dir.createFile(io, db_name, .{ .truncate = false, .read = true, .lock = .exclusive });
             return fromFile(io, allocator, file);
         }
 
-        // open the db in `repo_dir`, or null if it doesn't exist
+        // open the db in `repo_dir` for reading, or null if it doesn't exist
         pub fn open(io: std.Io, allocator: std.mem.Allocator, repo_dir: std.Io.Dir) !?Self {
-            const file = repo_dir.openFile(io, db_name, .{ .mode = .read_write, .lock = .none }) catch |err| switch (err) {
+            const file = repo_dir.openFile(io, db_name, .{ .mode = .read_write, .lock = .shared }) catch |err| switch (err) {
                 error.FileNotFound => return null,
                 else => |e| return e,
             };
             return try fromFile(io, allocator, file);
+        }
+
+        // remove the db from `repo_dir`, so a repo whose events branch
+        // disappeared doesn't keep showing stale issues
+        pub fn delete(io: std.Io, repo_dir: std.Io.Dir) !void {
+            repo_dir.deleteFile(io, db_name) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => |e| return e,
+            };
         }
 
         fn fromFile(io: std.Io, allocator: std.mem.Allocator, file: std.Io.File) !Self {
@@ -179,7 +188,9 @@ pub fn LocalEventDB(comptime hash_kind: hash.HashKind) type {
             allocator.destroy(self.db);
         }
 
-        // consume the events on `repo`'s `ref` into this db
+        // consume the events on `repo`'s `ref` into this db. the db must come
+        // from `create`, whose handle holds the exclusive lock guarding the
+        // transaction.
         pub fn consume(
             self: *Self,
             comptime repo_kind: rp.RepoKind,
@@ -206,9 +217,6 @@ pub fn LocalEventDB(comptime hash_kind: hash.HashKind) type {
                     try consumeInTransaction(repo_kind, repo_opts, read_state, ctx.db, &moment, ctx.io, ctx.allocator, ctx.ref);
                 }
             };
-
-            try self.file.lock(io, .exclusive);
-            defer self.file.unlock(io);
 
             const history = try DB.ArrayList(.read_write).init(self.db.rootCursor());
             try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{
@@ -239,6 +247,9 @@ pub fn syncLocalEvents(
             const remote_ref: rf.Ref = .{ .kind = .{ .remote = remote_name }, .name = events_ref.name };
             if (try repo.readRef(io, remote_ref)) |oid| break :blk .{ remote_ref, oid };
         }
+        // the branch is gone (or never existed): drop any db from a previous
+        // sync rather than serving its issues indefinitely
+        try LocalEventDB(repo_opts.hash).delete(io, repo.core.repo_dir);
         return;
     };
 

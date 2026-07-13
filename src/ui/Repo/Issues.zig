@@ -52,14 +52,16 @@ pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, tag: []const u8,
 
 // read one window of an opened repo's issues (filtered to `tag` when set),
 // ordered by creation time (oldest first), starting at the issue
-// `selected_id` names ("" = the beginning). issues live in the repo's own
-// xit db, so a git-backed repo has none.
+// `selected_id` names ("" = the beginning). a local session reads the event
+// db next to the repo (synced from the events branch on each page build);
+// a server repo reads its own db.
 pub fn init(
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     arena: *std.heap.ArenaAllocator,
     repo: *rp.Repo(repo_kind, repo_opts),
     io: std.Io,
+    is_local: bool,
     identity: []const u8,
     tag: []const u8,
     selected_id: []const u8,
@@ -74,15 +76,15 @@ pub fn init(
     // (NotFound -> 404); the bare route falls through to an empty listing.
     const strict = rooted or tagged;
 
-    // a local repo's events live in the event db next to it (consumed from the
-    // events branch at startup); a server repo has them consumed into its own
-    // db. a repo with no consumed events has no moment yet.
+    // a repo with no consumed events has no moment yet.
     const gpa = arena.child_allocator;
-    var event_db_maybe = try evt.LocalEventDB(repo_opts.hash).open(io, gpa, repo.core.repo_dir);
+    var event_db_maybe = if (is_local) try evt.LocalEventDB(repo_opts.hash).open(io, gpa, repo.core.repo_dir) else null;
     defer if (event_db_maybe) |*event_db| event_db.deinit(io, gpa);
     const haxy_moment = (if (event_db_maybe) |*event_db|
         evt.currentMomentFromDb(repo_opts.hash, event_db.db)
     else if (repo_kind == .git)
+        return empty
+    else if (is_local)
         return empty
     else
         evt.currentMoment(repo_opts, repo)) catch {
