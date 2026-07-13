@@ -41,10 +41,13 @@ pub const Page = union(PageKind) {
                 .home_repos => |after| after,
                 else => 0,
             }) },
-            .user => switch (route) {
-                .user_repos => |u| .{ .user = try User.init(arena, session.haxy_moment orelse return error.NoMoment, u.name, u.after) },
-                .user_settings, .user_auth => |name| .{ .user = try User.init(arena, session.haxy_moment orelse return error.NoMoment, name, 0) },
-                else => return error.UnexpectedRoute,
+            .user => blk: {
+                const haxy_moment = session.haxy_moment orelse return error.NoMoment;
+                break :blk switch (route) {
+                    .user_repos => |u| .{ .user = try User.init(arena, haxy_moment, u.name, u.after) },
+                    .user_settings, .user_auth => |name| .{ .user = try User.init(arena, haxy_moment, name, 0) },
+                    else => return error.UnexpectedRoute,
+                };
             },
             .repo => switch (route) {
                 .repo_files, .repo_commits, .repo_refs, .repo_issues, .repo_settings, .repo_auth => .{ .repo = try Repo.init(arena, session, route) },
@@ -112,7 +115,8 @@ pub const RoutablePage = union(enum) {
     // straight at the tail's separator ("/files/...").
     pub const repo_route_max_len = 1024;
 
-    // true when a repo route's stored string elides its identity (local mode)
+    // true when a repo route's stored string elides its identity (local mode).
+    // unambiguous because a full string always starts with its owner segment.
     fn identityElided(s: []const u8) bool {
         return s.len == 0 or s[0] == '/';
     }

@@ -34,10 +34,30 @@ const Self = @This();
 
 const Window = struct { names: []const []const u8, next_after: ?usize };
 
+// empty columns, for the wasm / no-repo paths.
+pub fn emptyResult(arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.RoutablePage.RefKind, after: usize) !Self {
+    return .{
+        .identity = try arena.allocator().dupe(u8, identity),
+        .kind = kind,
+        .after = after,
+        .branches = &.{},
+        .tags = &.{},
+        .branches_next_after = null,
+        .tags_next_after = null,
+        .branches_label = try ui.SubTitle.init(arena, "branches"),
+        .tags_label = try ui.SubTitle.init(arena, "tags"),
+    };
+}
+
+// read one window of each column from an opened repo. the ref names are duped
+// into the page arena so they outlive the repo handle.
 pub fn init(
+    comptime repo_kind: rp.RepoKind,
+    comptime repo_opts: rp.RepoOpts(repo_kind),
     arena: *std.heap.ArenaAllocator,
-    session: *ui.Session,
-    source_maybe: ?ui.RepoSource,
+    repo: *rp.Repo(repo_kind, repo_opts),
+    io: std.Io,
+    gpa: std.mem.Allocator,
     identity: []const u8,
     kind: ui.RoutablePage.RefKind,
     after: usize,
@@ -46,64 +66,26 @@ pub fn init(
     // the offset only applies to its own column; the other stays at 0.
     const branches_after: usize = if (kind == .branch) after else 0;
     const tags_after: usize = if (kind == .tag) after else 0;
-    const branches_label = try ui.SubTitle.init(arena, "branches");
-    const tags_label = try ui.SubTitle.init(arena, "tags");
-    const empty: Self = .{
-        .identity = try aa.dupe(u8, identity),
-        .kind = kind,
-        .after = after,
-        .branches = &.{},
-        .tags = &.{},
-        .branches_next_after = null,
-        .tags_next_after = null,
-        .branches_label = branches_label,
-        .tags_label = tags_label,
-    };
+    var result = try emptyResult(arena, identity, kind, after);
 
-    // no filesystem (wasm) or nowhere to look: empty lists. the wasm path never
-    // calls init anyway — it rebuilds from the serialized snapshot.
-    const io = session.io orelse return empty;
-    const source = source_maybe orelse return empty;
+    // xit seeks each iterator straight to its window; the git backend can't
+    // seek, so it starts at the beginning and collectWindow discards the
+    // entries before the window.
+    const can_seek = repo_kind == .xit;
 
-    // open with the arena's backing allocator (transient; the ref names are
-    // duped into the page arena so they outlive the repo handle).
-    const gpa = arena.child_allocator;
-    const branches, const tags = switch (source.repo_kind) {
-        inline else => |repo_kind| blk: {
-            var any_repo = rp.AnyRepo(repo_kind, .{}).open(io, gpa, .{ .path = source.path }) catch return empty;
-            defer any_repo.deinit(io, gpa);
+    var branch_iter = repo.listBranches(io, gpa, if (can_seek) .{ .index = branches_after } else .beginning) catch return result;
+    defer branch_iter.deinit(io);
+    const branches = try collectWindow(io, aa, &branch_iter, branches_after, if (can_seek) 0 else branches_after);
 
-            switch (any_repo) {
-                inline else => |*repo| {
-                    // xit seeks each iterator straight to its window; the git
-                    // backend can't seek, so it starts at the beginning and
-                    // collectWindow discards the entries before the window.
-                    const can_seek = repo_kind == .xit;
+    var tag_iter = repo.listTags(io, gpa, if (can_seek) .{ .index = tags_after } else .beginning) catch return result;
+    defer tag_iter.deinit(io);
+    const tags = try collectWindow(io, aa, &tag_iter, tags_after, if (can_seek) 0 else tags_after);
 
-                    var branch_iter = repo.listBranches(io, gpa, if (can_seek) .{ .index = branches_after } else .beginning) catch return empty;
-                    defer branch_iter.deinit(io);
-                    const b = try collectWindow(io, aa, &branch_iter, branches_after, if (can_seek) 0 else branches_after);
-
-                    var tag_iter = repo.listTags(io, gpa, if (can_seek) .{ .index = tags_after } else .beginning) catch return empty;
-                    defer tag_iter.deinit(io);
-                    const t = try collectWindow(io, aa, &tag_iter, tags_after, if (can_seek) 0 else tags_after);
-                    break :blk .{ b, t };
-                },
-            }
-        },
-    };
-
-    return .{
-        .identity = empty.identity,
-        .kind = kind,
-        .after = after,
-        .branches = branches.names,
-        .tags = tags.names,
-        .branches_next_after = branches.next_after,
-        .tags_next_after = tags.next_after,
-        .branches_label = branches_label,
-        .tags_label = tags_label,
-    };
+    result.branches = branches.names;
+    result.tags = tags.names;
+    result.branches_next_after = branches.next_after;
+    result.tags_next_after = tags.next_after;
+    return result;
 }
 
 // window a ref iterator without materializing the whole list. `skip` entries

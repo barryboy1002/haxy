@@ -67,44 +67,11 @@ sub_header: SubHeader,
 
 const Self = @This();
 
-pub fn init(
-    arena: *std.heap.ArenaAllocator,
-    session: *ui.Session,
-    source_maybe: ?ui.RepoSource,
-    identity: []const u8,
-    requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
-    requested_value: []const u8,
-    path: []const u8,
-    // the line offset the selected file's content window starts at (0 = first).
-    after: usize,
-) !Self {
-    const aa = arena.allocator();
-
-    // no filesystem (wasm) or nowhere to look: empty listing pinned to whatever
-    // ref the route asked for. the wasm path never calls init anyway — it
-    // rebuilds from the serialized snapshot.
-    const io = session.io orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
-    const source = source_maybe orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
-
-    // open + read the committed file list with the arena's backing allocator
-    // (transient; freed before init returns); the listing is built into the
-    // page arena so it outlives them. AnyRepo opens both sha1 and sha256 repos.
-    const gpa = arena.child_allocator;
-    switch (source.repo_kind) {
-        inline else => |repo_kind| {
-            var any_repo = rp.AnyRepo(repo_kind, .{}).open(io, gpa, .{ .path = source.path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value, path);
-            defer any_repo.deinit(io, gpa);
-
-            return switch (any_repo) {
-                inline else => |*repo| listing(repo_kind, repo.self_repo_opts, arena, repo, io, gpa, identity, requested_ref_or_oid, requested_value, path, after),
-            };
-        },
-    }
-}
-
 // build the listing for an opened repo. generic over the repo's backend and
 // hash kind so the tree/diff types it threads through match the repo's opts.
-fn listing(
+// reads with the arena's backing allocator (transient); the listing is built
+// into the page arena so it outlives the repo handle.
+pub fn init(
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     arena: *std.heap.ArenaAllocator,
@@ -254,7 +221,7 @@ fn readFileContent(
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
-fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
+pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
     return .{
         .identity = try aa.dupe(u8, identity),
         .ref_or_oid = ref_or_oid,

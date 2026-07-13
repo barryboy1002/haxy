@@ -54,44 +54,13 @@ sub_header: SubHeader,
 
 const Self = @This();
 
-pub fn init(
-    arena: *std.heap.ArenaAllocator,
-    session: *ui.Session,
-    source_maybe: ?ui.RepoSource,
-    identity: []const u8,
-    requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
-    requested_value: []const u8,
-    // the hunk index the selected commit's (the first one, the walk root) diff
-    // window starts at; 0 is the first window. moved by "next"/"previous".
-    after: usize,
-) !Self {
-    const aa = arena.allocator();
-
-    // no filesystem (wasm) or nowhere to look: empty listing. the wasm path
-    // never calls init anyway — it rebuilds from the serialized snapshot.
-    const io = session.io orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value);
-    const source = source_maybe orelse return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value);
-
-    // walk the log with the arena's backing allocator (transient; the commits
-    // we keep are duped into the page arena so they outlive it). AnyRepo opens
-    // both sha1 and sha256 repos.
-    const gpa = arena.child_allocator;
-    switch (source.repo_kind) {
-        inline else => |repo_kind| {
-            var any_repo = rp.AnyRepo(repo_kind, .{}).open(io, gpa, .{ .path = source.path }) catch return emptyResult(aa, identity, requested_ref_or_oid orelse .branch, requested_value);
-            defer any_repo.deinit(io, gpa);
-
-            return switch (any_repo) {
-                inline else => |*repo| collect(repo_kind, repo.self_repo_opts, arena, repo, io, gpa, identity, requested_ref_or_oid, requested_value, after),
-            };
-        },
-    }
-}
-
 // walk the log for an opened repo. generic over the repo's backend and hash
 // kind so the oid buffers and diff types it threads through match the repo's
-// opts.
-fn collect(
+// opts. `after` is the hunk index the selected commit's (the first one, the
+// walk root) diff window starts at; 0 is the first window, moved by
+// "next"/"previous". walks with the arena's backing allocator (transient; the
+// commits we keep are duped into the page arena so they outlive it).
+pub fn init(
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     arena: *std.heap.ArenaAllocator,
@@ -175,7 +144,7 @@ fn collect(
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
-fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8) !Self {
+pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8) !Self {
     return .{
         .identity = try aa.dupe(u8, identity),
         .ref_or_oid = ref_or_oid,

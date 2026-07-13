@@ -38,16 +38,9 @@ next_id: ?[]const u8,
 
 const Self = @This();
 
-pub fn init(
-    arena: *std.heap.ArenaAllocator,
-    session: *ui.Session,
-    source_maybe: ?ui.RepoSource,
-    identity: []const u8,
-    tag: []const u8,
-    selected_id: []const u8,
-) !Self {
-    const aa = arena.allocator();
-    const empty: Self = .{
+// an empty listing, for the wasm / no-repo paths.
+pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, tag: []const u8, selected_id: []const u8) !Self {
+    return .{
         .identity = try aa.dupe(u8, identity),
         .tag = try aa.dupe(u8, tag),
         .selected_id = try aa.dupe(u8, selected_id),
@@ -55,37 +48,26 @@ pub fn init(
         .prev_id = null,
         .next_id = null,
     };
-
-    // no filesystem (wasm) or nowhere to look: empty listing. the wasm path
-    // never calls init anyway — it rebuilds from the serialized snapshot.
-    const io = session.io orelse return empty;
-    const source = source_maybe orelse return empty;
-
-    // issues live in the repo's own xit db, so a git-backed repo has none.
-    if (source.repo_kind == .git) return empty;
-
-    // open with the arena's backing allocator (transient; the issue strings are
-    // duped into the page arena so they outlive the repo handle).
-    const gpa = arena.child_allocator;
-    var any_repo = rp.AnyRepo(.xit, .{}).open(io, gpa, .{ .path = source.path }) catch return empty;
-    defer any_repo.deinit(io, gpa);
-
-    return switch (any_repo) {
-        inline else => |*repo| collect(repo.self_repo_opts, arena, repo, empty),
-    };
 }
 
-// read one window of the repo's issues (filtered to empty.tag when set),
+// read one window of an opened repo's issues (filtered to `tag` when set),
 // ordered by creation time (oldest first), starting at the issue
-// empty.selected_id names ("" = the beginning).
-fn collect(
-    comptime repo_opts: rp.RepoOpts(.xit),
+// `selected_id` names ("" = the beginning). issues live in the repo's own
+// xit db, so a git-backed repo has none.
+pub fn init(
+    comptime repo_kind: rp.RepoKind,
+    comptime repo_opts: rp.RepoOpts(repo_kind),
     arena: *std.heap.ArenaAllocator,
-    repo: *rp.Repo(.xit, repo_opts),
-    empty: Self,
+    repo: *rp.Repo(repo_kind, repo_opts),
+    identity: []const u8,
+    tag: []const u8,
+    selected_id: []const u8,
 ) !Self {
+    const empty = try emptyResult(arena.allocator(), identity, tag, selected_id);
+    if (repo_kind == .git) return empty;
+
     const aa = arena.allocator();
-    const DB = rp.Repo(.xit, repo_opts).DB;
+    const DB = rp.Repo(repo_kind, repo_opts).DB;
     const rooted = empty.selected_id.len != 0;
     const tagged = empty.tag.len != 0;
     // an explicitly named issue or tag that doesn't exist is a bad url

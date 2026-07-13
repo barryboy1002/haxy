@@ -2,6 +2,7 @@ const std = @import("std");
 const evt = @import("../event.zig");
 const ui = @import("../ui.zig");
 const xit = @import("xit");
+const rp = xit.repo;
 const xitui = xit.xitui;
 const wgt = xitui.widget;
 const layout = xitui.layout;
@@ -154,12 +155,39 @@ pub fn init(
         }
     }
 
-    // build files and commits first so their resolved ref (the default branch
-    // when the route named none) can canonicalize each tab's mirror url to the
-    // explicit ref it's viewing rather than leaving it bare. both resolve the
-    // same requested ref, so they end up viewing the same one.
-    const files = try Files.init(arena, session, source, rf.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_after);
-    const commits = try Commits.init(arena, session, source, rf.identity, requested_ref_or_oid, requested_ref_value, commits_after);
+    // open the on-disk repo once and read every tab's data from it. files and
+    // commits resolve the same requested ref (the default branch when the
+    // route named none), so they end up viewing the same one and either's
+    // resolved ref can canonicalize the tab mirror urls below. no filesystem
+    // (wasm), nowhere to look, or a failed open: empty tabs.
+    const files, const commits, const refs, const issues = blk: {
+        read: {
+            const io = session.io orelse break :read;
+            const src = source orelse break :read;
+            const gpa = arena.child_allocator;
+            switch (src.repo_kind) {
+                inline else => |repo_kind| {
+                    var any_repo = rp.AnyRepo(repo_kind, .{}).open(io, gpa, .{ .path = src.path }) catch break :read;
+                    defer any_repo.deinit(io, gpa);
+                    switch (any_repo) {
+                        inline else => |*opened| break :blk .{
+                            try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_after),
+                            try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, requested_ref_or_oid, requested_ref_value, commits_after),
+                            try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, refs_kind, refs_after),
+                            try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, rf.identity, issues_tag, issues_selected),
+                        },
+                    }
+                },
+            }
+        }
+        const aa = arena.allocator();
+        break :blk .{
+            try Files.emptyResult(aa, rf.identity, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
+            try Commits.emptyResult(aa, rf.identity, requested_ref_or_oid orelse .branch, requested_ref_value),
+            try Refs.emptyResult(arena, rf.identity, refs_kind, refs_after),
+            try Issues.emptyResult(aa, rf.identity, issues_tag, issues_selected),
+        };
+    };
 
     // each tab mirror carries this page's route for that tab; tabs not targeted
     // by the incoming route fall back to their root/first-page route. the files
@@ -179,8 +207,8 @@ pub fn init(
         .repo = repo,
         .files = files,
         .commits = commits,
-        .refs = try Refs.init(arena, session, source, rf.identity, refs_kind, refs_after),
-        .issues = try Issues.init(arena, session, source, rf.identity, issues_tag, issues_selected),
+        .refs = refs,
+        .issues = issues,
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),

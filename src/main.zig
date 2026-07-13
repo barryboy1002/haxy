@@ -82,29 +82,21 @@ pub fn run(
             // probe for a git repo first, then a xit repo. only the work path
             // and backend kind are kept; pages re-open the repo on each build.
             const local: ui.RepoSource = blk: {
-                if (rp.AnyRepo(.git, .{}).open(io, allocator, .{ .path = cwd_path })) |repo| {
-                    var git_repo = repo;
-                    defer git_repo.deinit(io, allocator);
-                    const work_path = switch (git_repo) {
-                        inline else => |*r| r.core.work_path,
-                    };
-                    break :blk .{ .path = try session_arena.allocator().dupe(u8, work_path), .repo_kind = .git };
-                } else |err| switch (err) {
-                    error.RepoNotFound => {},
-                    else => |e| return e,
+                inline for ([_]rp.RepoKind{ .git, .xit }) |probe_kind| {
+                    if (rp.AnyRepo(probe_kind, .{}).open(io, allocator, .{ .path = cwd_path })) |repo| {
+                        var opened = repo;
+                        defer opened.deinit(io, allocator);
+                        const work_path = switch (opened) {
+                            inline else => |*r| r.core.work_path,
+                        };
+                        break :blk .{ .path = try session_arena.allocator().dupe(u8, work_path), .repo_kind = probe_kind };
+                    } else |err| switch (err) {
+                        error.RepoNotFound => {},
+                        else => |e| return e,
+                    }
                 }
-                var xit_repo = rp.AnyRepo(.xit, .{}).open(io, allocator, .{ .path = cwd_path }) catch |err| switch (err) {
-                    error.RepoNotFound => {
-                        try run_opts.err.print("no git or xit repo found in the current directory\n", .{});
-                        return error.HandledError;
-                    },
-                    else => |e| return e,
-                };
-                defer xit_repo.deinit(io, allocator);
-                const work_path = switch (xit_repo) {
-                    inline else => |*r| r.core.work_path,
-                };
-                break :blk .{ .path = try session_arena.allocator().dupe(u8, work_path), .repo_kind = .xit };
+                try run_opts.err.print("no git or xit repo found in the current directory\n", .{});
+                return error.HandledError;
             };
 
             var session = ui.Session{
