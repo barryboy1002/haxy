@@ -80,16 +80,14 @@ pub fn init(
     const gpa = arena.child_allocator;
     var event_db_maybe = try evt.LocalEventDB(repo_opts.hash).open(io, gpa, repo.core.repo_dir);
     defer if (event_db_maybe) |*event_db| event_db.deinit(io, gpa);
-    const haxy_moment = blk: {
-        if (event_db_maybe) |*event_db| break :blk evt.currentMomentFromDb(repo_opts.hash, event_db.db) catch {
-            if (strict) return error.NotFound;
-            return empty;
-        };
-        if (repo_kind == .git) return empty;
-        break :blk evt.currentMoment(repo_opts, repo) catch {
-            if (strict) return error.NotFound;
-            return empty;
-        };
+    const haxy_moment = (if (event_db_maybe) |*event_db|
+        evt.currentMomentFromDb(repo_opts.hash, event_db.db)
+    else if (repo_kind == .git)
+        return empty
+    else
+        evt.currentMoment(repo_opts, repo)) catch {
+        if (strict) return error.NotFound;
+        return empty;
     };
 
     // the ordered set to window: the tag's issue set when filtered, else the
