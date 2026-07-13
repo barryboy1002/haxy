@@ -2,6 +2,7 @@ const std = @import("std");
 const evt = @import("../event.zig");
 const xit = @import("xit");
 const rp = xit.repo;
+const rf = xit.ref;
 const hash = xit.hash;
 
 test "rebase" {
@@ -102,7 +103,7 @@ test "rebase" {
             try std.json.Stringify.value(event, .{}, &json.writer);
 
             // commit the event into a special branch
-            const oid = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
+            const oid = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, evt.events_ref);
             if (i == 0) {
                 _ = try std.fmt.hexToBytes(&first_oid, &oid);
             }
@@ -114,7 +115,7 @@ test "rebase" {
     //
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        try evt.consume(repo_opts, io, allocator, &repo, evt.events_ref);
 
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
@@ -152,7 +153,7 @@ test "rebase" {
     };
 
     // commit and consume the new event
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume2);
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume2);
 
     //
     // rebase the branch so it no longer includes the edit event
@@ -185,7 +186,7 @@ test "rebase" {
                     .parent_oids = if (i == 0) &.{std.fmt.bytesToHex(first_oid, .lower)} else null,
                 },
                 null,
-                .{ .kind = .head, .name = "haxy/meta" },
+                evt.events_ref,
             );
         }
     }
@@ -195,7 +196,7 @@ test "rebase" {
     //
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        try evt.consume(repo_opts, io, allocator, &repo, evt.events_ref);
 
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
@@ -244,7 +245,7 @@ test "rebase" {
                     .parent_oids = if (i == 0) &.{} else null,
                 },
                 null,
-                .{ .kind = .head, .name = "haxy/meta" },
+                evt.events_ref,
             );
         }
     }
@@ -254,7 +255,7 @@ test "rebase" {
     //
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        try evt.consume(repo_opts, io, allocator, &repo, evt.events_ref);
 
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
@@ -271,6 +272,8 @@ test "merge" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
     const temp_dir_name = "temp-event-merge";
+
+    const other_events_ref: rf.Ref = .{ .kind = .head, .name = "haxy/other" };
 
     // create the temp dir
     const cwd = std.Io.Dir.cwd();
@@ -352,7 +355,7 @@ test "merge" {
             try std.json.Stringify.value(event, .{}, &json.writer);
 
             // commit the event into a special branch
-            const oid = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, .{ .kind = .head, .name = "haxy/meta" });
+            const oid = try repo.commitAtRef(io, allocator, .{ .message = json.written() }, null, evt.events_ref);
             if (i == 0) {
                 _ = try std.fmt.hexToBytes(&first_oid, &oid);
             }
@@ -364,7 +367,7 @@ test "merge" {
     //
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        try evt.consume(repo_opts, io, allocator, &repo, evt.events_ref);
 
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
@@ -437,23 +440,23 @@ test "merge" {
             _ = try repo.commitAtRef(
                 io,
                 allocator,
-                // make the first commit a child of the first commit on the haxy/meta branch
+                // make the first commit a child of the first commit on the events branch
                 .{ .parent_oids = if (i == 0) &.{std.fmt.bytesToHex(first_oid, .lower)} else null, .message = json.written() },
                 null,
-                .{ .kind = .head, .name = "haxy/other" },
+                other_events_ref,
             );
         }
     }
 
     //
-    // check out the haxy/meta branch and merge the haxy/other branch into it
+    // check out the events branch and merge the other events branch into it
     //
 
     const merge_oid = blk: {
-        var result = try repo.switchDir(io, allocator, .{ .target = .{ .ref = .{ .kind = .head, .name = "haxy/meta" } } });
+        var result = try repo.switchDir(io, allocator, .{ .target = .{ .ref = evt.events_ref } });
         defer result.deinit();
 
-        var merge = try repo.merge(io, allocator, .{ .kind = .full, .action = .{ .new = .{ .source = &.{.{ .ref = .{ .kind = .head, .name = "haxy/other" } }} } } }, null);
+        var merge = try repo.merge(io, allocator, .{ .kind = .full, .action = .{ .new = .{ .source = &.{.{ .ref = other_events_ref }} } } }, null);
         defer merge.deinit();
 
         try std.testing.expect(.success == merge.result);
@@ -466,7 +469,7 @@ test "merge" {
     //
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        try evt.consume(repo_opts, io, allocator, &repo, evt.events_ref);
 
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
@@ -546,7 +549,7 @@ test "merge" {
                 // undoing the merge that we did above
                 .{ .parent_oids = if (i == 0) &.{} else null, .message = json.written() },
                 null,
-                .{ .kind = .head, .name = "haxy/meta" },
+                evt.events_ref,
             );
         }
     }
@@ -556,7 +559,7 @@ test "merge" {
     //
 
     {
-        try evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" });
+        try evt.consume(repo_opts, io, allocator, &repo, evt.events_ref);
 
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
 
@@ -620,24 +623,24 @@ test "merge" {
                 allocator,
                 .{ .parent_oids = &.{merge_oid}, .message = json.written() },
                 null,
-                .{ .kind = .head, .name = switch (i) {
-                    0 => "haxy/meta",
-                    1 => "haxy/other",
+                switch (i) {
+                    0 => evt.events_ref,
+                    1 => other_events_ref,
                     else => unreachable,
-                } },
+                },
             );
         }
     }
 
     //
-    // check out the haxy/meta branch and merge the haxy/other branch into it
+    // check out the events branch and merge the other events branch into it
     //
 
     {
-        var result = try repo.switchDir(io, allocator, .{ .target = .{ .ref = .{ .kind = .head, .name = "haxy/meta" } } });
+        var result = try repo.switchDir(io, allocator, .{ .target = .{ .ref = evt.events_ref } });
         defer result.deinit();
 
-        var merge = try repo.merge(io, allocator, .{ .kind = .full, .action = .{ .new = .{ .source = &.{.{ .ref = .{ .kind = .head, .name = "haxy/other" } }} } } }, null);
+        var merge = try repo.merge(io, allocator, .{ .kind = .full, .action = .{ .new = .{ .source = &.{.{ .ref = other_events_ref }} } } }, null);
         defer merge.deinit();
 
         try std.testing.expect(.success == merge.result);
@@ -647,7 +650,7 @@ test "merge" {
     // consume events into the database
     //
 
-    try std.testing.expectError(error.MergeConflict, evt.consume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }));
+    try std.testing.expectError(error.MergeConflict, evt.consume(repo_opts, io, allocator, &repo, evt.events_ref));
 }
 
 test "user and repo" {
@@ -732,7 +735,7 @@ test "user and repo" {
     };
 
     // commit and consume the seed events
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume);
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
@@ -787,7 +790,7 @@ test "user and repo" {
     };
 
     // commit and consume the removal
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume2);
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume2);
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
@@ -821,7 +824,7 @@ test "user and repo" {
     };
 
     // commit and consume the removal
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events_to_consume3);
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume3);
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
@@ -900,7 +903,7 @@ test "repos and users paginate in creation order" {
         .{ .id = std.fmt.bytesToHex(repo_ids[2], .lower), .timestamp = 103, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo2", .description = "d2", .enable_issue = true } } },
         .{ .id = std.fmt.bytesToHex(repo_ids[3], .lower), .timestamp = 104, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo3", .description = "d3", .enable_issue = true } } },
     };
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &events);
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &events);
 
     {
         const moment = try evt.currentMoment(repo_opts, &repo);
@@ -913,7 +916,7 @@ test "repos and users paginate in creation order" {
     }
 
     // delete repo1 -> dense order (no tombstone)
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &[_]evt.EventWithId{
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{
         .{ .id = std.fmt.bytesToHex(repo_ids[1], .lower), .timestamp = 200, .event = .{ .repo = null } },
     });
     {
@@ -922,7 +925,7 @@ test "repos and users paginate in creation order" {
     }
 
     // update repo0 at a later timestamp -> keeps its original slot
-    try evt.commitAndConsume(repo_opts, io, allocator, &repo, .{ .kind = .head, .name = "haxy/meta" }, &[_]evt.EventWithId{
+    try evt.commitAndConsume(repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{
         .{ .id = std.fmt.bytesToHex(repo_ids[0], .lower), .timestamp = 300, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo0", .description = "updated", .enable_issue = true } } },
     });
     {

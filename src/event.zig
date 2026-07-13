@@ -13,7 +13,7 @@ pub const Issue = @import("event/Issue.zig");
 pub const event_id_size: usize = 32;
 
 // the branch haxy events are committed to before being consumed
-pub const events_ref: rf.Ref = .{ .kind = .head, .name = "haxy/meta" };
+pub const events_ref: rf.Ref = .{ .kind = .head, .name = "haxy/events" };
 
 // options + db type for *the admin repo* — the single event store that holds
 // users, repos, issues, etc. the functions below stay parameterized over
