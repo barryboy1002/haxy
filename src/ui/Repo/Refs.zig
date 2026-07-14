@@ -68,18 +68,13 @@ pub fn init(
     const tags_after: usize = if (kind == .tag) after else 0;
     var result = try emptyResult(arena, identity, kind, after);
 
-    // xit seeks each iterator straight to its window; the git backend can't
-    // seek, so it starts at the beginning and collectWindow discards the
-    // entries before the window.
-    const can_seek = repo_kind == .xit;
+    var branch_iter = repo.listBranches(io, gpa, .{ .index = branches_after }) catch return result;
+    defer branch_iter.deinit();
+    const branches = try collectWindow(aa, &branch_iter, branches_after);
 
-    var branch_iter = repo.listBranches(io, gpa, if (can_seek) .{ .index = branches_after } else .beginning) catch return result;
-    defer branch_iter.deinit(io);
-    const branches = try collectWindow(io, aa, &branch_iter, branches_after, if (can_seek) 0 else branches_after);
-
-    var tag_iter = repo.listTags(io, gpa, if (can_seek) .{ .index = tags_after } else .beginning) catch return result;
-    defer tag_iter.deinit(io);
-    const tags = try collectWindow(io, aa, &tag_iter, tags_after, if (can_seek) 0 else tags_after);
+    var tag_iter = repo.listTags(io, gpa, .{ .index = tags_after }) catch return result;
+    defer tag_iter.deinit();
+    const tags = try collectWindow(aa, &tag_iter, tags_after);
 
     result.branches = branches.names;
     result.tags = tags.names;
@@ -88,18 +83,14 @@ pub fn init(
     return result;
 }
 
-// window a ref iterator without materializing the whole list. `skip` entries
-// are discarded first, for backends whose iterators can't seek.
-fn collectWindow(io: std.Io, aa: std.mem.Allocator, iter: anytype, after: usize, skip: usize) !Window {
-    for (0..skip) |_| {
-        if (try iter.next(io) == null) break;
-    }
+// collect one window from a ref iterator already seeked to the window start
+fn collectWindow(aa: std.mem.Allocator, iter: anytype, after: usize) !Window {
     var names = try std.ArrayListUnmanaged([]const u8).initCapacity(aa, page_size);
     while (names.items.len < page_size) {
-        const ref = try iter.next(io) orelse break;
+        const ref = try iter.next() orelse break;
         names.appendAssumeCapacity(try aa.dupe(u8, ref.name));
     }
-    const has_more = (try iter.next(io)) != null;
+    const has_more = (try iter.next()) != null;
     return .{ .names = names.items, .next_after = if (has_more) after + page_size else null };
 }
 
