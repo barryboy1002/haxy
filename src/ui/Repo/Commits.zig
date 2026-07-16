@@ -13,7 +13,7 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const inp = @import("../input.zig");
 
-const SubHeader = @import("SubHeader.zig");
+pub const SubHeader = @import("Commits/SubHeader.zig");
 
 // how many commits a page shows before a "next" link appears.
 const page_size = 20;
@@ -324,7 +324,7 @@ pub const View = struct {
         {
             var sub_header = try SubHeader.View.init(allocator, &data.sub_header, session);
             errdefer sub_header.deinit(allocator);
-            try outer.children.put(allocator, sub_header.getFocus().id, .{ .widget = .{ .repo_sub_header = sub_header }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
+            try outer.children.put(allocator, sub_header.getFocus().id, .{ .widget = .{ .repo_commits_sub_header = sub_header }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });

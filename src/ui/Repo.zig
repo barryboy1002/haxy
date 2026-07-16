@@ -12,7 +12,6 @@ const Focus = xitui.focus.Focus;
 const inp = @import("./input.zig");
 
 pub const Header = @import("./Repo/Header.zig");
-pub const SubHeader = @import("./Repo/SubHeader.zig");
 pub const Files = @import("./Repo/Files.zig");
 pub const Commits = @import("./Repo/Commits.zig");
 pub const Refs = @import("./Repo/Refs.zig");

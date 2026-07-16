@@ -1,7 +1,7 @@
 const std = @import("std");
 const ui = @import("../ui.zig");
 const Commits = @import("../ui/Repo/Commits.zig");
-const SubHeader = @import("../ui/Repo/SubHeader.zig");
+const SubHeader = @import("../ui/Repo/Commits/SubHeader.zig");
 
 // the "next" row at the bottom of the commits list must be recognized as a
 // cross-page link (so a click navigates), exactly like the diff pane's "next".
