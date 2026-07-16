@@ -17,6 +17,9 @@ pub const SubHeader = @import("Issues/SubHeader.zig");
 // how many issues one window shows before a "next" link appears.
 pub const page_size = 20;
 
+// how many tags the tags view shows at most.
+pub const max_tags = 1000;
+
 // one issue from the repo's consumed event database, with its hex event id
 // (the id lives in the event envelope, not the payload).
 pub const IssueWithId = struct {
@@ -39,6 +42,8 @@ prev_id: ?[]const u8,
 next_id: ?[]const u8,
 // how many issues the listing holds across all windows.
 count: usize,
+// every tag in the repo, in sorted order, for the tags view.
+tags: []const []const u8,
 
 const Self = @This();
 
@@ -52,6 +57,7 @@ pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, tag: []const u8,
         .prev_id = null,
         .next_id = null,
         .count = 0,
+        .tags = &.{},
     };
 }
 
@@ -176,6 +182,19 @@ pub fn init(
         });
     }
 
+    // every tag in the repo, in the tag map's sorted order.
+    var tags: std.ArrayList([]const u8) = .empty;
+    if (try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "tag->issue-id-set"))) |tag_to_issues_cursor| {
+        const tag_to_issues = try DB.SortedMap(.read_only).init(tag_to_issues_cursor);
+        var tag_iter = try tag_to_issues.iterator();
+        while (try tag_iter.next()) |kv_pair_cursor| {
+            if (tags.items.len == max_tags) break;
+            var kv_cursor = kv_pair_cursor;
+            const kv_pair = try kv_cursor.readKeyValuePair();
+            try tags.append(aa, try kv_pair.key_cursor.readBytesAlloc(aa, null));
+        }
+    }
+
     return .{
         .identity = empty.identity,
         .tag = empty.tag,
@@ -184,6 +203,7 @@ pub fn init(
         .prev_id = prev_id,
         .next_id = next_id,
         .count = @intCast(try issue_id_set.count()),
+        .tags = tags.items,
     };
 }
 
@@ -199,6 +219,9 @@ pub const View = struct {
 
     const sub_header_index: usize = 0;
     const stack_index: usize = 1;
+    // indices within the stack, 1:1 with the sub header tabs.
+    const results_view_index: usize = 0;
+    const tags_view_index: usize = 1;
     // indices within the results box (the horizontal split inside the stack).
     const list_index: usize = 0;
     const detail_index: usize = 1;
@@ -211,7 +234,7 @@ pub const View = struct {
 
         // the tabs at the top.
         {
-            var sub_header = try SubHeader.View.init(allocator, session, data.count);
+            var sub_header = try SubHeader.View.init(allocator, session, data.count, data.tag);
             errdefer sub_header.deinit(allocator);
             try outer.children.put(allocator, sub_header.getFocus().id, .{ .widget = .{ .repo_issues_sub_header = sub_header }, .rect = null, .min_size = null });
         }
@@ -281,6 +304,21 @@ pub const View = struct {
         stack.getFocus().child_id = box.getFocus().id;
         try stack.children.put(allocator, box.getFocus().id, .{ .box = box });
 
+        // the tags view
+        {
+            var tf = try ui.TagFlow.init(allocator);
+            errdefer tf.deinit(allocator);
+            var items: std.ArrayList(ui.TagFlow.Item) = .empty;
+            defer items.deinit(allocator);
+            // when filtered, the first item clears the filter
+            if (data.tag.len != 0)
+                try items.append(allocator, .{ .text = "╳", .link = try issuesLink(session.page_arena, data.identity, "", "") });
+            for (data.tags) |tag|
+                try items.append(allocator, .{ .text = tag, .link = try tagLink(session.page_arena, data.identity, tag) });
+            try tf.setItems(allocator, items.items);
+            try stack.children.put(allocator, tf.getFocus().id, .{ .tag_flow = tf });
+        }
+
         // focus entering the view lands on the tabs first.
         outer.getFocus().child_id = outer.children.keys()[sub_header_index];
 
@@ -308,9 +346,18 @@ pub const View = struct {
         return &self.box.children.values()[sub_header_index].widget.repo_issues_sub_header;
     }
 
+    fn viewStack(self: *View) *wgt.Stack(ui.Widget) {
+        return &self.box.children.values()[stack_index].widget.stack;
+    }
+
     // the master-detail split inside the stack.
     fn resultsBox(self: *View) *wgt.Box(ui.Widget) {
-        return &self.box.children.values()[stack_index].widget.stack.children.values()[0].box;
+        return &self.viewStack().children.values()[results_view_index].box;
+    }
+
+    // the tags view's flow inside the stack.
+    fn tagsView(self: *View) *ui.TagFlow {
+        return &self.viewStack().children.values()[tags_view_index].tag_flow;
     }
 
     fn listScroll(self: *View) *wgt.Scroll(ui.Widget) {
@@ -344,6 +391,13 @@ pub const View = struct {
         return self.box.children.getIndex(cid) == sub_header_index;
     }
 
+    fn tagsViewActive(self: *View) bool {
+        if (self.subHeaderActive()) return false;
+        const stack = self.viewStack();
+        const cid = stack.getFocus().child_id orelse return false;
+        return stack.children.getIndex(cid) == tags_view_index;
+    }
+
     // the selected issue's index, or null when a window-navigation row is
     // selected (a leading "previous" row shifts the issue rows down by one).
     fn selectedIssueIndex(self: *View) ?usize {
@@ -357,6 +411,12 @@ pub const View = struct {
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
+
+        // each sub header tab maps 1:1 to a stack child by position.
+        if (self.subHeader().getSelectedIndex()) |index| {
+            const stack = self.viewStack();
+            stack.getFocus().child_id = stack.children.keys()[index];
+        }
 
         // swap the detail pane to the selected issue when it changes.
         try self.refreshDetail(allocator);
@@ -395,6 +455,7 @@ pub const View = struct {
             }
         }
         if (self.tagFlow()) |tf| tf.selected = self.tagsFocused();
+        self.tagsView().selected = self.tagsViewActive();
 
         // cap the list at list_max_width only while the detail pane fits beside
         // it. the box drops the detail when the width can't hold both minimums,
@@ -478,10 +539,30 @@ pub const View = struct {
             }
             return;
         }
-        if (self.detailActive()) {
+        if (self.tagsViewActive()) {
+            self.tagsViewInput(key, root_focus);
+        } else if (self.detailActive()) {
             try self.detailInput(key, root_focus);
         } else {
             try self.listInput(key, root_focus);
+        }
+    }
+
+    // arrow keys move the tag selection; up from the top row crosses to the
+    // sub header tabs.
+    fn tagsViewInput(self: *View, key: Key, root_focus: *Focus) void {
+        const tf = self.tagsView();
+        const cid = tf.focus.child_id orelse return;
+        const cur = tf.indexOfFocusId(cid) orelse return;
+        const count = tf.text_boxes.items.len;
+        switch (key) {
+            .arrow_left => if (cur > 0) root_focus.setFocus(tf.text_boxes.items[cur - 1].getFocus().id),
+            .arrow_right => if (cur + 1 < count) root_focus.setFocus(tf.text_boxes.items[cur + 1].getFocus().id),
+            .arrow_up => if (tf.rowStep(cur, false)) |i| root_focus.setFocus(tf.text_boxes.items[i].getFocus().id) else self.focusSubHeader(root_focus),
+            .arrow_down => if (tf.rowStep(cur, true)) |i| root_focus.setFocus(tf.text_boxes.items[i].getFocus().id),
+            .home => root_focus.setFocus(tf.text_boxes.items[0].getFocus().id),
+            .end => root_focus.setFocus(tf.text_boxes.items[count - 1].getFocus().id),
+            else => {},
         }
     }
 

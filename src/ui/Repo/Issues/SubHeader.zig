@@ -15,16 +15,36 @@ pub const View = struct {
     box: wgt.Box(ui.Widget),
     tab_ids: std.AutoArrayHashMapUnmanaged(usize, void),
 
-    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, count: usize) !View {
+    // `tag` is the url-encoded tag filter ("" = unfiltered).
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, count: usize, tag: []const u8) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .rounded_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         var tab_ids: std.AutoArrayHashMapUnmanaged(usize, void) = .empty;
         errdefer tab_ids.deinit(allocator);
 
+        const aa = session.page_arena.allocator();
+
         // results tab, labeled with the listing's issue count
         {
-            const label = try std.fmt.allocPrint(session.page_arena.allocator(), "results ({d})", .{count});
+            const label = try std.fmt.allocPrint(aa, "results ({d})", .{count});
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().focusable = true;
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            try box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = label.len + 2, .height = null },
+            });
+        }
+
+        // tags tab, labeled with the active tag filter
+        {
+            const label = if (tag.len == 0) "tags" else blk: {
+                const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, tag));
+                break :blk try std.fmt.allocPrint(aa, "tags ({s})", .{decoded});
+            };
             var text_box = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().focusable = true;
