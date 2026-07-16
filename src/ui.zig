@@ -265,6 +265,17 @@ pub const RoutablePage = union(enum) {
             pub fn slice(self: *const Array(max_len)) []const u8 {
                 return self.bytes[0..self.len];
             }
+
+            // round-trip as a json string instead of an array of numbers.
+            pub fn jsonStringify(self: *const Array(max_len), jw: anytype) !void {
+                try jw.write(self.slice());
+            }
+
+            pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Array(max_len) {
+                const s = try std.json.innerParse([]const u8, allocator, source, options);
+                // ValueTooLong is std.json's error for an over-long field.
+                return from(s) orelse error.ValueTooLong;
+            }
         };
     }
 
@@ -526,106 +537,6 @@ pub const RoutablePage = union(enum) {
                 else => false,
             },
             else => false,
-        };
-    }
-
-    // serialize as { "kind": <tag>, "name"?: <name>, "after"?: <n> }. the default
-    // union(enum) codec doesn't round-trip here: Stringify emits a void
-    // variant as a bare tag string, but the parser expects an object — so the
-    // server->wasm Snapshot JSON would fail to parse.
-    pub fn jsonStringify(self: RoutablePage, jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("kind");
-        try jw.write(@tagName(self));
-        switch (self) {
-            .user_repos => |u| {
-                try jw.objectField("name");
-                try jw.write(u.name.slice());
-                try jw.objectField("after");
-                try jw.write(u.after);
-            },
-            .user_settings, .user_auth => |name| {
-                try jw.objectField("name");
-                try jw.write(name.slice());
-            },
-            .repo_settings, .repo_auth => |name| {
-                try jw.objectField("name");
-                try jw.write(name.slice());
-            },
-            .repo_issues => |i| {
-                try jw.objectField("name");
-                try jw.write(i.name.slice());
-                try jw.objectField("tag");
-                try jw.write(i.tag.slice());
-                try jw.objectField("selected");
-                try jw.write(i.selected.slice());
-                try jw.objectField("view");
-                try jw.write(@tagName(i.view));
-            },
-            .repo_files => |f| {
-                try jw.objectField("name");
-                try jw.write(f.name.slice());
-                try jw.objectField("after");
-                try jw.write(f.after);
-            },
-            .repo_commits => |c| {
-                try jw.objectField("name");
-                try jw.write(c.name.slice());
-                try jw.objectField("after");
-                try jw.write(c.after);
-            },
-            .repo_refs => |r| {
-                try jw.objectField("name");
-                try jw.write(r.name.slice());
-                // "kind" already holds the union tag, so the paginated column
-                // travels under a distinct field.
-                try jw.objectField("ref_kind");
-                try jw.write(@tagName(r.kind));
-                try jw.objectField("after");
-                try jw.write(r.after);
-            },
-            .home_users, .home_repos => |after| {
-                try jw.objectField("after");
-                try jw.write(after);
-            },
-            else => {},
-        }
-        try jw.endObject();
-    }
-
-    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !RoutablePage {
-        const Helper = struct { kind: std.meta.Tag(RoutablePage), name: ?[]const u8 = null, after: usize = 0, ref_kind: ?[]const u8 = null, tag: ?[]const u8 = null, selected: ?[]const u8 = null, view: ?[]const u8 = null };
-        const helper = try std.json.innerParse(Helper, allocator, source, options);
-        const parseName = struct {
-            // errors must stay within std.json's ParseError set; ValueTooLong
-            // is its member for an over-long field.
-            fn f(comptime max_len: usize, maybe: ?[]const u8) !Array(max_len) {
-                return Array(max_len).from(maybe orelse return error.MissingField) orelse error.ValueTooLong;
-            }
-        }.f;
-        return switch (helper.kind) {
-            .home_users => .{ .home_users = helper.after },
-            .home_repos => .{ .home_repos = helper.after },
-            .home_settings => .home_settings,
-            .home_auth => .home_auth,
-            .user_repos => .{ .user_repos = .{ .name = try parseName(evt.User.name_max_len, helper.name), .after = helper.after } },
-            .user_settings => .{ .user_settings = try parseName(evt.User.name_max_len, helper.name) },
-            .user_auth => .{ .user_auth = try parseName(evt.User.name_max_len, helper.name) },
-            .repo_files => .{ .repo_files = .{ .name = try parseName(repo_route_max_len, helper.name), .after = helper.after } },
-            .repo_commits => .{ .repo_commits = .{ .name = try parseName(repo_route_max_len, helper.name), .after = helper.after } },
-            .repo_refs => .{ .repo_refs = .{
-                .name = try parseName(repo_route_max_len, helper.name),
-                .kind = if (helper.ref_kind) |k| (if (std.mem.eql(u8, k, "tag")) .tag else .branch) else .branch,
-                .after = helper.after,
-            } },
-            .repo_issues => .{ .repo_issues = .{
-                .name = try parseName(repo_route_max_len, helper.name),
-                .tag = Array(issue_tag_route_max_len).from(helper.tag orelse "") orelse return error.ValueTooLong,
-                .selected = Array(evt.event_id_size * 2).from(helper.selected orelse "") orelse return error.ValueTooLong,
-                .view = if (helper.view) |v| (if (std.mem.eql(u8, v, "tags")) .tags else .results) else .results,
-            } },
-            .repo_settings => .{ .repo_settings = try parseName(repo_route_max_len, helper.name) },
-            .repo_auth => .{ .repo_auth = try parseName(repo_route_max_len, helper.name) },
         };
     }
 };
