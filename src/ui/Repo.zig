@@ -107,7 +107,8 @@ pub fn init(
         .repo_refs => |r| r.after,
         else => 0,
     };
-    // the issues tab's tag filter and the issue its window is rooted at.
+    // the issues tab's tag filter, the issue its window is rooted at, and the
+    // view it shows.
     const issues_tag: []const u8 = switch (route) {
         .repo_issues => |i| i.tag.slice(),
         else => "",
@@ -115,6 +116,10 @@ pub fn init(
     const issues_selected: []const u8 = switch (route) {
         .repo_issues => |i| i.selected.slice(),
         else => "",
+    };
+    const issues_view: ui.RoutablePage.IssuesView = switch (route) {
+        .repo_issues => |i| i.view,
+        else => .open,
     };
 
     // where the on-disk repo lives (null keeps the views' empty fallback), plus
@@ -177,7 +182,7 @@ pub fn init(
                                 try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_after),
                                 try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, requested_ref_or_oid, requested_ref_value, commits_after),
                                 try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, refs_kind, refs_after),
-                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, is_local, rf.identity, issues_tag, issues_selected),
+                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, is_local, rf.identity, issues_tag, issues_selected, issues_view),
                             };
                         },
                     }
@@ -189,7 +194,7 @@ pub fn init(
             try Files.emptyResult(aa, rf.identity, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
             try Commits.emptyResult(aa, rf.identity, requested_ref_or_oid orelse .branch, requested_ref_value),
             try Refs.emptyResult(arena, rf.identity, refs_kind, refs_after),
-            try Issues.emptyResult(aa, rf.identity, issues_tag, issues_selected),
+            try Issues.emptyResult(aa, rf.identity, issues_tag, issues_selected, issues_view),
         };
     };
 
@@ -329,7 +334,7 @@ pub const View = struct {
                 .repo_refs => self.session.data.current_page = .{ .repo_refs = .{ .name = self.data.identity, .kind = self.data.refs.kind, .after = self.data.refs.after } },
                 // the issues tab mirrors this page's tag filter (issue urls
                 // themselves never carry the tag).
-                .repo_issues => self.session.data.current_page = ui.RoutablePage.repoIssuesRoute(self.data.identity.slice(), self.data.issues.tag, "") orelse self.session.data.current_page,
+                .repo_issues => self.session.data.current_page = ui.RoutablePage.repoIssuesRoute(self.data.identity.slice(), .open, self.data.issues.tag, "") orelse self.session.data.current_page,
                 .home_settings => self.session.data.current_page = .{ .repo_settings = self.data.identity },
                 .home_auth => self.session.data.current_page = .{ .repo_auth = self.data.identity },
                 // the quit tab is tty-only and not a route, so leave current_page

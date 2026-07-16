@@ -370,6 +370,7 @@ pub fn main(init: std.process.Init) !void {
                 title: []const u8,
                 description: []const u8,
                 tags: []const u8,
+                status: evt.Issue.Status = .open,
             }{
                 .{
                     .title = "Crash on startup when config file is missing",
@@ -385,6 +386,7 @@ pub fn main(init: std.process.Init) !void {
                     .title = "Memory leak when reconnecting after network failure",
                     .description = "Each reconnect allocates a new connection state without freeing the previous one. After a flaky network session, memory usage grows by several megabytes per hour.",
                     .tags = "bug,memory,networking",
+                    .status = .closed,
                 },
                 .{
                     .title = "Document the plugin API",
@@ -420,6 +422,7 @@ pub fn main(init: std.process.Init) !void {
                     .title = "Progress bar overshoots 100% during resumed downloads",
                     .description = "Resuming a partial download counts the already-downloaded bytes twice, so the progress bar reads up to 150%. Subtract the resume offset from the total.",
                     .tags = "bug,ui,downloads",
+                    .status = .closed,
                 },
                 .{
                     .title = "Config parser rejects trailing commas",
@@ -455,6 +458,7 @@ pub fn main(init: std.process.Init) !void {
                     .title = "Log rotation deletes the newest file instead of the oldest",
                     .description = "When the log directory hits its size cap, the rotation logic sorts by name rather than mtime and removes the most recent log. Sort by modification time.",
                     .tags = "bug,logging",
+                    .status = .closed,
                 },
                 .{
                     .title = "Add man pages for all subcommands",
@@ -509,6 +513,7 @@ pub fn main(init: std.process.Init) !void {
                             .title = issue.title,
                             .description = issue.description,
                             .tags = issue.tags,
+                            .status = issue.status,
                         },
                     },
                 };

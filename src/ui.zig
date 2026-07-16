@@ -84,7 +84,9 @@ pub const RoutablePage = union(enum) {
         // the tag the list is filtered to, url-encoded ("" = unfiltered).
         tag: Array(issue_tag_route_max_len) = .{},
         selected: Array(evt.event_id_size * 2) = .{},
-        view: enum { results, tags } = .results,
+        // the view the url names; a route with `selected` derives its view
+        // from that issue's status instead.
+        view: IssuesView = .open,
     },
     repo_settings: Array(repo_route_max_len),
     repo_auth: Array(repo_route_max_len),
@@ -92,6 +94,8 @@ pub const RoutablePage = union(enum) {
     pub const default: RoutablePage = .{ .home_users = 0 };
 
     pub const RefKind = enum { branch, tag };
+
+    pub const IssuesView = enum { open, closed, tags };
 
     pub const RefOrOid = enum {
         branch,
@@ -228,21 +232,27 @@ pub const RoutablePage = union(enum) {
         return .{ .repo_refs = .{ .name = Array(repo_route_max_len).from(identity) orelse return null, .kind = kind, .after = after } };
     }
 
-    // build a `.repo_issues` route for "owner/name" (identity) filtered to the
-    // url-encoded `tag` ("" = unfiltered) and rooted at the issue with hex
-    // event id `selected` ("" = the first window).
-    pub fn repoIssuesRoute(identity: []const u8, tag: []const u8, selected: []const u8) ?RoutablePage {
+    // build a `.repo_issues` route for "owner/name" (identity) showing
+    // `status`'s list, filtered to the url-encoded `tag` ("" = unfiltered) and
+    // rooted at the issue with hex event id `selected` ("" = the first window).
+    pub fn repoIssuesRoute(identity: []const u8, status: evt.Issue.Status, tag: []const u8, selected: []const u8) ?RoutablePage {
         return .{ .repo_issues = .{
             .name = Array(repo_route_max_len).from(identity) orelse return null,
             .tag = Array(issue_tag_route_max_len).from(tag) orelse return null,
             .selected = Array(evt.event_id_size * 2).from(selected) orelse return null,
+            .view = switch (status) {
+                .open => .open,
+                .closed => .closed,
+            },
         } };
     }
 
-    // build a `.repo_issues` route showing "owner/name" (identity)'s tags view.
-    pub fn repoIssuesTagsRoute(identity: []const u8) ?RoutablePage {
+    // build a `.repo_issues` route showing "owner/name" (identity)'s tags view,
+    // keeping the url-encoded `tag` filter ("" = unfiltered).
+    pub fn repoIssuesTagsRoute(identity: []const u8, tag: []const u8) ?RoutablePage {
         return .{ .repo_issues = .{
             .name = Array(repo_route_max_len).from(identity) orelse return null,
+            .tag = Array(issue_tag_route_max_len).from(tag) orelse return null,
             .view = .tags,
         } };
     }
@@ -308,17 +318,22 @@ pub const RoutablePage = union(enum) {
             },
             .repo_issues => |i| blk: {
                 const prefix = try repoUrlPrefix(arena, i.name.slice());
+                // list urls name the view; a selected issue's url is status-free
+                // so it survives the issue changing status.
                 break :blk switch (i.view) {
-                    .tags => try std.fmt.allocPrint(arena.allocator(), "{s}/issues/tags", .{prefix}),
-                    .results => if (i.tag.len == 0)
-                        (if (i.selected.len == 0)
-                            try std.fmt.allocPrint(arena.allocator(), "{s}/issues", .{prefix})
-                        else
-                            try std.fmt.allocPrint(arena.allocator(), "{s}/issues/{s}", .{ prefix, i.selected.slice() }))
-                    else if (i.selected.len == 0)
-                        try std.fmt.allocPrint(arena.allocator(), "{s}/issues/tags/{s}", .{ prefix, i.tag.slice() })
+                    .tags => if (i.tag.len == 0)
+                        try std.fmt.allocPrint(arena.allocator(), "{s}/issues/tags", .{prefix})
                     else
-                        try std.fmt.allocPrint(arena.allocator(), "{s}/issues/tags/{s}/{s}", .{ prefix, i.tag.slice(), i.selected.slice() }),
+                        try std.fmt.allocPrint(arena.allocator(), "{s}/issues/tags/{s}", .{ prefix, i.tag.slice() }),
+                    .open, .closed => |view| if (i.selected.len != 0)
+                        (if (i.tag.len == 0)
+                            try std.fmt.allocPrint(arena.allocator(), "{s}/issues/{s}", .{ prefix, i.selected.slice() })
+                        else
+                            try std.fmt.allocPrint(arena.allocator(), "{s}/issues/tags/{s}/{s}", .{ prefix, i.tag.slice(), i.selected.slice() }))
+                    else if (i.tag.len == 0)
+                        try std.fmt.allocPrint(arena.allocator(), "{s}/issues/{s}", .{ prefix, @tagName(view) })
+                    else
+                        try std.fmt.allocPrint(arena.allocator(), "{s}/issues/{s}/tags/{s}", .{ prefix, @tagName(view), i.tag.slice() }),
                 };
             },
             .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/settings", .{try repoUrlPrefix(arena, name.slice())}),
@@ -411,24 +426,34 @@ pub const RoutablePage = union(enum) {
             .after = after,
         } };
         if (std.mem.eql(u8, sub, "issues") or std.mem.startsWith(u8, sub, "issues/")) {
-            // "issues[/<issue event id>]", "issues/tags" (the tags view), or
-            // "issues/tags/<tag>[/<issue event id>]" (the list filtered to <tag>)
+            // "issues[/<issue event id>]", "issues/open|closed[/tags/<tag>]",
+            // "issues/tags[/<tag>]" (the tags view, optionally filtered), or
+            // "issues/tags/<tag>/<issue event id>"
             var segments = std.mem.splitScalar(u8, sub, '/');
             _ = segments.next(); // "issues"
+            var status: evt.Issue.Status = .open;
             var tag_value: []const u8 = "";
             var id: []const u8 = "";
             if (segments.next()) |segment| {
-                if (std.mem.eql(u8, segment, "tags")) {
-                    tag_value = segments.next() orelse return repoIssuesTagsRoute(pair);
+                if (std.meta.stringToEnum(evt.Issue.Status, segment)) |s| {
+                    status = s;
+                    if (segments.next()) |tags_segment| {
+                        if (!std.mem.eql(u8, tags_segment, "tags")) return null;
+                        tag_value = segments.next() orelse return null;
+                        if (tag_value.len == 0) return null;
+                    }
+                } else if (std.mem.eql(u8, segment, "tags")) {
+                    tag_value = segments.next() orelse return repoIssuesTagsRoute(pair, "");
                     if (tag_value.len == 0) return null;
-                    id = segments.next() orelse "";
+                    id = segments.next() orelse return repoIssuesTagsRoute(pair, tag_value);
+                    if (id.len == 0) return null;
                 } else {
                     if (segment.len == 0) return null;
                     id = segment;
                 }
             }
             if (segments.next() != null) return null;
-            return repoIssuesRoute(pair, tag_value, id);
+            return repoIssuesRoute(pair, status, tag_value, id);
         }
         if (std.mem.eql(u8, sub, "settings")) return .{ .repo_settings = Array(repo_route_max_len).from(pair) orelse return null };
         if (std.mem.eql(u8, sub, "auth")) return .{ .repo_auth = Array(repo_route_max_len).from(pair) orelse return null };

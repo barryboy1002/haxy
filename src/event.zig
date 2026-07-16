@@ -654,6 +654,10 @@ pub fn read(
                         .unsigned => @field(event, field.name) = @intCast(try readUint(DB, hash_kind, map, field.name)),
                         .signed => @field(event, field.name) = @intCast(try readInt(DB, hash_kind, map, field.name)),
                     },
+                    .@"enum" => {
+                        const bytes = try readBytes(DB, hash_kind, arena.allocator(), map, field.name);
+                        @field(event, field.name) = std.meta.stringToEnum(field.type, bytes) orelse return error.InvalidEnumTag;
+                    },
                     else => @compileError("unsupported read field type: " ++ @typeName(field.type)),
                 }
             }
@@ -732,6 +736,7 @@ pub fn upsert(
     }
 }
 
+// three-way merge of a hash map
 fn mergeChangedMapEntries(
     comptime DB: type,
     allocator: std.mem.Allocator,
@@ -814,8 +819,7 @@ fn mergeChangedMapEntries(
     }
 }
 
-// three-way merge of a sorted map keyed by byte strings, like
-// mergeChangedMapEntries but recursing into sorted-set values.
+// three-way merge of a sorted map
 fn mergeChangedSortedMapEntries(
     comptime DB: type,
     allocator: std.mem.Allocator,
@@ -978,6 +982,7 @@ fn upsertField(
 
             try map.put(key, .{ .bytes_object = .{ .value = bytes, .format_tag = "bl".* } });
         },
+        .@"enum" => try upsertBytes(DB, hash_kind, map, key, @tagName(value)),
         else => @compileError("unsupported upsert field type: " ++ @typeName(Field)),
     }
 }

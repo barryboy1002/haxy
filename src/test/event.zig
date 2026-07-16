@@ -505,7 +505,9 @@ test "merge" {
 
         // the ordered issue set unions both branches' additions
         {
-            const issue_id_set_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "issue-id-set")) orelse return error.NotFound;
+            const status_to_issues_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, "status->issue-id-set")) orelse return error.NotFound;
+            const status_to_issues = try Repo.DB.SortedMap(.read_only).init(status_to_issues_cursor);
+            const issue_id_set_cursor = try status_to_issues.getCursor("open") orelse return error.NotFound;
             const issue_id_set = try Repo.DB.SortedSet(.read_only).init(issue_id_set_cursor);
             try std.testing.expectEqual(6, try issue_id_set.count());
 
