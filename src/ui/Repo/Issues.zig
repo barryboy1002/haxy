@@ -216,6 +216,8 @@ pub const View = struct {
     session: *ui.Session,
     // the issue whose description the pane currently shows (index into data.issues).
     detailed_index: ?usize,
+    // the pane's description text box's focus id (null until a detail is shown).
+    description_id: ?usize,
 
     const sub_header_index: usize = 0;
     const stack_index: usize = 1;
@@ -327,6 +329,7 @@ pub const View = struct {
             .data = data,
             .session = session,
             .detailed_index = null,
+            .description_id = null,
         };
     }
 
@@ -510,15 +513,16 @@ pub const View = struct {
         // the description as a focusable word-wrapped text box. its hidden
         // border reserves the space the border occupies when focused, so
         // focusing doesn't shift layout.
-        {
+        self.description_id = blk: {
             var tb = try wgt.TextBox(ui.Widget).init(allocator, entry.issue.description, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .word });
             errdefer tb.deinit(allocator);
             tb.getFocus().focusable = true;
             try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
-        }
+            break :blk tb.getFocus().id;
+        };
 
         // select the description by default
-        inner.getFocus().child_id = inner.children.keys()[inner.children.count() - 1];
+        inner.getFocus().child_id = self.description_id;
 
         // reset the scroll to the top for the newly-shown issue: directly on the
         // terminal (the wasm offset), and via a version bump on the web (so the
@@ -686,10 +690,7 @@ pub const View = struct {
     }
 
     fn focusDescription(self: *View, root_focus: *Focus) !void {
-        const inner = self.detailInner();
-        const index: usize = if (self.tagFlow() != null) 1 else 0;
-        if (inner.children.count() <= index) return;
-        root_focus.setFocus(inner.children.keys()[index]);
+        if (self.description_id) |id| root_focus.setFocus(id);
     }
 
     // enter the detail pane. an empty pane (no issues) can't be entered.
