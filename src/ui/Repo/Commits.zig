@@ -13,8 +13,6 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const inp = @import("../input.zig");
 
-pub const SubHeader = @import("Commits/SubHeader.zig");
-
 // how many commits a page shows before a "next" link appears.
 const page_size = 20;
 // how many diff hunks one window of a commit's diff shows; "next"/"previous"
@@ -50,7 +48,7 @@ commits: []const Commit,
 // the first oid of the next page, or null when this is the last page.
 next_start: ?[]const u8,
 // the "viewing <ref> <value>" banner shown above the log.
-sub_header: SubHeader,
+header: Header,
 
 const Self = @This();
 
@@ -139,7 +137,7 @@ pub fn init(
         .ref_or_oid_value = resolved.value,
         .commits = try aa.dupe(Commit, buf[0..count]),
         .next_start = next_start,
-        .sub_header = try SubHeader.init(aa, resolved.ref_or_oid, resolved.value),
+        .header = try Header.init(aa, resolved.ref_or_oid, resolved.value),
     };
 }
 
@@ -151,7 +149,7 @@ pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.R
         .ref_or_oid_value = try aa.dupe(u8, value),
         .commits = &.{},
         .next_start = null,
-        .sub_header = try SubHeader.init(aa, ref_or_oid, value),
+        .header = try Header.init(aa, ref_or_oid, value),
     };
 }
 
@@ -302,13 +300,13 @@ pub const View = struct {
     // a vertical stack: the "viewing <ref>" banner on top, then a horizontal
     // split with the commit list on the left and a diff pane on the right
     // showing the selected commit's diff.
-    box: wgt.Box(ui.Widget), // vert: [sub_header_index] = banner, [content_index] = split
+    box: wgt.Box(ui.Widget), // vert: [header_index] = banner, [content_index] = split
     data: *const Self,
     session: *ui.Session,
     // the commit whose diff the pane currently shows (index into data.commits).
     diffed_index: ?usize,
 
-    const sub_header_index: usize = 0;
+    const header_index: usize = 0;
     const content_index: usize = 1;
     // indices within the content box (the horizontal split).
     const list_index: usize = 0;
@@ -322,9 +320,9 @@ pub const View = struct {
 
         // the ref banner at the top.
         {
-            var sub_header = try SubHeader.View.init(allocator, &data.sub_header, session);
-            errdefer sub_header.deinit(allocator);
-            try outer.children.put(allocator, sub_header.getFocus().id, .{ .widget = .{ .repo_commits_sub_header = sub_header }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
+            var header = try Header.View.init(allocator, &data.header, session);
+            errdefer header.deinit(allocator);
+            try outer.children.put(allocator, header.getFocus().id, .{ .widget = .{ .repo_commits_header = header }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
@@ -815,3 +813,58 @@ fn commitRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
 }
+
+// the "viewing <ref_or_oid> <value>" banner shown above the log.
+pub const Header = struct {
+    content: []const u8,
+
+    pub fn init(aa: std.mem.Allocator, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8) !Header {
+        return .{
+            .content = try std.fmt.allocPrint(aa, "viewing {s} {s}", .{ @tagName(ref_or_oid), value }),
+        };
+    }
+
+    pub const View = struct {
+        text_box: wgt.TextBox(ui.Widget),
+        data: *const Header,
+
+        pub fn init(allocator: std.mem.Allocator, data: *const Header, session: *ui.Session) !Header.View {
+            _ = session;
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, data.content, .{ .border_style = .hidden, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            return .{ .text_box = text_box, .data = data };
+        }
+
+        pub fn deinit(self: *Header.View, allocator: std.mem.Allocator) void {
+            self.text_box.deinit(allocator);
+        }
+
+        pub fn build(self: *Header.View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+            // a single line plus the hidden border is 3 rows tall; stretch the box to
+            // the full width by handing the available width down as a min width.
+            try self.text_box.build(allocator, .{
+                .min_size = .{ .width = constraint.max_size.width, .height = null },
+                .max_size = constraint.max_size,
+            }, root_focus);
+        }
+
+        pub fn input(self: *Header.View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+            _ = self;
+            _ = allocator;
+            _ = key;
+            _ = root_focus;
+        }
+
+        pub fn clearGrid(self: *Header.View) void {
+            self.text_box.clearGrid();
+        }
+
+        pub fn getGrid(self: Header.View) ?Grid {
+            return self.text_box.getGrid();
+        }
+
+        pub fn getFocus(self: *Header.View) *Focus {
+            return self.text_box.getFocus();
+        }
+    };
+};

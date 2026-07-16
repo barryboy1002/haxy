@@ -13,8 +13,6 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const inp = @import("../input.zig");
 
-pub const SubHeader = @import("Files/SubHeader.zig");
-
 // how many lines of a file's content one window shows before a "next" link.
 const file_page = 2000;
 
@@ -63,7 +61,7 @@ dir: []const u8,
 selected_file: ?[]const u8 = null,
 entries: []const Entry,
 // the "viewing <ref> <value>" banner shown above the listing.
-sub_header: SubHeader,
+header: Header,
 
 const Self = @This();
 
@@ -173,7 +171,7 @@ pub fn init(
         .dir = try aa.dupe(u8, dir),
         .selected_file = selected_file,
         .entries = entries,
-        .sub_header = try SubHeader.init(aa, resolved.ref_or_oid, resolved.value),
+        .header = try Header.init(aa, resolved.ref_or_oid, resolved.value),
     };
 }
 
@@ -228,7 +226,7 @@ pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.R
         .ref_or_oid_value = try aa.dupe(u8, ref_or_oid_value),
         .dir = try aa.dupe(u8, dir),
         .entries = &.{},
-        .sub_header = try SubHeader.init(aa, ref_or_oid, ref_or_oid_value),
+        .header = try Header.init(aa, ref_or_oid, ref_or_oid_value),
     };
 }
 
@@ -236,13 +234,13 @@ pub const View = struct {
     // a vertical stack: the "viewing <ref>" banner on top, then a horizontal
     // split with the file/directory list on the left and a detail pane on the
     // right showing the selected file's contents.
-    box: wgt.Box(ui.Widget), // vert: [sub_header_index] = banner, [content_index] = split
+    box: wgt.Box(ui.Widget), // vert: [header_index] = banner, [content_index] = split
     data: *const Self,
     session: *ui.Session,
     // the list row whose contents the detail pane currently shows.
     shown_index: ?usize,
 
-    const sub_header_index: usize = 0;
+    const header_index: usize = 0;
     const content_index: usize = 1;
     // indices within the content box (the horizontal split).
     const list_index: usize = 0;
@@ -259,9 +257,9 @@ pub const View = struct {
 
         // the ref banner at the top.
         {
-            var sub_header = try SubHeader.View.init(allocator, &data.sub_header, session);
-            errdefer sub_header.deinit(allocator);
-            try outer.children.put(allocator, sub_header.getFocus().id, .{ .widget = .{ .repo_files_sub_header = sub_header }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
+            var header = try Header.View.init(allocator, &data.header, session);
+            errdefer header.deinit(allocator);
+            try outer.children.put(allocator, header.getFocus().id, .{ .widget = .{ .repo_files_header = header }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
@@ -821,3 +819,58 @@ fn parentDir(dir: []const u8) []const u8 {
     const slash = std.mem.lastIndexOfScalar(u8, dir, '/') orelse return "";
     return dir[0..slash];
 }
+
+// the "viewing <ref_or_oid> <value>" banner shown above the listing.
+pub const Header = struct {
+    content: []const u8,
+
+    pub fn init(aa: std.mem.Allocator, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8) !Header {
+        return .{
+            .content = try std.fmt.allocPrint(aa, "viewing {s} {s}", .{ @tagName(ref_or_oid), value }),
+        };
+    }
+
+    pub const View = struct {
+        text_box: wgt.TextBox(ui.Widget),
+        data: *const Header,
+
+        pub fn init(allocator: std.mem.Allocator, data: *const Header, session: *ui.Session) !Header.View {
+            _ = session;
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, data.content, .{ .border_style = .hidden, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            return .{ .text_box = text_box, .data = data };
+        }
+
+        pub fn deinit(self: *Header.View, allocator: std.mem.Allocator) void {
+            self.text_box.deinit(allocator);
+        }
+
+        pub fn build(self: *Header.View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+            // a single line plus the hidden border is 3 rows tall; stretch the box to
+            // the full width by handing the available width down as a min width.
+            try self.text_box.build(allocator, .{
+                .min_size = .{ .width = constraint.max_size.width, .height = null },
+                .max_size = constraint.max_size,
+            }, root_focus);
+        }
+
+        pub fn input(self: *Header.View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+            _ = self;
+            _ = allocator;
+            _ = key;
+            _ = root_focus;
+        }
+
+        pub fn clearGrid(self: *Header.View) void {
+            self.text_box.clearGrid();
+        }
+
+        pub fn getGrid(self: Header.View) ?Grid {
+            return self.text_box.getGrid();
+        }
+
+        pub fn getFocus(self: *Header.View) *Focus {
+            return self.text_box.getFocus();
+        }
+    };
+};

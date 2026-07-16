@@ -12,8 +12,6 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 const inp = @import("../input.zig");
 
-pub const SubHeader = @import("Issues/SubHeader.zig");
-
 // how many issues one window shows before a "next" link appears.
 pub const page_size = 20;
 
@@ -208,10 +206,10 @@ pub fn init(
 }
 
 pub const View = struct {
-    // a vertical box: the sub header tabs on top, then a stack holding the
+    // a vertical box: the header tabs on top, then a stack holding the
     // results view — a horizontal split with the issue list on the left and a
     // detail pane on the right showing the selected issue's description.
-    box: wgt.Box(ui.Widget), // vert: [sub_header_index] = tabs, [stack_index] = stack
+    box: wgt.Box(ui.Widget), // vert: [header_index] = tabs, [stack_index] = stack
     data: *const Self,
     session: *ui.Session,
     // the issue whose description the pane currently shows (index into data.issues).
@@ -219,9 +217,9 @@ pub const View = struct {
     // the pane's description text box's focus id (null until a detail is shown).
     description_id: ?usize,
 
-    const sub_header_index: usize = 0;
+    const header_index: usize = 0;
     const stack_index: usize = 1;
-    // indices within the stack, 1:1 with the sub header tabs.
+    // indices within the stack, 1:1 with the header tabs.
     const results_view_index: usize = 0;
     const tags_view_index: usize = 1;
     // indices within the results box (the horizontal split inside the stack).
@@ -236,9 +234,9 @@ pub const View = struct {
 
         // the tabs at the top.
         {
-            var sub_header = try SubHeader.View.init(allocator, session, data.identity, data.count, data.tag);
-            errdefer sub_header.deinit(allocator);
-            try outer.children.put(allocator, sub_header.getFocus().id, .{ .widget = .{ .repo_issues_sub_header = sub_header }, .rect = null, .min_size = null });
+            var hdr = try Header.init(allocator, session, data.identity, data.count, data.tag);
+            errdefer hdr.deinit(allocator);
+            try outer.children.put(allocator, hdr.getFocus().id, .{ .widget = .{ .repo_issues_header = hdr }, .rect = null, .min_size = null });
         }
 
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
@@ -322,7 +320,7 @@ pub const View = struct {
         }
 
         // focus entering the view lands on the tabs first.
-        outer.getFocus().child_id = outer.children.keys()[sub_header_index];
+        outer.getFocus().child_id = outer.children.keys()[header_index];
 
         return .{
             .box = outer,
@@ -345,8 +343,8 @@ pub const View = struct {
         self.box.deinit(allocator);
     }
 
-    fn subHeader(self: *View) *SubHeader.View {
-        return &self.box.children.values()[sub_header_index].widget.repo_issues_sub_header;
+    fn header(self: *View) *Header {
+        return &self.box.children.values()[header_index].widget.repo_issues_header;
     }
 
     fn viewStack(self: *View) *wgt.Stack(ui.Widget) {
@@ -389,13 +387,13 @@ pub const View = struct {
         return rb.children.getIndex(cid) == detail_index;
     }
 
-    fn subHeaderActive(self: *View) bool {
+    fn headerActive(self: *View) bool {
         const cid = self.box.getFocus().child_id orelse return false;
-        return self.box.children.getIndex(cid) == sub_header_index;
+        return self.box.children.getIndex(cid) == header_index;
     }
 
     fn tagsViewActive(self: *View) bool {
-        if (self.subHeaderActive()) return false;
+        if (self.headerActive()) return false;
         const stack = self.viewStack();
         const cid = stack.getFocus().child_id orelse return false;
         return stack.children.getIndex(cid) == tags_view_index;
@@ -415,8 +413,8 @@ pub const View = struct {
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
 
-        // each sub header tab maps 1:1 to a stack child by position
-        if (self.subHeader().getSelectedIndex()) |index| {
+        // each header tab maps 1:1 to a stack child by position
+        if (self.header().getSelectedIndex()) |index| {
             const stack = self.viewStack();
             stack.getFocus().child_id = stack.children.keys()[index];
             self.session.data.current_page = (if (index == tags_view_index)
@@ -538,12 +536,12 @@ pub const View = struct {
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
-        if (self.subHeaderActive()) {
+        if (self.headerActive()) {
             // down from the tabs re-enters the split; other keys move the tabs.
             if (inp.vertDirection(key) == .down) {
                 root_focus.setFocus(self.box.children.keys()[stack_index]);
             } else {
-                try self.subHeader().input(allocator, key, root_focus);
+                try self.header().input(allocator, key, root_focus);
             }
             return;
         }
@@ -557,7 +555,7 @@ pub const View = struct {
     }
 
     // arrow keys move the tag selection; up from the top row crosses to the
-    // sub header tabs.
+    // header tabs.
     fn tagsViewInput(self: *View, key: Key, root_focus: *Focus) void {
         const tf = self.tagsView();
         const cid = tf.focus.child_id orelse return;
@@ -566,7 +564,7 @@ pub const View = struct {
         switch (key) {
             .arrow_left => if (cur > 0) root_focus.setFocus(tf.text_boxes.items[cur - 1].getFocus().id),
             .arrow_right => if (cur + 1 < count) root_focus.setFocus(tf.text_boxes.items[cur + 1].getFocus().id),
-            .arrow_up => if (tf.rowStep(cur, false)) |i| root_focus.setFocus(tf.text_boxes.items[i].getFocus().id) else self.focusSubHeader(root_focus),
+            .arrow_up => if (tf.rowStep(cur, false)) |i| root_focus.setFocus(tf.text_boxes.items[i].getFocus().id) else self.focusHeader(root_focus),
             .arrow_down => if (tf.rowStep(cur, true)) |i| root_focus.setFocus(tf.text_boxes.items[i].getFocus().id),
             .home => root_focus.setFocus(tf.text_boxes.items[0].getFocus().id),
             .end => root_focus.setFocus(tf.text_boxes.items[count - 1].getFocus().id),
@@ -577,11 +575,11 @@ pub const View = struct {
     fn listInput(self: *View, key: Key, root_focus: *Focus) !void {
         // up/down (and the scroll wheel) move the selection a row; page up/down
         // jump a fixed amount. right/Enter cross into the detail pane. up from
-        // the top row crosses into the sub header tabs.
+        // the top row crosses into the header tabs.
         if (inp.rowDelta(key, @intCast(self.listBox().children.count()))) |delta| {
             const lb = self.listBox();
             const at_top = if (lb.getFocus().child_id) |cid| lb.children.getIndex(cid) == 0 else true;
-            if (delta < 0 and at_top) return self.focusSubHeader(root_focus);
+            if (delta < 0 and at_top) return self.focusHeader(root_focus);
             ui.moveRowFocus(lb, self.listScroll(), root_focus, delta);
             return;
         }
@@ -604,13 +602,13 @@ pub const View = struct {
         switch (key) {
             .arrow_left => return self.focusList(root_focus),
             // once the scroll can't move further, cross into the tags (or the
-            // sub header tabs when the issue has none).
+            // header tabs when the issue has none).
             .arrow_up => {
                 const before = sc.y;
                 sc.y -= 1;
                 sc.clampToContent();
                 if (sc.y == before) {
-                    if (self.tagFlow() != null) try self.focusTags(root_focus) else self.focusSubHeader(root_focus);
+                    if (self.tagFlow() != null) try self.focusTags(root_focus) else self.focusHeader(root_focus);
                 }
                 return;
             },
@@ -639,7 +637,7 @@ pub const View = struct {
         switch (key) {
             .arrow_left => if (cur > 0) self.focusTag(tf, root_focus, cur - 1) else try self.focusList(root_focus),
             .arrow_right => if (cur + 1 < count) self.focusTag(tf, root_focus, cur + 1),
-            .arrow_up => if (tf.rowStep(cur, false)) |i| self.focusTag(tf, root_focus, i) else self.focusSubHeader(root_focus),
+            .arrow_up => if (tf.rowStep(cur, false)) |i| self.focusTag(tf, root_focus, i) else self.focusHeader(root_focus),
             .arrow_down => if (tf.rowStep(cur, true)) |i| self.focusTag(tf, root_focus, i) else try self.focusDescription(root_focus),
             .home => self.focusTag(tf, root_focus, 0),
             .end => self.focusTag(tf, root_focus, count - 1),
@@ -708,9 +706,9 @@ pub const View = struct {
         root_focus.setFocus(self.listScroll().getFocus().id);
     }
 
-    // cross to the sub header tabs above the split.
-    fn focusSubHeader(self: *View, root_focus: *Focus) void {
-        root_focus.setFocus(self.box.children.keys()[sub_header_index]);
+    // cross to the header tabs above the split.
+    fn focusHeader(self: *View, root_focus: *Focus) void {
+        root_focus.setFocus(self.box.children.keys()[header_index]);
     }
 
     pub fn clearGrid(self: *View) void {
@@ -726,10 +724,10 @@ pub const View = struct {
     }
 
     // for the parent's "scroll up at the top jumps to the header" check: at the
-    // top only while the sub header tabs hold focus, so up from the split
+    // top only while the header tabs hold focus, so up from the split
     // crosses into the tabs first.
     pub fn getSelectedIndex(self: *View) ?usize {
-        return if (self.subHeaderActive()) 0 else 1;
+        return if (self.headerActive()) 0 else 1;
     }
 };
 
@@ -756,3 +754,116 @@ fn tagLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, tag: []co
     const url = try route.urlAlloc(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
+
+// tabs switching between the issues page's views.
+pub const Header = struct {
+    box: wgt.Box(ui.Widget),
+    tab_ids: std.AutoArrayHashMapUnmanaged(usize, void),
+
+    // `tag` is the url-encoded tag filter ("" = unfiltered).
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, identity: []const u8, count: usize, tag: []const u8) !Header {
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .rounded_corners = true, .direction = .horiz });
+        errdefer box.deinit(allocator);
+
+        var tab_ids: std.AutoArrayHashMapUnmanaged(usize, void) = .empty;
+        errdefer tab_ids.deinit(allocator);
+
+        const aa = session.page_arena.allocator();
+
+        const results_route = ui.RoutablePage.repoIssuesRoute(identity, tag, "") orelse return error.RouteTooLong;
+        const results_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try results_route.urlAlloc(session.page_arena)});
+        const tags_route = ui.RoutablePage.repoIssuesTagsRoute(identity) orelse return error.RouteTooLong;
+        const tags_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try tags_route.urlAlloc(session.page_arena)});
+
+        // results tab, labeled with the listing's issue count
+        {
+            const label = try std.fmt.allocPrint(aa, "results ({d})", .{count});
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().focusable = true;
+            text_box.getFocus().kind = .{ .custom = results_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            try box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = label.len + 2, .height = null },
+            });
+        }
+
+        // tags tab, labeled with the active tag filter
+        {
+            const label = if (tag.len == 0) "tags" else blk: {
+                const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, tag));
+                break :blk try std.fmt.allocPrint(aa, "tags ({s})", .{decoded});
+            };
+            var text_box = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().focusable = true;
+            text_box.getFocus().kind = .{ .custom = tags_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            try box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = label.len + 2, .height = null },
+            });
+        }
+
+        var self = Header{ .box = box, .tab_ids = tab_ids };
+        // the tab matching the incoming route's view is selected initially.
+        const selected_index: usize = switch (session.data.current_page) {
+            .repo_issues => |i| switch (i.view) {
+                .results => 0,
+                .tags => 1,
+            },
+            else => 0,
+        };
+        self.getFocus().child_id = self.tab_ids.keys()[selected_index];
+        return self;
+    }
+
+    pub fn deinit(self: *Header, allocator: std.mem.Allocator) void {
+        self.box.deinit(allocator);
+        self.tab_ids.deinit(allocator);
+    }
+
+    pub fn build(self: *Header, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+        // only the selected tab shows its border
+        for (self.box.children.keys(), self.box.children.values()) |id, *child| {
+            switch (child.widget) {
+                .text_box => |*tb| tb.options.border_style = if (self.getFocus().child_id == id) .single else .hidden,
+                else => {},
+            }
+        }
+        try self.box.build(allocator, constraint, root_focus);
+    }
+
+    pub fn input(self: *Header, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        _ = allocator;
+        const current_tab = self.currentTabIndex() orelse return;
+        if (inp.moveTab(key, current_tab, self.tab_ids.count())) |new_tab| {
+            root_focus.setFocus(self.tab_ids.keys()[new_tab]);
+        }
+    }
+
+    pub fn clearGrid(self: *Header) void {
+        self.box.clearGrid();
+    }
+
+    pub fn getGrid(self: Header) ?Grid {
+        return self.box.getGrid();
+    }
+
+    pub fn getFocus(self: *Header) *Focus {
+        return self.box.getFocus();
+    }
+
+    pub fn getSelectedIndex(self: Header) ?usize {
+        return self.currentTabIndex();
+    }
+
+    fn currentTabIndex(self: Header) ?usize {
+        const child_id = self.box.focus.child_id orelse return null;
+        return self.tab_ids.getIndex(child_id);
+    }
+};

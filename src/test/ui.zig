@@ -1,7 +1,6 @@
 const std = @import("std");
 const ui = @import("../ui.zig");
 const Commits = @import("../ui/Repo/Commits.zig");
-const SubHeader = @import("../ui/Repo/Commits/SubHeader.zig");
 
 // the "next" row at the bottom of the commits list must be recognized as a
 // cross-page link (so a click navigates), exactly like the diff pane's "next".
@@ -22,7 +21,7 @@ test "commits list next row is a cross-page link" {
             .{ .oid = oid0, .date = "2024-01-01", .message = "first", .hunks = &.{}, .window_start = 0, .has_prev = false, .has_more = false },
         },
         .next_start = next_oid,
-        .sub_header = try SubHeader.init(arena.allocator(), .object, oid0),
+        .header = try Commits.Header.init(arena.allocator(), .object, oid0),
     };
 
     var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = true };
