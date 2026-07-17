@@ -20,7 +20,6 @@ pub fn build(b: *std.Build) void {
         });
         exe.root_module.addImport("xit", xit_dep.module("xit"));
 
-        exe.global_base = 6560;
         exe.entry = .disabled;
         exe.rdynamic = true;
         exe.import_memory = false;
