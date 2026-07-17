@@ -69,7 +69,7 @@ fn tick(min_height: u32, max_width: u32) !void {
     const should_push = if (last_pushed_page_maybe) |lp| !lp.eql(current_page) else true;
     if (should_push) {
         last_pushed_page_maybe = current_page;
-        const url = try current_page.urlAlloc(&page_arena);
+        const url = try current_page.toUrl(&page_arena);
         _replaceState(url.ptr, @intCast(url.len));
     }
 
@@ -129,7 +129,7 @@ fn onKeyDown(key_code: u32) !void {
         if (root_ptr.getFocus().grandchild_id) |gid| {
             // follow a cross-page link
             if (ui.crossPageLink(root_ptr.getFocus(), gid, session.data)) |route| {
-                const url = try route.urlAlloc(&page_arena);
+                const url = try route.toUrl(&page_arena);
                 _navigate(url.ptr, @intCast(url.len));
                 return;
             }
@@ -143,7 +143,7 @@ fn onMouseClick(focus_id: usize) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
     // follow a cross-page link
     if (ui.crossPageLink(root_ptr.getFocus(), focus_id, session.data)) |route| {
-        const url = try route.urlAlloc(&page_arena);
+        const url = try route.toUrl(&page_arena);
         _navigate(url.ptr, @intCast(url.len));
         return;
     }

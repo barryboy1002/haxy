@@ -353,7 +353,7 @@ pub const View = struct {
 fn windowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.RoutablePage.RefKind, name: []const u8) ![]const u8 {
     const encoded = try ui.urlEncodeRef(page_arena.allocator(), name);
     const route = ui.RoutablePage.repoRefsRoute(identity, kind, encoded) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
 
@@ -368,6 +368,6 @@ fn refLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.
     };
     const value = try ui.urlEncodeRef(aa, name);
     const route = ui.RoutablePage.repoFilesRoute(identity, ref_or_oid, value, "", 0) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(aa, "a:{s}", .{url});
 }

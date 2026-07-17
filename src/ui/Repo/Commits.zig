@@ -793,7 +793,7 @@ pub const View = struct {
 // `identity`, showing the selected commit's first `start` hunks (0 = default).
 fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8, start: usize) ![]const u8 {
     const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, start) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
 
@@ -801,7 +801,7 @@ fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: 
 // directory, within `identity` ("owner/name").
 fn filesObjectLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoFilesRoute(identity, .object, oid, "", 0) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
 
@@ -810,7 +810,7 @@ fn filesObjectLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, o
 // in-page (crossPageLink ignores it); the href is only followed with js off.
 fn commitRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, 0) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
 }
 

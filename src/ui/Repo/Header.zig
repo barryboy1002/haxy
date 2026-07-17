@@ -78,7 +78,7 @@ pub const View = struct {
         // (the bare route, so it resolves to the default branch).
         {
             const files_root_route = ui.RoutablePage.repoFilesRoute(identity, null, "", "", 0) orelse return error.RouteTooLong;
-            const title_link = try std.fmt.allocPrint(aa, "a:{s}", .{try files_root_route.urlAlloc(session.page_arena)});
+            const title_link = try std.fmt.allocPrint(aa, "a:{s}", .{try files_root_route.toUrl(session.page_arena)});
             var title_view = try ui.Title.View.init(allocator, &data.title);
             errdefer title_view.deinit(allocator);
             title_view.getFocus().focusable = true;
@@ -113,17 +113,17 @@ pub const View = struct {
         // both tabs link to the ref/oid this page is viewing, so switching tabs
         // keeps the same ref (the files tab opens at its root directory).
         const files_route = ui.RoutablePage.repoFilesRoute(identity, data.ref_or_oid, data.ref_or_oid_value, "", 0) orelse return error.RouteTooLong;
-        const files_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try files_route.urlAlloc(session.page_arena)});
+        const files_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try files_route.toUrl(session.page_arena)});
         const commits_route = ui.RoutablePage.repoCommitsRoute(identity, data.ref_or_oid, data.ref_or_oid_value, 0) orelse return error.RouteTooLong;
-        const commits_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try commits_route.urlAlloc(session.page_arena)});
+        const commits_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try commits_route.toUrl(session.page_arena)});
         const refs_route = ui.RoutablePage.repoRefsRoute(identity, .branch, "") orelse return error.RouteTooLong;
-        const refs_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try refs_route.urlAlloc(session.page_arena)});
+        const refs_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try refs_route.toUrl(session.page_arena)});
         const issues_route = ui.RoutablePage.repoIssuesRoute(identity, .open, data.issues_tag, "") orelse return error.RouteTooLong;
-        const issues_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try issues_route.urlAlloc(session.page_arena)});
+        const issues_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try issues_route.toUrl(session.page_arena)});
         const settings_route = ui.RoutablePage{ .repo_settings = Array.from(identity) orelse return error.RouteTooLong };
-        const settings_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try settings_route.urlAlloc(session.page_arena)});
+        const settings_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try settings_route.toUrl(session.page_arena)});
         const auth_route = ui.RoutablePage{ .repo_auth = Array.from(identity) orelse return error.RouteTooLong };
-        const auth_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try auth_route.urlAlloc(session.page_arena)});
+        const auth_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try auth_route.toUrl(session.page_arena)});
 
         // the tab matching the current page is focused initially; matching by
         // link (rather than position) keeps this robust to tab changes.

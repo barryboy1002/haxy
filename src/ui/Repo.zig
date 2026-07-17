@@ -20,7 +20,7 @@ pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
-const Array = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len);
+const Array = ui.RoutablePage.Array(ui.RoutablePage.repo_identity_max_len);
 
 header: Header,
 repo: evt.Repo,
@@ -33,10 +33,10 @@ auth: Auth,
 quit: Quit,
 // the full files route this page renders, mirrored into current_page when
 // the files tab is selected.
-route_name: Array,
+route_name: ui.RoutablePage.RepoFilesRoute,
 // the commits route this page renders ("owner/name/commits[/<oid>]"), mirrored
 // when the commits tab is selected.
-commits_route_name: Array,
+commits_route_name: ui.RoutablePage.RepoCommitsRoute,
 // "owner/name" alone, mirrored when the settings/auth tab is selected.
 identity: Array,
 
@@ -50,40 +50,46 @@ pub fn init(
     const DB = evt.AdminDB;
     const hash_kind = evt.admin_repo_opts.hash;
 
-    // every repo route's stored string starts with "owner/name"; the files and
-    // commits routes additionally encode a ref/oid (files also a directory).
+    // every repo route stores its identity as "owner/name" (or elides it in
+    // local mode); files and commits carry their remaining fields directly.
     const name_str: []const u8 = switch (route) {
-        .repo_files, .repo_settings, .repo_auth => |n| n.slice(),
-        .repo_commits => |c| c.slice(),
+        .repo_files => |f| f.name.slice(),
+        .repo_commits => |c| c.name.slice(),
+        .repo_settings, .repo_auth => |n| n.slice(),
         .repo_refs => |r| r.name.slice(),
         .repo_issues => |i| i.name.slice(),
         else => return error.UnexpectedRoute,
     };
-    const rf = ui.RoutablePage.RepoFiles.parse(name_str) orelse return error.NotFound;
-    const tag = std.meta.activeTag(route);
-
+    const repo_identity = ui.RoutablePage.RepoIdentity.parse(name_str) orelse return error.NotFound;
     // the files and commits tabs share one ref/oid: whichever the incoming route
     // names (it rides on the route's target tab), or the default branch when
     // neither tab is targeted. building both views at it keeps switching tabs
     // (even by key, without a reload) on the same ref. a null ref means the
     // default branch (Files/Commits.init resolve it). the directory and the diff
     // window only apply to their own tab.
-    const commits_ref = if (tag == .repo_commits) ui.RoutablePage.repoCommitsRef(name_str) else ui.RoutablePage.CommitsRef{ .ref_or_oid = null, .value = "", .start = 0 };
-    const requested_ref_or_oid: ?ui.RoutablePage.RefOrOid = switch (tag) {
-        .repo_files => rf.ref_kind,
-        .repo_commits => commits_ref.ref_or_oid,
+    const requested_ref_or_oid: ?ui.RoutablePage.RefOrOid = switch (route) {
+        .repo_files => |f| f.ref_kind,
+        .repo_commits => |c| c.ref_or_oid,
         else => null,
     };
-    const requested_ref_value: []const u8 = switch (tag) {
-        .repo_files => rf.ref_value,
-        .repo_commits => commits_ref.value,
+    const requested_ref_value: []const u8 = switch (route) {
+        .repo_files => |f| f.ref_value.slice(),
+        .repo_commits => |c| c.value.slice(),
         else => "",
     };
-    const files_dir = if (tag == .repo_files) rf.dir else "";
-    // 0 for non-files routes, whose tails parse as the bare root
-    const files_start = rf.start;
+    const files_dir = switch (route) {
+        .repo_files => |f| f.path.slice(),
+        else => "",
+    };
+    const files_start = switch (route) {
+        .repo_files => |f| f.start,
+        else => 0,
+    };
     // the hunk the commits view's selected commit's diff window starts at.
-    const commits_start = commits_ref.start;
+    const commits_start = switch (route) {
+        .repo_commits => |c| c.start,
+        else => 0,
+    };
     // the refs tab windows one column at a time: `refs_from` (a url-encoded
     // ref name) roots `refs_kind`'s column, the other stays at its first window.
     const refs_kind: ui.RoutablePage.RefKind = switch (route) {
@@ -128,7 +134,7 @@ pub fn init(
         owner_name = "";
     } else {
         const haxy_moment = session.haxy_moment orelse return error.NoMoment;
-        const found = (try evt.Repo.readByOwnerAndName(DB, hash_kind, haxy_moment, arena, rf.owner, rf.name)) orelse return error.NotFound;
+        const found = (try evt.Repo.readByOwnerAndName(DB, hash_kind, haxy_moment, arena, repo_identity.owner, repo_identity.name)) orelse return error.NotFound;
         repo = found.repo;
 
         // resolve the creating user so the header can show their name to the left
@@ -166,10 +172,10 @@ pub fn init(
                             const is_local = session.local != null;
                             if (is_local) try evt.syncLocalEvents(repo_kind, opened.self_repo_opts, io, gpa, opened);
                             break :blk .{
-                                try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_start),
-                                try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, requested_ref_or_oid, requested_ref_value, commits_start),
-                                try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, rf.identity, refs_kind, refs_from),
-                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, is_local, rf.identity, issues_tag, issues_selected, issues_view),
+                                try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_start),
+                                try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, commits_start),
+                                try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, refs_kind, refs_from),
+                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, is_local, repo_identity.identity, issues_tag, issues_selected, issues_view),
                             };
                         },
                     }
@@ -178,10 +184,10 @@ pub fn init(
         }
         const aa = arena.allocator();
         break :blk .{
-            try Files.emptyResult(aa, rf.identity, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
-            try Commits.emptyResult(aa, rf.identity, requested_ref_or_oid orelse .branch, requested_ref_value),
-            try Refs.emptyResult(arena, rf.identity, refs_kind, refs_from),
-            try Issues.emptyResult(aa, rf.identity, issues_tag, issues_selected, issues_view),
+            try Files.emptyResult(aa, repo_identity.identity, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
+            try Commits.emptyResult(aa, repo_identity.identity, requested_ref_or_oid orelse .branch, requested_ref_value),
+            try Refs.emptyResult(arena, repo_identity.identity, refs_kind, refs_from),
+            try Issues.emptyResult(aa, repo_identity.identity, issues_tag, issues_selected, issues_view),
         };
     };
 
@@ -193,8 +199,8 @@ pub fn init(
     // the content window only applies to a selected file, so the bare
     // directory route drops it.
     const files_route_start = if (files.selected_file != null) files_start else 0;
-    const route_name = (ui.RoutablePage.repoFilesRoute(rf.identity, files.ref_or_oid, files.ref_or_oid_value, files_path, files_route_start) orelse return error.NotFound).repo_files;
-    const commits_route_name = (ui.RoutablePage.repoCommitsRoute(rf.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_start) orelse return error.NotFound).repo_commits;
+    const route_name = (ui.RoutablePage.repoFilesRoute(repo_identity.identity, files.ref_or_oid, files.ref_or_oid_value, files_path, files_route_start) orelse return error.NotFound).repo_files;
+    const commits_route_name = (ui.RoutablePage.repoCommitsRoute(repo_identity.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_start) orelse return error.NotFound).repo_commits;
 
     return .{
         // files and commits resolve the same ref, so either's serves the header,
@@ -210,7 +216,7 @@ pub fn init(
         .quit = Quit.init(),
         .route_name = route_name,
         .commits_route_name = commits_route_name,
-        .identity = Array.from(rf.identity) orelse return error.NotFound,
+        .identity = Array.from(repo_identity.identity) orelse return error.NotFound,
     };
 }
 
@@ -320,8 +326,14 @@ pub const View = struct {
                 // the issues tab mirrors this page's tag filter (issue urls
                 // themselves never carry the tag).
                 .repo_issues => self.session.data.current_page = ui.RoutablePage.repoIssuesRoute(self.data.identity.slice(), .open, self.data.issues.tag, "") orelse self.session.data.current_page,
-                .home_settings => self.session.data.current_page = .{ .repo_settings = self.data.identity },
-                .home_auth => self.session.data.current_page = .{ .repo_auth = self.data.identity },
+                .home_settings => {
+                    if (ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(self.data.identity.slice())) |identity|
+                        self.session.data.current_page = .{ .repo_settings = identity };
+                },
+                .home_auth => {
+                    if (ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(self.data.identity.slice())) |identity|
+                        self.session.data.current_page = .{ .repo_auth = identity };
+                },
                 // the quit tab is tty-only and not a route, so leave current_page
                 // alone (nothing to mirror into the url).
                 .quit => {},

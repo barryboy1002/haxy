@@ -885,7 +885,7 @@ pub const View = struct {
 // with an empty `id` this is the bare list link.
 fn issuesLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status: evt.Issue.Status, tag: []const u8, id: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoIssuesRoute(identity, status, tag, id) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
 
@@ -893,7 +893,7 @@ fn issuesLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status
 // href is only followed with js off.
 fn issueRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoIssuesRoute(identity, .open, "", id) orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
 }
 
@@ -901,7 +901,7 @@ fn issueRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: 
 fn tagLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status: evt.Issue.Status, tag: []const u8) ![]const u8 {
     const encoded = try ui.urlEncodeRef(page_arena.allocator(), tag);
     const route = ui.RoutablePage.repoIssuesRoute(identity, status, encoded, "") orelse return error.RouteTooLong;
-    const url = try route.urlAlloc(page_arena);
+    const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
 
@@ -922,7 +922,7 @@ pub const Header = struct {
         // a list tab per status, labeled with its listing's issue count
         for ([_]evt.Issue.Status{ .open, .closed }) |status| {
             const route = ui.RoutablePage.repoIssuesRoute(data.identity, status, data.tag, "") orelse return error.RouteTooLong;
-            const link = try std.fmt.allocPrint(aa, "ai:{s}", .{try route.urlAlloc(session.page_arena)});
+            const link = try std.fmt.allocPrint(aa, "ai:{s}", .{try route.toUrl(session.page_arena)});
             const label = try std.fmt.allocPrint(aa, "{s} ({d})", .{ @tagName(status), data.window(status).count });
             var text_box = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
@@ -939,7 +939,7 @@ pub const Header = struct {
         // tags tab, labeled with the active tag filter
         {
             const tags_route = ui.RoutablePage.repoIssuesTagsRoute(data.identity, data.tag) orelse return error.RouteTooLong;
-            const tags_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try tags_route.urlAlloc(session.page_arena)});
+            const tags_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try tags_route.toUrl(session.page_arena)});
             const label = if (data.tag.len == 0) "tags" else blk: {
                 const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.tag));
                 break :blk try std.fmt.allocPrint(aa, "tags ({s})", .{decoded});

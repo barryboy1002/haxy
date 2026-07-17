@@ -76,8 +76,8 @@ pub const RoutablePage = union(enum) {
     user_repos: struct { name: Array(evt.User.name_max_len), start: usize = 0 },
     user_settings: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
-    repo_files: Array(repo_route_max_len),
-    repo_commits: Array(repo_route_max_len),
+    repo_files: RepoFilesRoute,
+    repo_commits: RepoCommitsRoute,
     repo_refs: struct {
         name: Array(repo_route_max_len),
         kind: RefKind = .branch,
@@ -188,6 +188,7 @@ pub const RoutablePage = union(enum) {
     // pair means the default branch's files root. a local session's routes
     // elide the identity: "" at the bare root, else starting at the tail's "/".
     pub const repo_route_max_len = 1024;
+    pub const repo_identity_max_len = evt.User.name_max_len + 1 + evt.Repo.name_max_len;
 
     // true when a repo route's stored string elides its identity (local mode).
     // unambiguous because a full string always starts with its owner segment.
@@ -201,33 +202,20 @@ pub const RoutablePage = union(enum) {
     // caps a url-encoded ref name in a route (a longer name doesn't route).
     pub const ref_route_max_len = 512;
 
-    // the parts of a `.repo_files` route. all slices point into the route's
-    // stored string. ref_kind is null (and ref_value/dir empty) for the bare
-    // default-branch root; dir is "" at a ref's root.
-    pub const RepoFiles = struct {
+    // the identity stored by every repo route. Local routes elide it.
+    pub const RepoIdentity = struct {
         identity: []const u8, // "owner/name"
         owner: []const u8,
         name: []const u8,
-        start: usize, // the content window's first line, 0 = the first window
-        ref_kind: ?RefOrOid,
-        ref_value: []const u8,
-        dir: []const u8,
 
-        // parse a `.repo_files` route's stored string. a malformed tail reads
-        // as the bare default-branch root.
-        pub fn parse(s: []const u8) ?RepoFiles {
-            var result: RepoFiles = .{
+        pub fn parse(s: []const u8) ?RepoIdentity {
+            var result: RepoIdentity = .{
                 .identity = "",
                 .owner = "",
                 .name = "",
-                .start = 0,
-                .ref_kind = null,
-                .ref_value = "",
-                .dir = "",
             };
-            var rest: []const u8 = undefined;
             if (identityElided(s)) {
-                rest = if (s.len == 0) "" else s[1..];
+                return result;
             } else {
                 var id_segments = std.mem.splitScalar(u8, s, '/');
                 const owner = id_segments.next() orelse return null;
@@ -236,67 +224,51 @@ pub const RoutablePage = union(enum) {
                 result.identity = s[0 .. owner.len + 1 + name.len];
                 result.owner = owner;
                 result.name = name;
-                rest = id_segments.rest();
             }
-            var segments = std.mem.splitScalar(u8, rest, '/');
-            if (!std.mem.eql(u8, segments.next() orelse return result, files_seg)) return result;
-            var params = Params{};
-            params.scanPairs(&segments) catch return result;
-            result.start = params.start() orelse return result;
-            const ref = (params.ref() catch return result) orelse return result;
-            result.ref_kind = ref.kind;
-            result.ref_value = ref.value;
-            result.dir = pathValue(segments.rest()) orelse return result;
             return result;
         }
+    };
+
+    pub const RepoFilesRoute = struct {
+        name: Array(repo_identity_max_len),
+        ref_kind: ?RefOrOid = null,
+        ref_value: Array(ref_route_max_len) = .{},
+        path: Array(repo_route_max_len) = .{},
+        start: usize = 0,
+    };
+
+    pub const RepoCommitsRoute = struct {
+        name: Array(repo_identity_max_len),
+        ref_or_oid: ?RefOrOid = null,
+        value: Array(ref_route_max_len) = .{},
+        start: usize = 0,
     };
 
     // build a `.repo_files` route (a null ref_kind = the bare default-branch
     // root). null if the result doesn't fit the inline name.
     pub fn repoFilesRoute(identity: []const u8, ref_kind: ?RefOrOid, ref_value: []const u8, dir: []const u8, start: usize) ?RoutablePage {
-        if (ref_kind == null and start == 0) return .{ .repo_files = Array(repo_route_max_len).from(identity) orelse return null };
-        var buf: [repo_route_max_len]u8 = undefined;
-        var writer: std.Io.Writer = .fixed(&buf);
-        writer.print("{s}/" ++ files_seg, .{identity}) catch return null;
-        if (ref_kind) |kind| writer.print("/{s}:{s}", .{ @tagName(kind), ref_value }) catch return null;
-        if (start != 0) writer.print("/" ++ start_seg ++ "{d}", .{start}) catch return null;
-        if (dir.len != 0) writer.print("/" ++ path_seg ++ "{s}", .{dir}) catch return null;
-        return .{ .repo_files = Array(repo_route_max_len).from(writer.buffered()) orelse return null };
-    }
-
-    // the ref/oid a `.repo_commits` route's stored string walks from (null =
-    // the default branch), plus the diff window start. the value slices into `s`.
-    pub const CommitsRef = struct { ref_or_oid: ?RefOrOid, value: []const u8, start: usize };
-    pub fn repoCommitsRef(s: []const u8) CommitsRef {
-        var result = CommitsRef{ .ref_or_oid = null, .value = "", .start = 0 };
-        if (s.len == 0) return result;
-        var segments = std.mem.splitScalar(u8, s, '/');
-        if (identityElided(s)) {
-            _ = segments.next(); // the empty segment before the tail
-        } else {
-            _ = segments.next(); // owner
-            _ = segments.next(); // name
-        }
-        if (!std.mem.eql(u8, segments.next() orelse "", commits_seg)) return result;
-        var params = Params{};
-        params.scanPairs(&segments) catch return result;
-        result.start = params.start() orelse return result;
-        const ref = (params.ref() catch return result) orelse return result;
-        result.ref_or_oid = ref.kind;
-        result.value = ref.value;
-        return result;
+        if (ref_kind == null and (ref_value.len != 0 or dir.len != 0)) return null;
+        if (ref_kind != null and ref_value.len == 0 and dir.len != 0) return null;
+        return .{ .repo_files = .{
+            .name = Array(repo_identity_max_len).from(identity) orelse return null,
+            .ref_kind = ref_kind,
+            .ref_value = Array(ref_route_max_len).from(ref_value) orelse return null,
+            .path = Array(repo_route_max_len).from(dir) orelse return null,
+            .start = start,
+        } };
     }
 
     // build a `.repo_commits` route (a null ref_or_oid = the default branch).
     // always carries the `commits` marker so the bare route doesn't collide
     // with the files root.
     pub fn repoCommitsRoute(identity: []const u8, ref_or_oid: ?RefOrOid, value: []const u8, start: usize) ?RoutablePage {
-        var buf: [repo_route_max_len]u8 = undefined;
-        var writer: std.Io.Writer = .fixed(&buf);
-        writer.print("{s}/" ++ commits_seg, .{identity}) catch return null;
-        if (ref_or_oid) |kind| writer.print("/{s}:{s}", .{ @tagName(kind), value }) catch return null;
-        if (start != 0) writer.print("/" ++ start_seg ++ "{d}", .{start}) catch return null;
-        return .{ .repo_commits = Array(repo_route_max_len).from(writer.buffered()) orelse return null };
+        if (ref_or_oid == null and value.len != 0) return null;
+        return .{ .repo_commits = .{
+            .name = Array(repo_identity_max_len).from(identity) orelse return null,
+            .ref_or_oid = ref_or_oid,
+            .value = Array(ref_route_max_len).from(value) orelse return null,
+            .start = start,
+        } };
     }
 
     // build a `.repo_refs` route windowing `kind`'s column from the
@@ -366,7 +338,7 @@ pub const RoutablePage = union(enum) {
         };
     }
 
-    pub fn urlAlloc(self: RoutablePage, arena: *std.heap.ArenaAllocator) ![]const u8 {
+    pub fn toUrl(self: RoutablePage, arena: *std.heap.ArenaAllocator) ![]const u8 {
         return switch (self) {
             .home_users => |start| if (start == 0) @as([]const u8, "/users") else try std.fmt.allocPrint(arena.allocator(), "/users/" ++ start_seg ++ "{d}", .{start}),
             .home_repos => |start| if (start == 0) @as([]const u8, "/repos") else try std.fmt.allocPrint(arena.allocator(), "/repos/" ++ start_seg ++ "{d}", .{start}),
@@ -378,8 +350,24 @@ pub const RoutablePage = union(enum) {
                 try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/repos/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
             .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name.slice()}),
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
-            .repo_files => |name| try repoUrlPath(arena, name.slice()),
-            .repo_commits => |name| try repoUrlPath(arena, name.slice()),
+            .repo_files => |f| blk: {
+                const prefix = try repoUrlPrefix(arena, f.name.slice());
+                if (f.ref_kind == null and f.start == 0) break :blk if (prefix.len == 0) "/" else prefix;
+                var out: std.Io.Writer.Allocating = .init(arena.allocator());
+                try out.writer.print("{s}/" ++ files_seg, .{prefix});
+                if (f.ref_kind) |kind| if (f.ref_value.len != 0) try out.writer.print("/{s}:{s}", .{ @tagName(kind), f.ref_value.slice() });
+                if (f.start != 0) try out.writer.print("/" ++ start_seg ++ "{d}", .{f.start});
+                if (f.path.len != 0) try out.writer.print("/" ++ path_seg ++ "{s}", .{f.path.slice()});
+                break :blk out.written();
+            },
+            .repo_commits => |c| blk: {
+                const prefix = try repoUrlPrefix(arena, c.name.slice());
+                var out: std.Io.Writer.Allocating = .init(arena.allocator());
+                try out.writer.print("{s}/" ++ commits_seg, .{prefix});
+                if (c.ref_or_oid) |kind| if (c.value.len != 0) try out.writer.print("/{s}:{s}", .{ @tagName(kind), c.value.slice() });
+                if (c.start != 0) try out.writer.print("/" ++ start_seg ++ "{d}", .{c.start});
+                break :blk out.written();
+            },
             .repo_refs => |r| blk: {
                 const prefix = try repoUrlPrefix(arena, r.name.slice());
                 break :blk if (r.from.len == 0)
@@ -399,29 +387,6 @@ pub const RoutablePage = union(enum) {
             },
             .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/settings", .{try repoUrlPrefix(arena, name.slice())}),
             .repo_auth => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/auth", .{try repoUrlPrefix(arena, name.slice())}),
-        };
-    }
-
-    // the url path a files/commits route's stored string (identity + tail) maps
-    // to: "/repo/<string>", or the tail itself when the identity is elided
-    // ("/" at the bare root).
-    fn repoUrlPath(arena: *std.heap.ArenaAllocator, name: []const u8) ![]const u8 {
-        if (identityElided(name)) return if (name.len == 0) "/" else name;
-        return std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{name});
-    }
-
-    // the url prefix for a repo route's identity: "/repo/<identity>", or ""
-    // when the identity is elided.
-    fn repoUrlPrefix(arena: *std.heap.ArenaAllocator, identity: []const u8) ![]const u8 {
-        if (identity.len == 0) return "";
-        return std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{identity});
-    }
-
-    pub fn parent(self: RoutablePage) PageKind {
-        return switch (self) {
-            .home_users, .home_repos, .home_settings, .home_auth => .home,
-            .user_repos, .user_settings, .user_auth => .user,
-            .repo_files, .repo_commits, .repo_refs, .repo_issues, .repo_settings, .repo_auth => .repo,
         };
     }
 
@@ -468,6 +433,21 @@ pub const RoutablePage = union(enum) {
         if (std.mem.eql(u8, path, "/")) return repoFilesRoute("", null, "", "", 0);
         if (path.len < 2 or path[0] != '/') return null;
         return repoSubRoute("", path[1..]);
+    }
+
+    // the url prefix for a repo route's identity: "/repo/<identity>", or ""
+    // when the identity is elided.
+    fn repoUrlPrefix(arena: *std.heap.ArenaAllocator, identity: []const u8) ![]const u8 {
+        if (identity.len == 0) return "";
+        return std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{identity});
+    }
+
+    pub fn parent(self: RoutablePage) PageKind {
+        return switch (self) {
+            .home_users, .home_repos, .home_settings, .home_auth => .home,
+            .user_repos, .user_settings, .user_auth => .user,
+            .repo_files, .repo_commits, .repo_refs, .repo_issues, .repo_settings, .repo_auth => .repo,
+        };
     }
 
     // the dir a trailing "path:<dir>" names: the raw remainder ("" when
@@ -543,8 +523,15 @@ pub const RoutablePage = union(enum) {
             .user_repos => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_repos.name.slice()) and a_u.start == b.user_repos.start,
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
-            .repo_files => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_files.slice()),
-            .repo_commits => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_commits.slice()),
+            .repo_files => |a_f| std.mem.eql(u8, a_f.name.slice(), b.repo_files.name.slice()) and
+                a_f.ref_kind == b.repo_files.ref_kind and
+                std.mem.eql(u8, a_f.ref_value.slice(), b.repo_files.ref_value.slice()) and
+                std.mem.eql(u8, a_f.path.slice(), b.repo_files.path.slice()) and
+                a_f.start == b.repo_files.start,
+            .repo_commits => |a_c| std.mem.eql(u8, a_c.name.slice(), b.repo_commits.name.slice()) and
+                a_c.ref_or_oid == b.repo_commits.ref_or_oid and
+                std.mem.eql(u8, a_c.value.slice(), b.repo_commits.value.slice()) and
+                a_c.start == b.repo_commits.start,
             .repo_refs => |a_r| std.mem.eql(u8, a_r.name.slice(), b.repo_refs.name.slice()) and a_r.kind == b.repo_refs.kind and std.mem.eql(u8, a_r.from.slice(), b.repo_refs.from.slice()),
             .repo_issues => |a_i| std.mem.eql(u8, a_i.name.slice(), b.repo_issues.name.slice()) and
                 std.mem.eql(u8, a_i.tag.slice(), b.repo_issues.tag.slice()) and
@@ -1766,7 +1753,7 @@ pub const Footer = struct {
 
         _ = self.arena.reset(.retain_capacity);
         const aa = self.arena.allocator();
-        const path = self.session.data.current_page.urlAlloc(&self.arena) catch return;
+        const path = self.session.data.current_page.toUrl(&self.arena) catch return;
         const text = if (self.session.web_port) |port|
             std.fmt.allocPrint(aa, "http://localhost:{d}{s}", .{ port, path }) catch return
         else

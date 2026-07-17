@@ -577,7 +577,7 @@ pub const View = struct {
         const page_arena = self.session.page_arena;
         const path = try childDir(page_arena.allocator(), self.data.dir, entry.name);
         const route = ui.RoutablePage.repoFilesRoute(self.data.identity, self.data.ref_or_oid, self.data.ref_or_oid_value, path, target_start) orelse return error.RouteTooLong;
-        const link = try std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.urlAlloc(page_arena)});
+        const link = try std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
         var tb = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
@@ -799,14 +799,14 @@ fn selectedFileIndex(data: *const Self) ?usize {
 // following it navigates to that directory's listing.
 fn dirLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoFilesRoute(data.identity, data.ref_or_oid, data.ref_or_oid_value, path, 0) orelse return error.RouteTooLong;
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.urlAlloc(page_arena)});
+    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
 }
 
 // an "ai:" link to the file's route: crossPageLink ignores it, so a wasm click
 // selects the row in place and shows its contents in the detail pane.
 fn fileLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8) ![]const u8 {
     const route = ui.RoutablePage.repoFilesRoute(data.identity, data.ref_or_oid, data.ref_or_oid_value, path, 0) orelse return error.RouteTooLong;
-    return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{try route.urlAlloc(page_arena)});
+    return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{try route.toUrl(page_arena)});
 }
 
 // `dir`/`name`, or just `name` at the root.
