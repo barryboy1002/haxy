@@ -25,7 +25,7 @@ pub fn build(b: *std.Build) void {
         exe.rdynamic = true;
         exe.import_memory = false;
         exe.export_memory = true;
-        exe.stack_size = std.wasm.page_size;
+        exe.stack_size = std.wasm.page_size * 4;
 
         // start small and let the allocator grow on demand up to wasm32's
         // architectural ceiling (65536 pages = 4 GiB)
