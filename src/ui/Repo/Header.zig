@@ -114,7 +114,7 @@ pub const View = struct {
         // keeps the same ref (the files tab opens at its root directory).
         const files_route = ui.RoutablePage.repoFilesRoute(identity, data.ref_or_oid, data.ref_or_oid_value, "", 0) orelse return error.RouteTooLong;
         const files_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try files_route.toUrl(session.page_arena)});
-        const commits_route = ui.RoutablePage.repoCommitsRoute(identity, data.ref_or_oid, data.ref_or_oid_value, 0) orelse return error.RouteTooLong;
+        const commits_route = ui.RoutablePage.repoCommitsRoute(identity, data.ref_or_oid, data.ref_or_oid_value, 0, "") orelse return error.RouteTooLong;
         const commits_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try commits_route.toUrl(session.page_arena)});
         const refs_route = ui.RoutablePage.repoRefsRoute(identity, .branch, "") orelse return error.RouteTooLong;
         const refs_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try refs_route.toUrl(session.page_arena)});

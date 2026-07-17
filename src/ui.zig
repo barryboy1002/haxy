@@ -179,8 +179,8 @@ pub const RoutablePage = union(enum) {
     // the `Params` key spellings the url emitters use
     const tag_filter_seg = @tagName(Params.ParamKey.tag) ++ ":";
     const start_seg = @tagName(Params.ParamKey.start) ++ ":";
-    // marks a files route's trailing path: the value is the raw remainder of
-    // the url, so it must come last
+    // marks a files or commits route's trailing path: the value is the raw
+    // remainder of the url, so it must come last
     const path_seg = "path:";
 
     // a repo route is "username/reponame", optionally followed by the files
@@ -242,6 +242,8 @@ pub const RoutablePage = union(enum) {
         ref_or_oid: ?RefOrOid = null,
         value: Array(ref_route_max_len) = .{},
         start: usize = 0,
+        // the file the diff pane is filtered to ("" = every file).
+        path: Array(repo_route_max_len) = .{},
     };
 
     // build a `.repo_files` route (a null ref_kind = the bare default-branch
@@ -260,14 +262,16 @@ pub const RoutablePage = union(enum) {
 
     // build a `.repo_commits` route (a null ref_or_oid = the default branch).
     // always carries the `commits` marker so the bare route doesn't collide
-    // with the files root.
-    pub fn repoCommitsRoute(identity: []const u8, ref_or_oid: ?RefOrOid, value: []const u8, start: usize) ?RoutablePage {
-        if (ref_or_oid == null and value.len != 0) return null;
+    // with the files root. a non-empty `path` filters the diff pane to that
+    // file and requires a ref.
+    pub fn repoCommitsRoute(identity: []const u8, ref_or_oid: ?RefOrOid, value: []const u8, start: usize, path: []const u8) ?RoutablePage {
+        if (ref_or_oid == null and (value.len != 0 or path.len != 0)) return null;
         return .{ .repo_commits = .{
             .name = Array(repo_identity_max_len).from(identity) orelse return null,
             .ref_or_oid = ref_or_oid,
             .value = Array(ref_route_max_len).from(value) orelse return null,
             .start = start,
+            .path = Array(repo_route_max_len).from(path) orelse return null,
         } };
     }
 
@@ -366,6 +370,7 @@ pub const RoutablePage = union(enum) {
                 try out.writer.print("{s}/" ++ commits_seg, .{prefix});
                 if (c.ref_or_oid) |kind| if (c.value.len != 0) try out.writer.print("/{s}:{s}", .{ @tagName(kind), c.value.slice() });
                 if (c.start != 0) try out.writer.print("/" ++ start_seg ++ "{d}", .{c.start});
+                if (c.path.len != 0) try out.writer.print("/" ++ path_seg ++ "{s}", .{c.path.slice()});
                 break :blk out.written();
             },
             .repo_refs => |r| blk: {
@@ -506,11 +511,13 @@ pub const RoutablePage = union(enum) {
             return repoFilesRoute(pair, ref.kind, ref.value, dir, start);
         }
         if (std.mem.eql(u8, tab, commits_seg)) {
-            const word = params.scanTail(&segments) catch return null;
-            if (word != null or !params.only(ref_tab_keys)) return null;
+            params.scanPairs(&segments) catch return null;
+            if (!params.only(ref_tab_keys)) return null;
             const start = params.start() orelse return null;
-            const ref = (params.ref() catch return null) orelse return repoCommitsRoute(pair, null, "", start);
-            return repoCommitsRoute(pair, ref.kind, ref.value, start);
+            const file = pathValue(segments.rest()) orelse return null;
+            const ref = (params.ref() catch return null) orelse
+                return if (file.len == 0) repoCommitsRoute(pair, null, "", start, "") else null;
+            return repoCommitsRoute(pair, ref.kind, ref.value, start, file);
         }
         return null; // unknown sub-path
     }
@@ -531,7 +538,8 @@ pub const RoutablePage = union(enum) {
             .repo_commits => |a_c| std.mem.eql(u8, a_c.name.slice(), b.repo_commits.name.slice()) and
                 a_c.ref_or_oid == b.repo_commits.ref_or_oid and
                 std.mem.eql(u8, a_c.value.slice(), b.repo_commits.value.slice()) and
-                a_c.start == b.repo_commits.start,
+                a_c.start == b.repo_commits.start and
+                std.mem.eql(u8, a_c.path.slice(), b.repo_commits.path.slice()),
             .repo_refs => |a_r| std.mem.eql(u8, a_r.name.slice(), b.repo_refs.name.slice()) and a_r.kind == b.repo_refs.kind and std.mem.eql(u8, a_r.from.slice(), b.repo_refs.from.slice()),
             .repo_issues => |a_i| std.mem.eql(u8, a_i.name.slice(), b.repo_issues.name.slice()) and
                 std.mem.eql(u8, a_i.tag.slice(), b.repo_issues.tag.slice()) and

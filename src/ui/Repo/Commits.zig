@@ -44,6 +44,8 @@ identity: []const u8,
 // didn't name one), so the page can canonicalize its url to it.
 ref_or_oid: ui.RoutablePage.RefOrOid,
 ref_or_oid_value: []const u8,
+// the file the top commit's diff is filtered to ("" = every file).
+path: []const u8 = "",
 commits: []const Commit,
 // the first oid of the next page, or null when this is the last page.
 next_start: ?[]const u8,
@@ -69,6 +71,7 @@ pub fn init(
     requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
     requested_value: []const u8,
     start: usize,
+    path: []const u8,
 ) !Self {
     const aa = arena.allocator();
     const hex_len = ui.ResolvedRefOrOid(repo_kind, repo_opts).hex_len;
@@ -78,7 +81,7 @@ pub fn init(
     // (NotFound -> 404); the default-branch path falls through to empty.
     const resolved = (try ui.ResolvedRefOrOid(repo_kind, repo_opts).init(repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null) return error.NotFound;
-        return emptyResult(aa, identity, .branch, requested_value);
+        return emptyResult(aa, identity, .branch, requested_value, path);
     };
     var start_arr = [1][hex_len]u8{resolved.oid};
     const start_oids: []const [hex_len]u8 = start_arr[0..1];
@@ -91,7 +94,7 @@ pub fn init(
     var count: usize = 0;
     var next_start: ?[]const u8 = null;
     {
-        var iter = repo.log(io, gpa, start_oids) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value);
+        var iter = repo.log(io, gpa, start_oids) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
         defer iter.deinit();
         while (try iter.next(gpa)) |commit_object| {
             defer commit_object.deinit();
@@ -121,8 +124,9 @@ pub fn init(
         for (buf[0..count], oids[0..count], 0..) |*commit, oid, i| {
             // the selected commit (the first, == start_oid) shows the window the
             // url asks for; the rest show their first window.
+            // the path filter only applies to the top commit (the walk root).
             const window_start = if (i == 0) start else 0;
-            const rendered = renderCommitDiff(repo_kind, repo_opts, io, gpa, aa, repo, oid, window_start, diff_page) catch
+            const rendered = renderCommitDiff(repo_kind, repo_opts, io, gpa, aa, repo, oid, window_start, diff_page, if (i == 0) path else "") catch
                 RenderedDiff{ .hunks = &.{}, .has_prev = false, .has_more = false };
             commit.hunks = rendered.hunks;
             commit.window_start = window_start;
@@ -135,6 +139,7 @@ pub fn init(
         .identity = try aa.dupe(u8, identity),
         .ref_or_oid = resolved.ref_or_oid,
         .ref_or_oid_value = resolved.value,
+        .path = try aa.dupe(u8, path),
         .commits = try aa.dupe(Commit, buf[0..count]),
         .next_start = next_start,
         .header = try Header.init(aa, resolved.ref_or_oid, resolved.value),
@@ -142,11 +147,12 @@ pub fn init(
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
-pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8) !Self {
+pub fn emptyResult(aa: std.mem.Allocator, identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8, path: []const u8) !Self {
     return .{
         .identity = try aa.dupe(u8, identity),
         .ref_or_oid = ref_or_oid,
         .ref_or_oid_value = try aa.dupe(u8, value),
+        .path = try aa.dupe(u8, path),
         .commits = &.{},
         .next_start = null,
         .header = try Header.init(aa, ref_or_oid, value),
@@ -161,6 +167,7 @@ const RenderedDiff = struct {
 
 // render the window [start, start+len) of a commit's diff against its first
 // parent into `arena`-owned hunks. has_prev/has_more flag adjacent windows.
+// a non-empty `path` filters to that file, so the window indexes its hunks.
 fn renderCommitDiff(
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
@@ -171,6 +178,7 @@ fn renderCommitDiff(
     oid: [xit.hash.hexLen(repo_opts.hash)]u8,
     start: usize,
     len: usize,
+    path: []const u8,
 ) !RenderedDiff {
     const empty = RenderedDiff{ .hunks = &.{}, .has_prev = false, .has_more = false };
 
@@ -195,6 +203,8 @@ fn renderCommitDiff(
     file_loop: while (file_iter.next() catch null) |pair_val| {
         var pair = pair_val;
         defer pair.deinit();
+
+        if (path.len != 0 and !std.mem.eql(u8, pair.path, path)) continue;
 
         var hunk_iter = df.HunkIterator(repo_kind, repo_opts).init(gpa, &pair.a, &pair.b) catch continue;
         defer hunk_iter.deinit(gpa);
@@ -337,10 +347,10 @@ pub const View = struct {
                     // an in-page "ai:" anchor so a commit row is clickable with
                     // js off (the browser follows it, rooting the list there);
                     // with wasm the click just selects it and swaps the diff pane.
-                    try addRow(allocator, &list_box, commit.message, try commitRowLink(session.page_arena, data.identity, commit.oid));
+                    try addRow(allocator, &list_box, commit.message, try commitRowLink(session.page_arena, data.identity, commit.oid, ""));
                 }
                 if (data.next_start) |next| {
-                    try addRow(allocator, &list_box, "next →", try commitsLink(session.page_arena, data.identity, next, 0));
+                    try addRow(allocator, &list_box, "next →", try commitsLink(session.page_arena, data.identity, next, 0, ""));
                 }
                 if (list_box.children.count() > 0) list_box.getFocus().child_id = list_box.children.keys()[0];
                 break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .box = list_box }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
@@ -409,20 +419,23 @@ pub const View = struct {
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
     }
 
-    // a focusable file-path label shown above the first hunk of each file.
-    fn addPathBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), path: []const u8) !void {
-        _ = self;
+    // a focusable file-path label shown above the first hunk of each file. it
+    // links to this page filtered to that file, so activating it navigates
+    // there.
+    fn addPathBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), path: []const u8, oid: []const u8) !void {
+        const link = try commitsLink(self.session.page_arena, self.data.identity, oid, 0, path);
         var tb = try wgt.TextBox(ui.Widget).init(allocator, path, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
+        tb.getFocus().kind = .{ .custom = link };
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
     }
 
     // a focusable window-navigation row ("previous"/"next"). it's a link to this
     // commit's route at `target_start`, so activating it (the host follows the
     // "a:" link) reloads the page on the adjacent window — same on TUI and web.
-    fn addNavLink(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, oid: []const u8, target_start: usize) !void {
-        const link = try commitsLink(self.session.page_arena, self.data.identity, oid, target_start);
+    fn addNavLink(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, oid: []const u8, target_start: usize, path: []const u8) !void {
+        const link = try commitsLink(self.session.page_arena, self.data.identity, oid, target_start, path);
         var tb = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
@@ -498,7 +511,7 @@ pub const View = struct {
                 if (self.selectedCommitIndex()) |sel| {
                     // mirror the commit's current diff window so the url stays
                     // linkable (0 for any commit but the windowed start one).
-                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, .object, self.data.commits[sel].oid, self.data.commits[sel].window_start)) |route|
+                    if (ui.RoutablePage.repoCommitsRoute(self.data.identity, .object, self.data.commits[sel].oid, self.data.commits[sel].window_start, if (sel == 0) self.data.path else "")) |route|
                         self.session.data.current_page = route;
                 }
             }
@@ -562,23 +575,34 @@ pub const View = struct {
 
     fn populateDiff(self: *View, allocator: std.mem.Allocator, sel: usize) !void {
         const commit = self.data.commits[sel];
+        // the path filter only applies to the top commit (the walk root).
+        const path = if (sel == 0) self.data.path else "";
         const inner = self.diffInner();
 
         for (inner.children.values()) |*child| child.widget.deinit(allocator);
         inner.children.clearAndFree(allocator);
         inner.getFocus().child_id = null;
 
-        // the first row always links to viewing the repo's files at this commit.
-        try self.addViewFilesLink(allocator, inner, commit.oid);
+        if (path.len != 0) {
+            // the file's path, then a row returning to this commit's unfiltered diff.
+            var label = try wgt.TextBox(ui.Widget).init(allocator, path, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
+            errdefer label.deinit(allocator);
+            label.getFocus().focusable = true;
+            try inner.children.put(allocator, label.getFocus().id, .{ .widget = .{ .text_box = label }, .rect = null, .min_size = null });
+            try self.addNavLink(allocator, inner, "← all files", commit.oid, 0, "");
+        } else {
+            // the first row always links to viewing the repo's files at this commit.
+            try self.addViewFilesLink(allocator, inner, commit.oid);
+        }
 
         // a "previous" row and a "next" row at the bottom reload the page on the
         // adjacent diff window.
-        if (commit.has_prev) try self.addNavLink(allocator, inner, "← previous", commit.oid, commit.window_start -| diff_page);
+        if (commit.has_prev) try self.addNavLink(allocator, inner, "← previous", commit.oid, commit.window_start -| diff_page, path);
         for (commit.hunks) |hunk| {
-            if (hunk.path) |path| try self.addPathBox(allocator, inner, path);
+            if (path.len == 0) if (hunk.path) |hunk_path| try self.addPathBox(allocator, inner, hunk_path, commit.oid);
             try self.addHunkBox(allocator, inner, hunk.lines);
         }
-        if (commit.has_more) try self.addNavLink(allocator, inner, "next →", commit.oid, commit.window_start + diff_page);
+        if (commit.has_more) try self.addNavLink(allocator, inner, "next →", commit.oid, commit.window_start + diff_page, path);
 
         // point the pane at its first row so focus recovery can land here.
         if (inner.children.count() > 0) inner.getFocus().child_id = inner.children.keys()[0];
@@ -613,7 +637,7 @@ pub const View = struct {
             .enter => if (self.selectedCommitIndex() != null)
                 try self.focusDiff(root_focus)
             else if (self.data.next_start) |next| {
-                if (ui.RoutablePage.repoCommitsRoute(self.data.identity, .object, next, 0)) |route|
+                if (ui.RoutablePage.repoCommitsRoute(self.data.identity, .object, next, 0, "")) |route|
                     try self.session.navigate(route);
             },
             .arrow_right => try self.focusDiff(root_focus),
@@ -790,9 +814,10 @@ pub const View = struct {
 };
 
 // the "a:" navigation link for the commits page walking from commit `oid` within
-// `identity`, showing the selected commit's first `start` hunks (0 = default).
-fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8, start: usize) ![]const u8 {
-    const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, start) orelse return error.RouteTooLong;
+// `identity`, windowing the selected commit's diff from hunk `start`, filtered
+// to `path` ("" = every file).
+fn commitsLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8, start: usize, path: []const u8) ![]const u8 {
+    const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, start, path) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
@@ -808,8 +833,8 @@ fn filesObjectLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, o
 // the in-page "ai:" anchor for selecting `oid` in `identity`'s commit list. it
 // points at the same route as commitsLink but the "ai:" prefix keeps wasm clicks
 // in-page (crossPageLink ignores it); the href is only followed with js off.
-fn commitRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8) ![]const u8 {
-    const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, 0) orelse return error.RouteTooLong;
+fn commitRowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, oid: []const u8, path: []const u8) ![]const u8 {
+    const route = ui.RoutablePage.repoCommitsRoute(identity, .object, oid, 0, path) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
 }

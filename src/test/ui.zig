@@ -25,7 +25,7 @@ test "commits list next row is a cross-page link" {
     };
 
     var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = true };
-    session.data.current_page = ui.RoutablePage.repoCommitsRoute(identity, .object, oid0, 0).?;
+    session.data.current_page = ui.RoutablePage.repoCommitsRoute(identity, .object, oid0, 0, "").?;
 
     var view = try Commits.View.init(allocator, &data, &session);
     defer view.deinit(allocator);
@@ -56,7 +56,7 @@ test "encoded ref name survives the commits url round-trip" {
     const RP = ui.RoutablePage;
 
     // the route layer holds the value already url-encoded ("feature%2Ffoo").
-    const route = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", 0).?;
+    const route = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", 0, "").?;
     const url = try route.toUrl(&arena);
     try std.testing.expectEqualStrings("/repo/alice/ziglings/commits/branch:feature%2Ffoo", url);
 
@@ -67,3 +67,4 @@ test "encoded ref name survives the commits url round-trip" {
     try std.testing.expectEqual(RP.RefOrOid.branch, parsed_route.ref_or_oid.?);
     try std.testing.expectEqualStrings("feature%2Ffoo", parsed_route.value.slice());
 }
+

@@ -90,6 +90,11 @@ pub fn init(
         .repo_commits => |c| c.start,
         else => 0,
     };
+    // the file the commits view's diff pane is filtered to ("" = every file).
+    const commits_path = switch (route) {
+        .repo_commits => |c| c.path.slice(),
+        else => "",
+    };
     // the refs tab windows one column at a time: `refs_from` (a url-encoded
     // ref name) roots `refs_kind`'s column, the other stays at its first window.
     const refs_kind: ui.RoutablePage.RefKind = switch (route) {
@@ -173,7 +178,7 @@ pub fn init(
                             if (is_local) try evt.syncLocalEvents(repo_kind, opened.self_repo_opts, io, gpa, opened);
                             break :blk .{
                                 try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_start),
-                                try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, commits_start),
+                                try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, commits_start, commits_path),
                                 try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, refs_kind, refs_from),
                                 try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, is_local, repo_identity.identity, issues_tag, issues_selected, issues_view),
                             };
@@ -185,7 +190,7 @@ pub fn init(
         const aa = arena.allocator();
         break :blk .{
             try Files.emptyResult(aa, repo_identity.identity, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
-            try Commits.emptyResult(aa, repo_identity.identity, requested_ref_or_oid orelse .branch, requested_ref_value),
+            try Commits.emptyResult(aa, repo_identity.identity, requested_ref_or_oid orelse .branch, requested_ref_value, commits_path),
             try Refs.emptyResult(arena, repo_identity.identity, refs_kind, refs_from),
             try Issues.emptyResult(aa, repo_identity.identity, issues_tag, issues_selected, issues_view),
         };
@@ -200,7 +205,7 @@ pub fn init(
     // directory route drops it.
     const files_route_start = if (files.selected_file != null) files_start else 0;
     const route_name = (ui.RoutablePage.repoFilesRoute(repo_identity.identity, files.ref_or_oid, files.ref_or_oid_value, files_path, files_route_start) orelse return error.NotFound).repo_files;
-    const commits_route_name = (ui.RoutablePage.repoCommitsRoute(repo_identity.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_start) orelse return error.NotFound).repo_commits;
+    const commits_route_name = (ui.RoutablePage.repoCommitsRoute(repo_identity.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_start, commits.path) orelse return error.NotFound).repo_commits;
 
     return .{
         // files and commits resolve the same ref, so either's serves the header,
