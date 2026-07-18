@@ -16,19 +16,20 @@ const inp = @import("../input.zig");
 // how many lines of a file's content one window shows before a "next" link.
 const file_page = 2000;
 
-// the most directory entries (files + dirs) we read from a tree and display.
-// each file's content is also loaded (windowed), so an unbounded directory could
-// add up to a lot of memory; entries past this limit are ignored.
+// how many files in a directory get their content preloaded (windowed) so
+// selecting them shows contents without a reload. every entry is still listed;
+// files past this limit carry an "a:" link instead, so activating them reloads
+// the page with that file selected (and its content loaded as the selection).
 //
-// TODO: this caps what we keep, but `tr.Tree.init` still flattens the entire
-// repo tree (every path) into memory before we ever apply the cap. read the
-// directory level-by-level instead, using `obj.Object` to load one tree object
-// at a time: initCommit -> root tree, then descend each `dir` segment, reading
-// only the immediate entries of the target tree (and applying max_entries
-// there). that bounds the work to O(depth) tree objects rather than the whole
-// repo. it's doable entirely in haxy (no xit change) — `obj.Object(...).init`
-// on a tree oid already returns just that tree's immediate children.
-const max_entries = 100;
+// TODO: `tr.Tree.init` still flattens the entire repo tree (every path) into
+// memory before we ever filter to one directory. read the directory
+// level-by-level instead, using `obj.Object` to load one tree object at a
+// time: initCommit -> root tree, then descend each `dir` segment, reading
+// only the immediate entries of the target tree. that bounds the work to
+// O(depth) tree objects rather than the whole repo. it's doable entirely in
+// haxy (no xit change) — `obj.Object(...).init` on a tree oid already returns
+// just that tree's immediate children.
+const max_preloaded = 100;
 
 // one entry in the directory currently being viewed.
 pub const Entry = struct {
@@ -45,6 +46,9 @@ pub const Entry = struct {
     window_start: usize = 0,
     // whether more lines exist after this window.
     has_more: bool = false,
+    // whether this file's content was read; unloaded files load via their
+    // "a:" link.
+    loaded: bool = false,
 };
 
 // "owner/name", so the view can build /repo/owner/name/files/... links.
@@ -123,8 +127,6 @@ pub fn init(
         const slash = std.mem.indexOfScalar(u8, rel, '/');
         const name = if (slash) |s| rel[0..s] else rel;
         const is_dir = slash != null;
-        // stop taking new entries once we hit the cap; the rest are ignored.
-        if (children.count() >= max_entries and !children.contains(name)) continue;
         const gop = try children.getOrPut(gpa, name);
         if (!gop.found_existing) gop.value_ptr.* = is_dir else if (is_dir) gop.value_ptr.* = true;
     }
@@ -140,23 +142,29 @@ pub fn init(
     // arena) so the detail pane can show them without another lookup.
     const entries = try aa.alloc(Entry, children.count());
     var i: usize = 0;
+    var preloaded: usize = 0;
     for ([_]bool{ true, false }) |want_dir| {
         for (children.keys(), children.values()) |name, is_dir| {
             if (is_dir != want_dir) continue;
             var entry: Entry = .{ .name = try aa.dupe(u8, name), .is_dir = is_dir };
             if (!is_dir) {
-                const file_path = try childDir(aa, dir, name);
-                if (tree.entries.get(file_path)) |tree_entry| {
-                    // only the route's selected file paginates; the rest show
-                    // their first window (for the in-page detail when selected).
-                    const is_selected = if (selected_file) |sf| std.mem.eql(u8, sf, name) else false;
-                    const window_start = if (is_selected) start else 0;
-                    const content = readFileContent(repo_kind, repo_opts, state, io, gpa, aa, file_path, tree_entry, window_start) catch
-                        FileContent{ .lines = &.{} };
-                    entry.lines = content.lines;
-                    entry.is_binary = content.is_binary;
-                    entry.window_start = window_start;
-                    entry.has_more = content.has_more;
+                // only the route's selected file paginates; the rest show
+                // their first window (for the in-page detail when selected).
+                const is_selected = if (selected_file) |sf| std.mem.eql(u8, sf, name) else false;
+                // the README always loads because it's the default selection.
+                if (preloaded < max_preloaded or is_selected or isReadme(name)) {
+                    const file_path = try childDir(aa, dir, name);
+                    if (tree.entries.get(file_path)) |tree_entry| {
+                        preloaded += 1;
+                        const window_start = if (is_selected) start else 0;
+                        const content = readFileContent(repo_kind, repo_opts, state, io, gpa, aa, file_path, tree_entry, window_start) catch
+                            FileContent{ .lines = &.{} };
+                        entry.lines = content.lines;
+                        entry.is_binary = content.is_binary;
+                        entry.window_start = window_start;
+                        entry.has_more = content.has_more;
+                        entry.loaded = true;
+                    }
                 }
             }
             entries[i] = entry;
@@ -250,6 +258,8 @@ pub const View = struct {
     const detail_scroll_index: usize = 1;
     const list_max_width: usize = 40;
     const detail_min_width: usize = 40;
+    // a list row's height: one text line inside its (hidden) border.
+    const row_height: usize = 3;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
@@ -283,20 +293,27 @@ pub const View = struct {
                     const link = if (entry.is_dir)
                         try dirLink(session.page_arena, data, path)
                     else
-                        try fileLink(session.page_arena, data, path);
+                        try fileLink(session.page_arena, data, path, entry.loaded);
                     try addRow(allocator, &list_box, label, link);
                 }
                 // select the file the route named, else prefer a README so its
                 // contents greet the visitor in the detail pane, else the first
                 // row. a non-root directory has a leading ".." row, so the entry
                 // index is offset by one there.
+                var sel: usize = 0;
                 if (list_box.children.count() > 0) {
                     const base: usize = if (data.dir.len != 0) 1 else 0;
                     const entry_idx = selectedFileIndex(data) orelse readmeIndex(data.entries);
-                    const sel = if (entry_idx) |i| i + base else 0;
+                    sel = if (entry_idx) |i| i + base else 0;
                     list_box.getFocus().child_id = list_box.children.keys()[sel];
                 }
-                break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .box = list_box }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
+                var sc = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = list_box }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
+                // start scrolled so the selected row begins at the top of the
+                // viewport. rows are a fixed height, so no layout pass is
+                // needed; a too-far offset near the end of the list is clamped
+                // in build (the browser clamps its own scrolling natively).
+                sc.y = @intCast(sel * row_height);
+                break :blk sc;
             };
             errdefer list_scroll.deinit(allocator);
             try box.children.put(allocator, list_scroll.getFocus().id, .{ .widget = .{ .scroll = list_scroll }, .rect = null, .min_size = .{ .width = list_max_width, .height = null }, .max_size = .{ .width = list_max_width, .height = null } });
@@ -340,7 +357,9 @@ pub const View = struct {
                     // recovery descends the frame's selected child). the nav links
                     // above are reached by scrolling to the top, then up.
                     frame.getFocus().child_id = scroll_frame.getFocus().id;
-                    try frame.children.put(allocator, scroll_frame.getFocus().id, .{ .widget = .{ .box = scroll_frame }, .rect = null, .min_size = null });
+                    // shrink, so the fill scroll yields the nav box's row
+                    // instead of consuming the frame's whole height.
+                    try frame.children.put(allocator, scroll_frame.getFocus().id, .{ .widget = .{ .box = scroll_frame }, .rect = null, .min_size = null, .shrink = true });
                 }
                 break :blk frame;
             };
@@ -366,12 +385,14 @@ pub const View = struct {
 
     // the selected file's contents as a single focusable multi-line text box.
     // it's borderless — the border lives on the surrounding scroll frame, which
-    // doubles when this content is focused. `text` lives in the page arena.
-    fn addContentBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8) !void {
+    // doubles when this content is focused. `text` lives in the page arena. a
+    // non-empty `link` makes activating the box follow it, like addRow.
+    fn addContentBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: []const u8) !void {
         _ = self;
         var tb = try wgt.TextBox(ui.Widget).init(allocator, text, .{ .border_style = null, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
+        if (link.len != 0) tb.getFocus().kind = .{ .custom = link };
         try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
     }
 
@@ -445,17 +466,14 @@ pub const View = struct {
 
         // mirror the selected file into the url so it updates as the selection
         // moves, but only while focus is inside this view (so landing on the tab
-        // keeps the page's base route). a file selection carries the file path and
-        // its content window offset; a directory / ".." row (or no selection)
-        // stays at the directory with no offset. the path is joined in a stack
-        // buffer since build runs every frame on the web.
+        // keeps the page's base route).
         if (root_focus.grandchild_id) |g| {
             if (self.box.getFocus().children.contains(g)) {
                 var buf: [ui.RoutablePage.repo_route_max_len]u8 = undefined;
                 var sel_path = self.data.dir;
                 var sel_start: usize = 0;
                 if (self.selectedEntry()) |entry| {
-                    if (!entry.is_dir) {
+                    if (!entry.is_dir and entry.loaded) {
                         sel_path = if (self.data.dir.len == 0)
                             entry.name
                         else
@@ -522,6 +540,12 @@ pub const View = struct {
         // the top-level build by re-deriving it down the selected-child chain, so
         // there's nothing to fix up afterward.
         try self.box.build(allocator, constraint, root_focus);
+
+        // clamp the list's initial offset (a selected row near the end of the
+        // list) against this build's grids, for the next frame. initRoot's
+        // pre-sizing build is unbounded — its full-content "viewport" would
+        // clamp the offset to zero, so only a bounded build counts.
+        if (constraint.max_size.height != null) self.listScroll().clampToContent();
     }
 
     fn refreshDetail(self: *View, allocator: std.mem.Allocator) !void {
@@ -549,17 +573,27 @@ pub const View = struct {
                 // the "next" window link sits above the scroll, so it stays put
                 // while the content scrolls.
                 if (entry.has_more) try self.addNavLink(allocator, nav_box, "next lines →", entry, entry.window_start + file_page);
-                if (entry.is_binary) {
-                    try self.addContentBox(allocator, inner, "(binary file)");
+                if (!entry.loaded) {
+                    // the placeholder carries the file's "a:" link, so enter
+                    // (or a click) here loads the file like on its list row.
+                    const path = try childDir(self.session.page_arena.allocator(), self.data.dir, entry.name);
+                    const link = try fileLink(self.session.page_arena, self.data, path, false);
+                    try self.addContentBox(allocator, inner, "(press enter to load this file)", link);
+                } else if (entry.is_binary) {
+                    try self.addContentBox(allocator, inner, "(binary file)", "");
                 } else {
                     const text = try numberedContent(self.session.page_arena.allocator(), entry.lines, entry.window_start);
-                    try self.addContentBox(allocator, inner, text);
+                    try self.addContentBox(allocator, inner, text, "");
                 }
             }
         }
         // point each box at its first child so focus can descend into it.
         if (nav_box.children.count() > 0) nav_box.getFocus().child_id = nav_box.children.keys()[0];
         if (inner.children.count() > 0) inner.getFocus().child_id = inner.children.keys()[0];
+
+        // reserve the nav row's height (the shrink scroll frame yields it).
+        self.detailOuter().children.values()[detail_nav_index].min_size =
+            if (nav_box.children.count() > 0) .{ .width = null, .height = row_height } else null;
 
         // reset the scroll to the top for the newly-shown file: directly on the
         // terminal (the wasm offset), and via a version bump on the web (so the
@@ -779,11 +813,13 @@ fn numberedContent(arena: std.mem.Allocator, lines: []const []const u8, start: u
 // if none. used to pick the default selection at the repo root.
 fn readmeIndex(entries: []const Entry) ?usize {
     for (entries, 0..) |entry, i| {
-        if (entry.is_dir) continue;
-        if (std.ascii.eqlIgnoreCase(entry.name, "README") or std.ascii.eqlIgnoreCase(entry.name, "README.md"))
-            return i;
+        if (!entry.is_dir and isReadme(entry.name)) return i;
     }
     return null;
+}
+
+fn isReadme(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "README") or std.ascii.eqlIgnoreCase(name, "README.md");
 }
 
 // the index of the entry the route named (data.selected_file), or null if none.
@@ -802,11 +838,14 @@ fn dirLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []cons
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
 }
 
-// an "ai:" link to the file's route: crossPageLink ignores it, so a wasm click
-// selects the row in place and shows its contents in the detail pane.
-fn fileLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8) ![]const u8 {
+// a link to the file's route. a preloaded file gets an "ai:" link
+// (crossPageLink ignores it, so a click selects the row in place and shows its
+// contents); an unloaded file gets an "a:" link, so activating it reloads the
+// page with that file selected and its content read.
+fn fileLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8, loaded: bool) ![]const u8 {
     const route = ui.RoutablePage.repoFilesRoute(data.identity, data.ref_or_oid, data.ref_or_oid_value, path, 0) orelse return error.RouteTooLong;
-    return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{try route.toUrl(page_arena)});
+    const prefix = if (loaded) "ai:" else "a:";
+    return std.fmt.allocPrint(page_arena.allocator(), "{s}{s}", .{ prefix, try route.toUrl(page_arena) });
 }
 
 // `dir`/`name`, or just `name` at the root.
