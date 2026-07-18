@@ -502,15 +502,6 @@ pub const View = struct {
         const content_focused = if (root_focus.grandchild_id) |g| self.detailInner().children.contains(g) else false;
         self.detailScrollFrame().options.border_style = if (!has_content) null else if (content_focused) .double else .single;
 
-        // same for the "next" link above the content.
-        const nav_box = self.navBox();
-        for (nav_box.children.keys(), nav_box.children.values()) |id, *child| {
-            switch (child.widget) {
-                .text_box => |*tb| tb.options.border_style = if (nav_box.getFocus().child_id == id) .single else .hidden,
-                else => {},
-            }
-        }
-
         // cap the list at list_max_width only while the detail pane fits beside
         // it. the box drops the detail pane when the width can't hold both
         // minimums, so when it's that narrow we lift the cap and let the list
@@ -570,8 +561,9 @@ pub const View = struct {
         // the pane empty.
         if (self.selectedEntry()) |entry| {
             if (!entry.is_dir) {
-                // the "next" window link sits above the scroll, so it stays put
+                // the window links sit above the scroll, so they stay put
                 // while the content scrolls.
+                if (entry.window_start > 0) try self.addNavLink(allocator, nav_box, "scroll to top", entry, 0);
                 if (entry.has_more) try self.addNavLink(allocator, nav_box, "next lines →", entry, entry.window_start + file_page);
                 if (!entry.loaded) {
                     // the placeholder carries the file's "a:" link, so enter
@@ -612,7 +604,7 @@ pub const View = struct {
         const path = try childDir(page_arena.allocator(), self.data.dir, entry.name);
         const route = ui.RoutablePage.repoFilesRoute(self.data.identity, self.data.ref_or_oid, self.data.ref_or_oid_value, path, target_start) orelse return error.RouteTooLong;
         const link = try std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
-        var tb = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .hidden, .rounded_corners = true, .wrap_kind = .none });
+        var tb = try wgt.TextBox(ui.Widget).init(allocator, label, .{ .border_style = .single, .rounded_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().focusable = true;
         tb.getFocus().kind = .{ .custom = link };
