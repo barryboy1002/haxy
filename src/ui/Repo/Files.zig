@@ -14,7 +14,7 @@ const Focus = xitui.focus.Focus;
 const inp = @import("../input.zig");
 
 // how many lines of a file's content one window shows before a "next" link.
-const file_page = 2000;
+const file_page = 5000;
 
 // how many files in a directory get their content preloaded (windowed) so
 // selecting them shows contents without a reload. every entry is still listed;
@@ -33,7 +33,7 @@ pub const Entry = struct {
     // pane shows a placeholder rather than its bytes.
     is_binary: bool = false,
     // the line index this window starts at (0 = the first window). non-zero only
-    // for the route's selected file, paginated by the url's `start`.
+    // for the route's selected file, paginated by the url's `line`.
     window_start: usize = 0,
     // whether more lines exist after this window.
     has_more: bool = false,
@@ -75,7 +75,7 @@ pub fn init(
     requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
     requested_value: []const u8,
     path: []const u8,
-    start: usize,
+    line: usize,
 ) !Self {
     const aa = arena.allocator();
 
@@ -129,7 +129,9 @@ pub fn init(
                 if (preloaded < max_preloaded or is_selected or isReadme(name)) {
                     preloaded += 1;
                     const file_path = try childDir(aa, dir, name);
-                    const window_start = if (is_selected) start else 0;
+                    // the url's `line` is 1-based (0 = unset); the window
+                    // index is 0-based.
+                    const window_start = if (is_selected) line -| 1 else 0;
                     const content = readFileContent(repo_kind, repo_opts, state, io, gpa, aa, file_path, tree_entry, window_start) catch
                         FileContent{ .lines = &.{} };
                     entry.lines = content.lines;
@@ -443,17 +445,17 @@ pub const View = struct {
             if (self.box.getFocus().children.contains(g)) {
                 var buf: [ui.RoutablePage.repo_route_max_len]u8 = undefined;
                 var sel_path = self.data.dir;
-                var sel_start: usize = 0;
+                var sel_line: usize = 0;
                 if (self.selectedEntry()) |entry| {
                     if (!entry.is_dir and entry.loaded) {
                         sel_path = if (self.data.dir.len == 0)
                             entry.name
                         else
                             std.fmt.bufPrint(&buf, "{s}/{s}", .{ self.data.dir, entry.name }) catch self.data.dir;
-                        sel_start = entry.window_start;
+                        sel_line = lineNumber(entry.window_start);
                     }
                 }
-                if (ui.RoutablePage.repoFilesRoute(self.data.identity, self.data.ref_or_oid, self.data.ref_or_oid_value, sel_path, sel_start)) |route|
+                if (ui.RoutablePage.repoFilesRoute(self.data.identity, self.data.ref_or_oid, self.data.ref_or_oid_value, sel_path, sel_line)) |route|
                     self.session.data.current_page = route;
             }
         }
@@ -536,7 +538,7 @@ pub const View = struct {
                 // the window links sit above the scroll, so they stay put
                 // while the content scrolls.
                 if (entry.window_start > 0) try self.addNavLink(allocator, nav_box, "scroll to top", entry, 0);
-                if (entry.has_more) try self.addNavLink(allocator, nav_box, "next lines →", entry, entry.window_start + file_page);
+                if (entry.has_more) try self.addNavLink(allocator, nav_box, "next lines →", entry, lineNumber(entry.window_start + file_page));
                 if (!entry.loaded) {
                     // the placeholder carries the file's "a:" link, so enter
                     // (or a click) here loads the file like on its list row.
@@ -810,6 +812,12 @@ fn fileLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []con
     const route = ui.RoutablePage.repoFilesRoute(data.identity, data.ref_or_oid, data.ref_or_oid_value, path, 0) orelse return error.RouteTooLong;
     const prefix = if (loaded) "ai:" else "a:";
     return std.fmt.allocPrint(page_arena.allocator(), "{s}{s}", .{ prefix, try route.toUrl(page_arena) });
+}
+
+// the url `line` value for a content window: its first line's 1-based number,
+// except the first window, which serializes as unset (0).
+fn lineNumber(window_start: usize) usize {
+    return if (window_start == 0) 0 else window_start + 1;
 }
 
 // `dir`/`name`, or just `name` at the root.

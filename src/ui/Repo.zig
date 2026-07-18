@@ -81,8 +81,8 @@ pub fn init(
         .repo_files => |f| f.path.slice(),
         else => "",
     };
-    const files_start = switch (route) {
-        .repo_files => |f| f.start,
+    const files_line = switch (route) {
+        .repo_files => |f| f.line,
         else => 0,
     };
     // the hunk the commits view's selected commit's diff window starts at.
@@ -177,7 +177,7 @@ pub fn init(
                             const is_local = session.local != null;
                             if (is_local) try evt.syncLocalEvents(repo_kind, opened.self_repo_opts, io, gpa, opened);
                             break :blk .{
-                                try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_start),
+                                try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, files_dir, files_line),
                                 try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, requested_ref_or_oid, requested_ref_value, commits_start, commits_path),
                                 try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, refs_kind, refs_from),
                                 try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, is_local, repo_identity.identity, issues_tag, issues_selected, issues_view),
@@ -203,8 +203,8 @@ pub fn init(
     const files_path = if (files.selected_file) |f| try Files.childDir(arena.allocator(), files.dir, f) else files.dir;
     // the content window only applies to a selected file, so the bare
     // directory route drops it.
-    const files_route_start = if (files.selected_file != null) files_start else 0;
-    const route_name = (ui.RoutablePage.repoFilesRoute(repo_identity.identity, files.ref_or_oid, files.ref_or_oid_value, files_path, files_route_start) orelse return error.NotFound).repo_files;
+    const files_route_line = if (files.selected_file != null) files_line else 0;
+    const route_name = (ui.RoutablePage.repoFilesRoute(repo_identity.identity, files.ref_or_oid, files.ref_or_oid_value, files_path, files_route_line) orelse return error.NotFound).repo_files;
     const commits_route_name = (ui.RoutablePage.repoCommitsRoute(repo_identity.identity, commits.ref_or_oid, commits.ref_or_oid_value, commits_start, commits.path) orelse return error.NotFound).repo_commits;
 
     return .{

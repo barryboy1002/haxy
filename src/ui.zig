@@ -111,7 +111,7 @@ pub const RoutablePage = union(enum) {
 
     // the "key:value" segments of a url tail, collected in any order
     const Params = struct {
-        const ParamKey = enum { start, branch, tag, object };
+        const ParamKey = enum { start, line, branch, tag, object };
 
         // a branch:/tag:/object: param; the value stays url-encoded
         const RefParam = struct { kind: RefOrOid, value: []const u8 };
@@ -159,6 +159,12 @@ pub const RoutablePage = union(enum) {
             return std.fmt.parseInt(usize, value, 10) catch null;
         }
 
+        // the "line:<n>" first-line param (0 when absent), null when malformed
+        fn line(self: Params) ?usize {
+            const value = self.values.get(.line) orelse return 0;
+            return std.fmt.parseInt(usize, value, 10) catch null;
+        }
+
         // the single branch:/tag:/object: param, null when none is set
         fn ref(self: Params) error{BadUrl}!?RefParam {
             var result: ?RefParam = null;
@@ -179,12 +185,13 @@ pub const RoutablePage = union(enum) {
     // the `Params` key spellings the url emitters use
     const tag_filter_seg = @tagName(Params.ParamKey.tag) ++ ":";
     const start_seg = @tagName(Params.ParamKey.start) ++ ":";
+    const line_seg = @tagName(Params.ParamKey.line) ++ ":";
     // marks a files or commits route's trailing path: the value is the raw
     // remainder of the url, so it must come last
     const path_seg = "path:";
 
     // a repo route is "username/reponame", optionally followed by the files
-    // tab's "/files/<refkind>:<refvalue>[/start:<n>][/path:<dir>]"; the bare
+    // tab's "/files/<refkind>:<refvalue>[/line:<n>][/path:<dir>]"; the bare
     // pair means the default branch's files root. a local session's routes
     // elide the identity: "" at the bare root, else starting at the tail's "/".
     pub const repo_route_max_len = 1024;
@@ -234,7 +241,8 @@ pub const RoutablePage = union(enum) {
         ref_kind: ?RefOrOid = null,
         ref_value: Array(ref_route_max_len) = .{},
         path: Array(repo_route_max_len) = .{},
-        start: usize = 0,
+        // the selected file's first visible line (1-based; 0 = unset).
+        line: usize = 0,
     };
 
     pub const RepoCommitsRoute = struct {
@@ -248,7 +256,7 @@ pub const RoutablePage = union(enum) {
 
     // build a `.repo_files` route (a null ref_kind = the bare default-branch
     // root). null if the result doesn't fit the inline name.
-    pub fn repoFilesRoute(identity: []const u8, ref_kind: ?RefOrOid, ref_value: []const u8, dir: []const u8, start: usize) ?RoutablePage {
+    pub fn repoFilesRoute(identity: []const u8, ref_kind: ?RefOrOid, ref_value: []const u8, dir: []const u8, line: usize) ?RoutablePage {
         if (ref_kind == null and (ref_value.len != 0 or dir.len != 0)) return null;
         if (ref_kind != null and ref_value.len == 0 and dir.len != 0) return null;
         return .{ .repo_files = .{
@@ -256,7 +264,7 @@ pub const RoutablePage = union(enum) {
             .ref_kind = ref_kind,
             .ref_value = Array(ref_route_max_len).from(ref_value) orelse return null,
             .path = Array(repo_route_max_len).from(dir) orelse return null,
-            .start = start,
+            .line = line,
         } };
     }
 
@@ -356,11 +364,11 @@ pub const RoutablePage = union(enum) {
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
             .repo_files => |f| blk: {
                 const prefix = try repoUrlPrefix(arena, f.name.slice());
-                if (f.ref_kind == null and f.start == 0) break :blk if (prefix.len == 0) "/" else prefix;
+                if (f.ref_kind == null and f.line == 0) break :blk if (prefix.len == 0) "/" else prefix;
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
                 try out.writer.print("{s}/" ++ files_seg, .{prefix});
                 if (f.ref_kind) |kind| if (f.ref_value.len != 0) try out.writer.print("/{s}:{s}", .{ @tagName(kind), f.ref_value.slice() });
-                if (f.start != 0) try out.writer.print("/" ++ start_seg ++ "{d}", .{f.start});
+                if (f.line != 0) try out.writer.print("/" ++ line_seg ++ "{d}", .{f.line});
                 if (f.path.len != 0) try out.writer.print("/" ++ path_seg ++ "{s}", .{f.path.slice()});
                 break :blk out.written();
             },
@@ -476,8 +484,6 @@ pub const RoutablePage = union(enum) {
     // route): a tab keyword followed by "key:value" params in any order, plus
     // the files tab's trailing "path:<dir>".
     fn repoSubRoute(pair: []const u8, sub: []const u8) ?RoutablePage {
-        // the params the ref-pinned tabs (files/commits) accept
-        const ref_tab_keys: []const Params.ParamKey = &.{ .start, .branch, .tag, .object };
         var segments = std.mem.splitScalar(u8, sub, '/');
         const tab = segments.next() orelse return null;
         var params = Params{};
@@ -503,16 +509,16 @@ pub const RoutablePage = union(enum) {
         }
         if (std.mem.eql(u8, tab, files_seg)) {
             params.scanPairs(&segments) catch return null;
-            if (!params.only(ref_tab_keys)) return null;
-            const start = params.start() orelse return null;
+            if (!params.only(&.{ .line, .branch, .tag, .object })) return null;
+            const line = params.line() orelse return null;
             const dir = pathValue(segments.rest()) orelse return null;
             const ref = (params.ref() catch return null) orelse
-                return if (dir.len == 0) repoFilesRoute(pair, null, "", "", start) else null;
-            return repoFilesRoute(pair, ref.kind, ref.value, dir, start);
+                return if (dir.len == 0) repoFilesRoute(pair, null, "", "", line) else null;
+            return repoFilesRoute(pair, ref.kind, ref.value, dir, line);
         }
         if (std.mem.eql(u8, tab, commits_seg)) {
             params.scanPairs(&segments) catch return null;
-            if (!params.only(ref_tab_keys)) return null;
+            if (!params.only(&.{ .start, .branch, .tag, .object })) return null;
             const start = params.start() orelse return null;
             const file = pathValue(segments.rest()) orelse return null;
             const ref = (params.ref() catch return null) orelse
@@ -534,7 +540,7 @@ pub const RoutablePage = union(enum) {
                 a_f.ref_kind == b.repo_files.ref_kind and
                 std.mem.eql(u8, a_f.ref_value.slice(), b.repo_files.ref_value.slice()) and
                 std.mem.eql(u8, a_f.path.slice(), b.repo_files.path.slice()) and
-                a_f.start == b.repo_files.start,
+                a_f.line == b.repo_files.line,
             .repo_commits => |a_c| std.mem.eql(u8, a_c.name.slice(), b.repo_commits.name.slice()) and
                 a_c.ref_or_oid == b.repo_commits.ref_or_oid and
                 std.mem.eql(u8, a_c.value.slice(), b.repo_commits.value.slice()) and
