@@ -20,15 +20,6 @@ const file_page = 2000;
 // selecting them shows contents without a reload. every entry is still listed;
 // files past this limit carry an "a:" link instead, so activating them reloads
 // the page with that file selected (and its content loaded as the selection).
-//
-// TODO: `tr.Tree.init` still flattens the entire repo tree (every path) into
-// memory before we ever filter to one directory. read the directory
-// level-by-level instead, using `obj.Object` to load one tree object at a
-// time: initCommit -> root tree, then descend each `dir` segment, reading
-// only the immediate entries of the target tree. that bounds the work to
-// O(depth) tree objects rather than the whole repo. it's doable entirely in
-// haxy (no xit change) — `obj.Object(...).init` on a tree oid already returns
-// just that tree's immediate children.
 const max_preloaded = 100;
 
 // one entry in the directory currently being viewed.
@@ -96,75 +87,56 @@ pub fn init(
         return emptyResult(aa, identity, .branch, requested_value, path);
     };
 
-    // read the tree at that commit. building the read-only state mirrors what
-    // repo.status does internally, but for an arbitrary commit rather than HEAD.
+    // read just the viewed directory of that commit's tree. building the
+    // read-only state mirrors what repo.status does internally, but for an
+    // arbitrary commit rather than HEAD. a path that doesn't exist in the tree
+    // is a bad url (404).
     var moment = repo.core.latestMoment() catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
     const state = rp.Repo(repo_kind, repo_opts).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
-    var tree = tr.Tree(repo_kind, repo_opts).init(state, io, gpa, &resolved.oid) catch return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path);
-    defer tree.deinit();
+    var tree_dir = tr.TreeDir(repo_kind, repo_opts).init(state, io, gpa, &resolved.oid, path) catch |err| switch (err) {
+        error.TreeEntryNotFound => return error.NotFound,
+        else => return emptyResult(aa, identity, resolved.ref_or_oid, resolved.value, path),
+    };
+    defer tree_dir.deinit();
 
-    // `path` names a file when it's an exact tree entry: list its parent
-    // directory and start that file selected. otherwise `path` is the directory.
+    // when `path` named a file, the listing is its parent directory with that
+    // file selected.
     var dir = path;
     var selected_file: ?[]const u8 = null;
-    if (path.len != 0 and tree.entries.get(path) != null) {
+    if (tree_dir.file_name != null) {
         const slash = std.mem.lastIndexOfScalar(u8, path, '/');
         selected_file = try aa.dupe(u8, if (slash) |s| path[s + 1 ..] else path);
         dir = if (slash) |s| path[0..s] else "";
     }
 
-    // collect the immediate children of `dir`. each committed path is a full
-    // file path; a child is a directory when more path follows its first
-    // segment under `dir`.
-    var children: std.StringArrayHashMapUnmanaged(bool) = .empty; // name -> is_dir
-    defer children.deinit(gpa);
-    const prefix_len = if (dir.len == 0) 0 else dir.len + 1; // skip "dir/"
-    for (tree.entries.keys()) |entry_path| {
-        if (dir.len != 0) {
-            if (!std.mem.startsWith(u8, entry_path, dir) or entry_path.len <= dir.len or entry_path[dir.len] != '/') continue;
-        }
-        const rel = entry_path[prefix_len..];
-        const slash = std.mem.indexOfScalar(u8, rel, '/');
-        const name = if (slash) |s| rel[0..s] else rel;
-        const is_dir = slash != null;
-        const gop = try children.getOrPut(gpa, name);
-        if (!gop.found_existing) gop.value_ptr.* = is_dir else if (is_dir) gop.value_ptr.* = true;
-    }
-
-    // trees hold no empty directories, so a non-root `dir` with no children
-    // doesn't exist in this ref — a bad url (404).
-    if (dir.len != 0 and children.count() == 0) return error.NotFound;
-
-    // committed paths come out sorted (tree objects are written in sorted
-    // order), so the deduped children are already in name order. just group
-    // directories before files, keeping that order within each group, and dupe
-    // into the page arena. each file's contents are read here (into the page
-    // arena) so the detail pane can show them without another lookup.
-    const entries = try aa.alloc(Entry, children.count());
+    // tree objects store their entries in name order, so the listing is
+    // already sorted. group directories before files, keeping that order
+    // within each group, and dupe into the page arena. file contents are read
+    // here (into the page arena) so the detail pane can show them without
+    // another lookup.
+    const entries = try aa.alloc(Entry, tree_dir.entries.count());
     var i: usize = 0;
     var preloaded: usize = 0;
     for ([_]bool{ true, false }) |want_dir| {
-        for (children.keys(), children.values()) |name, is_dir| {
-            if (is_dir != want_dir) continue;
-            var entry: Entry = .{ .name = try aa.dupe(u8, name), .is_dir = is_dir };
-            if (!is_dir) {
+        for (tree_dir.entries.keys(), tree_dir.entries.values()) |name, tree_entry| {
+            if (tree_entry.isTree() != want_dir) continue;
+            var entry: Entry = .{ .name = try aa.dupe(u8, name), .is_dir = want_dir };
+            if (!want_dir) {
                 // only the route's selected file paginates; the rest show
                 // their first window (for the in-page detail when selected).
                 const is_selected = if (selected_file) |sf| std.mem.eql(u8, sf, name) else false;
                 // the README always loads because it's the default selection.
                 if (preloaded < max_preloaded or is_selected or isReadme(name)) {
+                    preloaded += 1;
                     const file_path = try childDir(aa, dir, name);
-                    if (tree.entries.get(file_path)) |tree_entry| {
-                        preloaded += 1;
-                        const window_start = if (is_selected) start else 0;
-                        const content = readFileContent(repo_kind, repo_opts, state, io, gpa, aa, file_path, tree_entry, window_start) catch
-                            FileContent{ .lines = &.{} };
-                        entry.lines = content.lines;
-                        entry.is_binary = content.is_binary;
-                        entry.window_start = window_start;
-                        entry.has_more = content.has_more;
-                        entry.loaded = true;
-                    }
+                    const window_start = if (is_selected) start else 0;
+                    const content = readFileContent(repo_kind, repo_opts, state, io, gpa, aa, file_path, tree_entry, window_start) catch
+                        FileContent{ .lines = &.{} };
+                    entry.lines = content.lines;
+                    entry.is_binary = content.is_binary;
+                    entry.window_start = window_start;
+                    entry.has_more = content.has_more;
+                    entry.loaded = true;
                 }
             }
             entries[i] = entry;
