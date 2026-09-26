@@ -30,6 +30,10 @@ pub const last_object_id_key = "haxy/last-object-id";
 pub const admin_repo_opts: rp.RepoOpts(.xit) = .{};
 pub const AdminDB = rp.Repo(.xit, admin_repo_opts).DB;
 
+// options + db type for a user repo, which holds its user's repo and fork events
+pub const user_repo_opts: rp.RepoOpts(.xit) = .{};
+pub const UserDB = rp.Repo(.xit, user_repo_opts).DB;
+
 // the admin repo's file the home page renders
 pub const admin_about_path = "ABOUT.md";
 
@@ -47,6 +51,97 @@ pub fn initAdminRepo(io: std.Io, allocator: std.mem.Allocator, path: []const u8)
     try repo.add(io, allocator, &.{admin_about_path});
     _ = try repo.commit(io, allocator, .{ .author = "haxy <haxy@localhost>", .message = "init" });
     return repo;
+}
+
+// create a user's bare repo. its events branch starts with the first consume.
+pub fn initUserRepo(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !rp.Repo(.xit, user_repo_opts) {
+    return try rp.Repo(.xit, user_repo_opts).init(io, allocator, .{ .bare = true, .path = path });
+}
+
+// a user repo's path, a sibling of the repos dir
+pub fn userRepoPath(allocator: std.mem.Allocator, repo_root_path: []const u8, user_id: *const [event_id_size]u8) ![]u8 {
+    return try std.fs.path.join(allocator, &.{ std.fs.path.dirname(repo_root_path) orelse ".", "users", &std.fmt.bytesToHex(user_id.*, .lower) });
+}
+
+// open a user's repo, or null when it's missing
+pub fn openUserRepo(io: std.Io, allocator: std.mem.Allocator, repo_root_path: []const u8, user_id: *const [event_id_size]u8) !?rp.Repo(.xit, user_repo_opts) {
+    const path = try userRepoPath(allocator, repo_root_path, user_id);
+    defer allocator.free(path);
+    return rp.Repo(.xit, user_repo_opts).open(io, allocator, .{ .path = path, .require_repo_root = true }) catch |err| switch (err) {
+        error.RepoNotFound, error.FileNotFound => null,
+        else => |e| e,
+    };
+}
+
+// a user repo's moment, or null before its first event
+pub fn userMoment(repo: *rp.Repo(.xit, user_repo_opts)) !?UserDB.HashMap(.read_only) {
+    return currentMoment(user_repo_opts, repo) catch |err| switch (err) {
+        error.NotFound => null,
+        else => |e| e,
+    };
+}
+
+// read a repo by its owner's name and its name, from the owner's user repo
+pub fn readRepoByOwnerAndName(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
+    admin_moment: AdminDB.HashMap(.read_only),
+    repo_root_path: []const u8,
+    owner_name: []const u8,
+    repo_name: []const u8,
+) !?Repo.RepoWithId {
+    const owner_id = (try User.readIdByName(AdminDB, admin_repo_opts.hash, admin_moment, owner_name)) orelse return null;
+    var user_repo = (try openUserRepo(io, allocator, repo_root_path, &owner_id)) orelse return null;
+    defer user_repo.deinit(io, allocator);
+    const moment = (try userMoment(&user_repo)) orelse return null;
+    return try Repo.readByName(UserDB, user_repo_opts.hash, moment, arena, repo_name);
+}
+
+// read a repo by its owner's id and its id, from the owner's user repo
+pub fn readRepoById(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
+    repo_root_path: []const u8,
+    owner_id: *const [event_id_size]u8,
+    repo_id: []const u8,
+) !?Repo.Record {
+    var user_repo = (try openUserRepo(io, allocator, repo_root_path, owner_id)) orelse return null;
+    defer user_repo.deinit(io, allocator);
+    const moment = (try userMoment(&user_repo)) orelse return null;
+    return try Repo.readById(UserDB, user_repo_opts.hash, moment, arena, repo_id);
+}
+
+// read a fork by its forker's id and its id, from the forker's user repo
+pub fn readForkById(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
+    repo_root_path: []const u8,
+    forker_id: *const [event_id_size]u8,
+    fork_id: *const [event_id_size]u8,
+) !?Fork.Record {
+    var user_repo = (try openUserRepo(io, allocator, repo_root_path, forker_id)) orelse return null;
+    defer user_repo.deinit(io, allocator);
+    const moment = (try userMoment(&user_repo)) orelse return null;
+    return try Fork.readById(UserDB, user_repo_opts.hash, moment, arena, fork_id);
+}
+
+// the user who forked a published patch, found through the patch's author
+pub const Forker = struct {
+    id: [event_id_size]u8,
+    name: []const u8,
+};
+
+pub fn readForker(
+    arena: *std.heap.ArenaAllocator,
+    admin_moment: AdminDB.HashMap(.read_only),
+    author_email: ?[]const u8,
+) !?Forker {
+    const id = (try User.readIdByEmail(AdminDB, admin_repo_opts.hash, admin_moment, author_email orelse return null)) orelse return null;
+    const user = (try User.readById(AdminDB, admin_repo_opts.hash, admin_moment, arena, &id)) orelse return null;
+    return .{ .id = id, .name = user.event.name };
 }
 
 // the xitdb type events are stored in. it only depends on the hash kind, so
@@ -85,13 +180,15 @@ pub const EventKind = enum {
 
 pub const RepoRole = enum {
     admin,
+    user,
     repo,
     fork,
 
     fn allows(self: RepoRole, kind: EventKind) bool {
         return switch (self) {
-            .admin => switch (kind) {
-                .user, .repo, .fork => true,
+            .admin => kind == .user,
+            .user => switch (kind) {
+                .repo, .fork => true,
                 else => false,
             },
             .repo => switch (kind) {
@@ -1325,10 +1422,9 @@ pub fn merge(
         // leaves this one out rather than stranding that one behind a name it
         // no longer owns
         if (!merged.removed and @hasDecl(T, "name_index_key")) {
-            const index_key = try merged.indexKey(arena.allocator());
             const name_index_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, T.name_index_key));
             const name_index = try DB.HashMap(.read_write).init(name_index_cursor);
-            if (try name_index.getCursor(hash.hashInt(hash_kind, index_key))) |owner_cursor| {
+            if (try name_index.getCursor(hash.hashInt(hash_kind, merged.event.name))) |owner_cursor| {
                 var owner_id: [event_id_size]u8 = undefined;
                 _ = try owner_cursor.readBytes(&owner_id);
                 if (!std.mem.eql(u8, &owner_id, &event_id)) continue;
@@ -1644,40 +1740,41 @@ pub fn resolveOrCreateRepo(
     repo_name: []const u8,
     create_options_maybe: ?CreateRepoOptions,
 ) !?[event_id_size * 2]u8 {
-    var repo = rp.Repo(.xit, admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path }) catch |err| switch (err) {
+    var admin_repo = rp.Repo(.xit, admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path }) catch |err| switch (err) {
         error.RepoNotFound => return null,
         else => |e| return e,
     };
-    defer repo.deinit(io, allocator);
+    defer admin_repo.deinit(io, allocator);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const moment = try currentMoment(admin_repo_opts, &repo);
+    const admin_moment = try currentMoment(admin_repo_opts, &admin_repo);
+
+    // an unknown owner can't own a repo, so the push is rejected
+    const owner_user_id = (try User.readIdByName(AdminDB, admin_repo_opts.hash, admin_moment, owner_name)) orelse return null;
+    const repo_root_path = try std.fs.path.join(allocator, &.{ std.fs.path.dirname(admin_repo_path) orelse ".", "repos" });
+    defer allocator.free(repo_root_path);
+    var user_repo = (try openUserRepo(io, allocator, repo_root_path, &owner_user_id)) orelse return null;
+    defer user_repo.deinit(io, allocator);
 
     // an already-registered repo reuses its event id, so a re-push (or a clone)
     // lands in the same repo
-    if (try Repo.readByOwnerAndName(AdminDB, admin_repo_opts.hash, moment, &arena, owner_name, repo_name)) |found| {
-        return std.fmt.bytesToHex(found.event_id, .lower);
+    if (try userMoment(&user_repo)) |moment| {
+        if (try Repo.readByName(UserDB, user_repo_opts.hash, moment, &arena, repo_name)) |found| {
+            return std.fmt.bytesToHex(found.event_id, .lower);
+        }
     }
 
     const create_options = create_options_maybe orelse return null;
 
-    // the new repo is owned by the named user, read from the name index; an
-    // unknown owner can't own a repo, so the push is rejected
-    const name_to_user_id_cursor = try moment.getCursor(hash.hashInt(admin_repo_opts.hash, "name->user-id")) orelse return null;
-    const name_to_user_id = try AdminDB.HashMap(.read_only).init(name_to_user_id_cursor);
-    const owner_id_cursor = try name_to_user_id.getCursor(hash.hashInt(admin_repo_opts.hash, owner_name)) orelse return null;
-    var owner_user_id: [event_id_size]u8 = undefined;
-    _ = try owner_id_cursor.readBytes(&owner_user_id);
-
-    const owner = (try User.readById(AdminDB, admin_repo_opts.hash, moment, &arena, &owner_user_id)) orelse unreachable;
+    const owner = (try User.readById(AdminDB, admin_repo_opts.hash, admin_moment, &arena, &owner_user_id)) orelse unreachable;
 
     var id_bytes: [event_id_size]u8 = undefined;
     io.random(&id_bytes);
     const event_id_hex = std.fmt.bytesToHex(id_bytes, .lower);
 
-    try consume(.server, .admin, .xit, admin_repo_opts, io, allocator, &repo, events_ref, &[_]EventWithId{.{
+    try consume(.server, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
         .id = event_id_hex,
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = .{ .name = owner.event.name, .email = owner.event.email },

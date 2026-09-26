@@ -2704,7 +2704,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             if (comptime wasm) return;
             const io = self.session.io orelse return;
             const src = self.data.repo_source orelse return;
-            const author = ((try self.session.authorize(self.data.identity, .read)) orelse return).author;
+            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
 
             const form = self.threadForm() orelse return;
             const title_input = try formField(form, "title");
@@ -2732,7 +2732,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     .branch => try source.field().text(allocator),
                 };
                 defer if (source_branch) |branch| allocator.free(branch);
-                const event_id_hex = Data.create(self.data, self.session, allocator, author, title, labels, description, target_branch, source_branch) catch |err| {
+                const event_id_hex = Data.create(self.data, self.session, allocator, actor, title, labels, description, target_branch, source_branch) catch |err| {
                     const failure = FeedbackFailure.fromError(err) orelse return err;
                     try self.rememberThreadFeedback(failure, title, labels, description, target_branch);
                     return;
@@ -2753,7 +2753,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             const event = evt.EventWithId{
                 .id = event_id_hex,
                 .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
-                .author = author,
+                .author = actor.author,
                 .event = @unionInit(evt.Event, @tagName(kind), Event{
                     .title = title,
                     .description = description,

@@ -302,13 +302,7 @@ fn readItem(
                     item.author = .{ .user_name = user.event.name };
             }
         },
-        .fork => {
-            const record = (try evt.readRecordSubset(evt.Fork, Owned, DB, hash_kind, haxy_moment, arena, id)) orelse return null;
-            if (admin_moment) |moment| {
-                if (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, record.event.user_id)) |user|
-                    item.author = .{ .user_name = user.event.name };
-            }
-        },
+        .fork => _ = (try evt.readRecordSubset(evt.Fork, struct { removed: bool }, DB, hash_kind, haxy_moment, arena, id)) orelse return null,
         .issue => {
             const record = (try evt.readRecordSubset(evt.Issue, Authored, DB, hash_kind, haxy_moment, arena, id)) orelse return null;
             item.author = try ui.Author.initFromEmail(admin_moment, arena, record.author_email);

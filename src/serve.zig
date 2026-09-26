@@ -151,6 +151,7 @@ pub fn run(
 
     runWebListener(io, allocator, &wui_server, &tasks, .{ .server = .{
         .admin_repo_path = admin_repo_path,
+        .repo_root_path = repo_root_path,
         .session_store = session_store,
         .git_http_port = git_http_port,
         .git_ssh_port = git_ssh_port,

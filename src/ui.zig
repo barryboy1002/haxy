@@ -73,9 +73,6 @@ pub const Page = union(PageKind) {
             .home => .{ .home = try Home.init(arena, session, session.haxy_moment orelse return error.NoMoment, switch (route) {
                 .home_users => |start| start,
                 else => 0,
-            }, switch (route) {
-                .home_repos => |start| start,
-                else => 0,
             }) },
             .user => blk: {
                 const haxy_moment = session.haxy_moment orelse return error.NoMoment;
@@ -112,7 +109,6 @@ pub const Snapshot = struct {
 pub const RoutablePage = union(enum) {
     home_about,
     home_users: usize, // 0 = first page
-    home_repos: usize, // 0 = first page
     home_settings,
     home_auth,
     user_repos: struct { name: Array(evt.User.name_max_len), start: usize = 0 },
@@ -1019,7 +1015,6 @@ pub const RoutablePage = union(enum) {
         return switch (self) {
             .home_about => "/",
             .home_users => |start| if (start == 0) @as([]const u8, "/users") else try std.fmt.allocPrint(arena.allocator(), "/users/" ++ start_seg ++ "{d}", .{start}),
-            .home_repos => |start| if (start == 0) @as([]const u8, "/repos") else try std.fmt.allocPrint(arena.allocator(), "/repos/" ++ start_seg ++ "{d}", .{start}),
             .home_settings => "/settings",
             .home_auth => "/auth",
             .user_repos => |u| if (u.start == 0)
@@ -1248,7 +1243,6 @@ pub const RoutablePage = union(enum) {
         var segments = std.mem.splitScalar(u8, path[1..], '/');
         const first = segments.next() orelse return null;
         if (std.mem.eql(u8, first, "users")) return .{ .home_users = listStart(&segments) orelse return null };
-        if (std.mem.eql(u8, first, "repos")) return .{ .home_repos = listStart(&segments) orelse return null };
         if (std.mem.eql(u8, first, "settings")) return if (segments.next() == null) .home_settings else null;
         if (std.mem.eql(u8, first, "auth")) return if (segments.next() == null) .home_auth else null;
         // "user/<name>[/repos[/start:<n>]|/settings|/auth]"
@@ -1263,7 +1257,7 @@ pub const RoutablePage = union(enum) {
             if (std.mem.eql(u8, sub, "auth")) return if (segments.next() == null) .{ .user_auth = parsed } else null;
             return null; // unknown sub-path
         }
-        // "fork/<username>/<reponame>/patch:<id>[/files|/commits]"; the
+        // "fork/<forker>/<reponame>/patch:<id>[/files|/commits]"; the
         // patch branch is implicit, while object ids and view-specific params
         // use the same tails as the repo files and commits routes.
         if (std.mem.eql(u8, first, "fork")) {
@@ -1403,7 +1397,7 @@ pub const RoutablePage = union(enum) {
 
     pub fn parent(self: RoutablePage) PageKind {
         return switch (self) {
-            .home_about, .home_users, .home_repos, .home_settings, .home_auth => .home,
+            .home_about, .home_users, .home_settings, .home_auth => .home,
             .user_repos, .user_forks, .user_settings, .user_auth => .user,
             .repo_files, .repo_commits, .repo_diff, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo, .repo_settings, .repo_auth => .repo,
             .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_settings, .fork_auth => .fork,
@@ -1688,7 +1682,6 @@ pub const RoutablePage = union(enum) {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
         return switch (a) {
             .home_users => |a_start| a_start == b.home_users,
-            .home_repos => |a_start| a_start == b.home_repos,
             .user_repos => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_repos.name.slice()) and a_u.start == b.user_repos.start,
             .user_forks => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_forks.name.slice()) and a_u.start == b.user_forks.start,
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
@@ -1812,16 +1805,12 @@ pub const RoutablePage = union(enum) {
     }
 
     // true when `a` and `b` are the same home list tab paginated to a different
-    // window. switching between the users/repos tabs is in-page (the home page
-    // holds both lists), so only a changed `after` on the same tab navigates.
+    // window. switching tabs is in-page, so only a changed `start` on the same
+    // tab navigates.
     pub fn homePageChanged(a: RoutablePage, b: RoutablePage) bool {
         return switch (a) {
             .home_users => |aa| switch (b) {
                 .home_users => |bb| aa != bb,
-                else => false,
-            },
-            .home_repos => |aa| switch (b) {
-                .home_repos => |bb| aa != bb,
                 else => false,
             },
             else => false,
@@ -1964,6 +1953,8 @@ pub const Actor = struct {
     // local mode has no accounts, so it has no user id
     user_id: ?[evt.event_id_size]u8 = null,
     role: evt.Repo.Role,
+    // the repo owner's id, which local mode lacks
+    repo_user_id: ?[evt.event_id_size]u8 = null,
 };
 
 pub const Authorization = union(enum) {
@@ -1984,31 +1975,22 @@ pub fn activeUser(
     return if (user.removed) null else user;
 }
 
-// the role the user holds in the repo `identity` names, or null when no repo
-// has that identity. a null user is logged out.
-pub fn repoRole(
-    moment: evt.AdminDB.HashMap(.read_only),
-    arena: *std.heap.ArenaAllocator,
-    user_id: ?[evt.event_id_size]u8,
-    identity: []const u8,
-) !?evt.Repo.Role {
-    const owner_repo = evt.parseOwnerRepoPath(identity) orelse return null;
-    const repo = (try evt.Repo.readByOwnerAndName(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, owner_repo.owner, owner_repo.name)) orelse return null;
-    return evt.Repo.roleOf(repo.repo, user_id);
-}
-
 // whether the user may write to the repo `identity` names with at least
 // `min_role`
 pub fn authorizeUser(
+    io: std.Io,
     moment: evt.AdminDB.HashMap(.read_only),
     arena: *std.heap.ArenaAllocator,
+    repos_dir: []const u8,
     user_id: [evt.event_id_size]u8,
     identity: []const u8,
     min_role: evt.Repo.Role,
 ) !Authorization {
     const user = (try activeUser(moment, arena, user_id)) orelse return .login_required;
 
-    const role = (try repoRole(moment, arena, user_id, identity)) orelse return .repo_not_found;
+    const owner_repo = evt.parseOwnerRepoPath(identity) orelse return .repo_not_found;
+    const repo = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, moment, repos_dir, owner_repo.owner, owner_repo.name)) orelse return .repo_not_found;
+    const role = evt.Repo.roleOf(repo.repo, user_id);
     // a repo the user can't read doesn't exist to them
     if (role == .none) return .repo_not_found;
     if (!role.atLeast(min_role)) return .forbidden;
@@ -2016,6 +1998,7 @@ pub fn authorizeUser(
         .author = .{ .name = user.event.name, .email = user.event.email },
         .user_id = user_id,
         .role = role,
+        .repo_user_id = repo.repo.event.user_id[0..evt.event_id_size].*,
     } };
 }
 
@@ -2261,8 +2244,10 @@ pub const Session = struct {
         const user_id = self.userId() orelse return null;
         // the session's moment predates this input, so read the roles afresh
         const admin_repo = self.admin_repo orelse return null;
+        const io = self.io orelse return null;
+        const repos_dir = self.repos_dir orelse return null;
         const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-        return switch (try authorizeUser(moment, self.page_arena, user_id, identity, min_role)) {
+        return switch (try authorizeUser(io, moment, self.page_arena, repos_dir, user_id, identity, min_role)) {
             .actor => |actor| actor,
             .login_required, .repo_not_found, .forbidden => null,
         };

@@ -19,12 +19,6 @@ pub const Record = struct {
     removed: bool = false,
     created_order: u64 = 0,
     updated_order: u64 = 0,
-
-    // a repo's key in the name index. it's unique per owner, so the read side
-    // resolves the url's username to its user id first.
-    pub fn indexKey(self: Record, allocator: std.mem.Allocator) ![]const u8 {
-        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ self.event.user_id, self.event.name });
-    }
 };
 
 const Self = @This();
@@ -135,22 +129,13 @@ pub fn consume(
         try validateUserIds(record_to_write.event.owner_user_ids);
     }
 
-    const user_id_to_repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"));
-    const user_id_to_repo_id_set = try DB.HashMap(.read_write).init(user_id_to_repo_id_set_cursor);
-
     if (existing_record_maybe) |existing_record| {
         // updates preserve the original creation metadata
         record_to_write.created_order = existing_record.created_order;
-        const order_key = evt.orderKeyDesc(existing_record.created_order, event_id);
 
-        // drop the old active indexes; active values are re-added below
+        // drop the old active index; active values are re-added below
         if (!existing_record.removed) {
-            const existing_path = try existing_record.indexKey(arena.allocator());
-            _ = try name_to_repo_id.remove(hash.hashInt(hash_kind, existing_path));
-
-            const old_user_repos_cursor = try user_id_to_repo_id_set.putCursor(hash.hashInt(hash_kind, existing_record.event.user_id));
-            const old_user_repos = try DB.SortedSet(.read_write).init(old_user_repos_cursor);
-            _ = try old_user_repos.remove(&order_key);
+            _ = try name_to_repo_id.remove(hash.hashInt(hash_kind, existing_record.event.name));
         }
     }
 
@@ -168,18 +153,13 @@ pub fn consume(
         try repo_id_set.put(&order_key);
     }
 
+    // the user's repos, ordered by creation time, newest first
     const active = try DB.SortedSet(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, active_id_set_key)));
     if (record_to_write.removed) {
         _ = try active.remove(&order_key);
     } else {
         try active.put(&order_key);
-        const repo_path = try record_to_write.indexKey(arena.allocator());
-        try name_to_repo_id.put(hash.hashInt(hash_kind, repo_path), .{ .bytes = event_id });
-
-        // each user's repos are ordered by creation time, newest first
-        const user_repos_cursor = try user_id_to_repo_id_set.putCursor(hash.hashInt(hash_kind, record_to_write.event.user_id));
-        const user_repos = try DB.SortedSet(.read_write).init(user_repos_cursor);
-        try user_repos.put(&order_key);
+        try name_to_repo_id.put(hash.hashInt(hash_kind, record_to_write.event.name), .{ .bytes = event_id });
     }
 }
 
@@ -190,37 +170,21 @@ pub const RepoWithId = struct {
     event_id: [evt.event_id_size]u8,
 };
 
-// read a repo by its owner's name and repo name. the owner name is resolved to
-// a user id via name->user-id (the repo index is keyed by "user-id/repo-name"),
-// matching the /repo/username/reponame url.
-pub fn readByOwnerAndName(
+// read a repo by its name from its owner's user repo
+pub fn readByName(
     comptime DB: type,
     comptime hash_kind: hash.HashKind,
-    haxy_moment: DB.HashMap(.read_only),
+    user_moment: DB.HashMap(.read_only),
     arena: *std.heap.ArenaAllocator,
-    owner_name: []const u8,
-    repo_name: []const u8,
+    name: []const u8,
 ) !?RepoWithId {
-    // owner name -> user id
-    const name_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "name->user-id")) orelse return null;
-    const name_to_user_id = try DB.HashMap(.read_only).init(name_to_user_id_cursor);
-    const user_id_cursor = try name_to_user_id.getCursor(hash.hashInt(hash_kind, owner_name)) orelse return null;
-    var user_id: [evt.event_id_size]u8 = undefined;
-    _ = try user_id_cursor.readBytes(&user_id);
-
-    // "user-id/repo-name" -> repo event id
-    const repo_path = try (Record{ .event = .{ .user_id = user_id[0..], .name = repo_name, .description = "" } }).indexKey(arena.allocator());
-    const name_to_repo_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "name->repo-id")) orelse return null;
+    const name_to_repo_id_cursor = try user_moment.getCursor(hash.hashInt(hash_kind, name_index_key)) orelse return null;
     const name_to_repo_id = try DB.HashMap(.read_only).init(name_to_repo_id_cursor);
-    const repo_id_cursor = try name_to_repo_id.getCursor(hash.hashInt(hash_kind, repo_path)) orelse return null;
+    const repo_id_cursor = try name_to_repo_id.getCursor(hash.hashInt(hash_kind, name)) orelse return null;
     var repo_id: [evt.event_id_size]u8 = undefined;
     _ = try repo_id_cursor.readBytes(&repo_id);
-
-    const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return null;
-    const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
-    const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, &repo_id)) orelse return null;
-    const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
-    return .{ .repo = try evt.read(Record, DB, hash_kind, arena, repo_map), .event_id = repo_id };
+    const repo = (try readById(DB, hash_kind, user_moment, arena, &repo_id)) orelse return null;
+    return .{ .repo = repo, .event_id = repo_id };
 }
 
 pub fn readById(

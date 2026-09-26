@@ -20,16 +20,18 @@ pub const AuthTab = @import("../AuthTab.zig");
 
 name: []const u8,
 owner_name: []const u8,
+forker_name: []const u8,
 title: ui.Title,
 id: []const u8,
 oid: []const u8,
 
 const Self = @This();
 
-pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, id: []const u8, oid: []const u8) !Self {
+pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, forker_name: []const u8, id: []const u8, oid: []const u8) !Self {
     return .{
         .name = name,
         .owner_name = owner_name,
+        .forker_name = forker_name,
         .title = try ui.Title.init(arena, name, .scanlines),
         .id = try arena.allocator().dupe(u8, id),
         .oid = try arena.allocator().dupe(u8, oid),
@@ -61,6 +63,7 @@ pub const View = struct {
 
         const aa = session.page_arena.allocator();
         const identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.owner_name, data.name });
+        const fork_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.forker_name, data.name });
         const commits_label = if (commit_count) |count| try std.fmt.allocPrint(aa, commits_tab_label ++ " ({d})", .{count}) else commits_tab_label;
         var first_group_width = try data.title.width();
 
@@ -97,10 +100,10 @@ pub const View = struct {
 
         const current_tag = std.meta.activeTag(session.data.current_page);
         const routes = [_]ui.RoutablePage{
-            ui.RoutablePage.forkPatchRoute(identity, data.id) orelse return error.RouteTooLong,
-            ui.RoutablePage.forkDiffRoute(identity, data.id, 0, "") orelse return error.RouteTooLong,
-            ui.RoutablePage.forkFilesRoute(identity, data.id, data.oid, "", 0) orelse return error.RouteTooLong,
-            ui.RoutablePage.forkCommitsRoute(identity, data.id, data.oid, 0, "") orelse return error.RouteTooLong,
+            ui.RoutablePage.forkPatchRoute(fork_identity, data.id) orelse return error.RouteTooLong,
+            ui.RoutablePage.forkDiffRoute(fork_identity, data.id, 0, "") orelse return error.RouteTooLong,
+            ui.RoutablePage.forkFilesRoute(fork_identity, data.id, data.oid, "", 0) orelse return error.RouteTooLong,
+            ui.RoutablePage.forkCommitsRoute(fork_identity, data.id, data.oid, 0, "") orelse return error.RouteTooLong,
         };
         const tags = [_]std.meta.Tag(ui.RoutablePage){ .fork_patch, .fork_diff, .fork_files, .fork_commits };
         const labels = [_][]const u8{ patch_tab_label, diff_tab_label, files_tab_label, commits_label };
@@ -128,9 +131,9 @@ pub const View = struct {
             try tabs_box.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null, .flex = .grow });
         }
 
-        const settings_route = ui.RoutablePage.forkSettingsRoute(identity, data.id) orelse return error.RouteTooLong;
+        const settings_route = ui.RoutablePage.forkSettingsRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const settings_link = try ui.inPageTabLink(session, settings_route, current_tag == .fork_settings);
-        const auth_route = ui.RoutablePage.forkAuthRoute(identity, data.id) orelse return error.RouteTooLong;
+        const auth_route = ui.RoutablePage.forkAuthRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const auth_link = try ui.inPageTabLink(session, auth_route, current_tag == .fork_auth);
 
         // settings are account preferences, so they require a login.

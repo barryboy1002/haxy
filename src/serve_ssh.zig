@@ -380,7 +380,7 @@ fn runGitSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, exec: ss
     const owner_repo = evt.parseOwnerRepoPath(repo_identity) orelse return writeError(sess, "repo path must be <owner>/<repo>");
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const author = switch (try authorizeRepoKey(io, &author_arena, handler.admin_repo_path, owner_repo.owner, owner_repo.name, parsed.service, &sess.fingerprint)) {
+    const author = switch (try authorizeRepoKey(io, &author_arena, handler.admin_repo_path, handler.repo_root_path, owner_repo.owner, owner_repo.name, parsed.service, &sess.fingerprint)) {
         .allowed => |user| user,
         .denied => return switch (parsed.service) {
             .upload_pack => writeError(sess, "unauthorized: this SSH key cannot read this repo"),
@@ -420,7 +420,8 @@ fn runForkSession(
     const io = sess.conn.io;
 
     const route = fork.parseRoute(fork_path) orelse return writeError(sess, "invalid fork path");
-    const owner_repo = evt.parseOwnerRepoPath(route.identity) orelse return writeError(sess, "repo path must be <owner>/<repo>");
+    // the route names the forker and the target repo
+    const forker_repo = evt.parseOwnerRepoPath(route.identity) orelse return writeError(sess, "repo path must be <forker>/<repo>");
 
     var admin = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = handler.admin_repo_path });
     defer admin.deinit(io, allocator);
@@ -428,10 +429,12 @@ fn runForkSession(
     defer admin_arena.deinit();
     const admin_moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
     const fork_id = try evt.parseEventId(&route.id);
-    const fork_record = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &admin_arena, &fork_id)) orelse
+    const forker_id = (try evt.User.readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, forker_repo.owner)) orelse
+        return writeError(sess, "patch draft not found");
+    const fork_record = (try evt.readForkById(io, allocator, &admin_arena, handler.repo_root_path, &forker_id, &fork_id)) orelse
         return writeError(sess, "patch draft not found");
     if (fork_record.removed) return writeError(sess, "patch draft not found");
-    const user = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &admin_arena, fork_record.event.user_id)) orelse
+    const user = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &admin_arena, &forker_id)) orelse
         return writeError(sess, "invalid patch draft");
     if (user.removed) return writeError(sess, "invalid patch draft");
     if (service == .receive_pack and !isKeyInAuthorizedKeys(user.event.ssh_keys, &sess.fingerprint))
@@ -448,10 +451,10 @@ fn runForkSession(
             inline else => |*repo| try repo.uploadPack(io, allocator, reader, writer, .{ .protocol_version = protocol_version }, &sideband),
         }
     } else {
-        const target = (try evt.Repo.readByOwnerAndName(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &admin_arena, owner_repo.owner, owner_repo.name)) orelse
+        const target = (try evt.readRepoById(io, allocator, &admin_arena, handler.repo_root_path, fork_record.event.repo_user_id[0..evt.event_id_size], fork_record.event.repo_id)) orelse
             return writeError(sess, "repo not found");
-        if (!std.mem.eql(u8, fork_record.event.repo_id, &target.event_id)) return writeError(sess, "patch draft belongs to another repo");
-        const target_id = std.fmt.bytesToHex(target.event_id, .lower);
+        if (!std.mem.eql(u8, target.event.name, forker_repo.name)) return writeError(sess, "patch draft belongs to another repo");
+        const target_id = std.fmt.bytesToHex(fork_record.event.repo_id[0..evt.event_id_size].*, .lower);
         const target_path = try std.fs.path.join(allocator, &.{ handler.repo_root_path, &target_id });
         defer allocator.free(target_path);
         const author: evt.CommitAuthor = .{ .name = user.event.name, .email = user.event.email };
@@ -544,6 +547,7 @@ fn authorizeRepoKey(
     io: std.Io,
     arena: *std.heap.ArenaAllocator,
     admin_repo_path: []const u8,
+    repo_root_path: []const u8,
     owner_name: []const u8,
     repo_name: []const u8,
     service: GitService,
@@ -557,7 +561,7 @@ fn authorizeRepoKey(
     defer admin.deinit(io, allocator);
 
     const moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-    const repo = (try evt.Repo.readByOwnerAndName(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, owner_name, repo_name)) orelse {
+    const repo = (try evt.readRepoByOwnerAndName(io, allocator, arena, moment, repo_root_path, owner_name, repo_name)) orelse {
         if (service == .upload_pack) return .not_found;
         const owner = (try evt.User.readByName(io, allocator, admin_repo_path, arena, owner_name)) orelse return .not_found;
         return if (isKeyInAuthorizedKeys(owner.event.ssh_keys, fingerprint))

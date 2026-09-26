@@ -543,13 +543,16 @@ fn testPushFork(
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-        const target = (try evt.Repo.readByOwnerAndName(evt.AdminDB, evt.admin_repo_opts.hash, moment, &arena, "admin", "target")) orelse return error.NotFound;
+        const target = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, repos_dir, "admin", "target")) orelse return error.NotFound;
         repo_id = target.event_id;
         @memcpy(&user_id, target.repo.event.user_id);
-        break :blk try fork.create(repo_opts, io, allocator, repos_dir, &admin, .{
+        var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
+        defer user_repo.deinit(io, allocator);
+        break :blk try fork.create(repo_opts, io, allocator, repos_dir, &user_repo, .{
             .id = fork_id_hex,
             .user_id = user_id,
             .repo_id = repo_id,
+            .repo_user_id = user_id,
             .title = "add a feature",
             .description = "a draft patch",
             .labels = "enhancement",
@@ -615,13 +618,15 @@ fn testPushFork(
     {
         var admin = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_path });
         defer admin.deinit(io, allocator);
+        var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
+        defer user_repo.deinit(io, allocator);
         var target = try rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = target_path });
         defer target.deinit(io, allocator);
         // pushing a draft does not create haxy state or a mergeability cache
         try std.testing.expectError(error.NotFound, evt.currentMoment(repo_opts, &target));
         try std.testing.expectEqual(null, try (try target.core.latestMoment()).getCursor(hash.hashInt(hash_kind, evt.Patch.patch_id_to_mergeability_key)));
         try target.addBranch(io, .{ .name = "feature" });
-        try pch.publish(repo_opts, io, allocator, &admin, &target, draft_path, .{
+        try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, draft_path, .{
             .id = fork_id_hex,
             .user_id = user_id,
             .repo_id = repo_id,
@@ -791,9 +796,9 @@ fn testPushFork(
     //
 
     {
-        var admin = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_path });
-        defer admin.deinit(io, allocator);
-        try evt.remove(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, &repo_id, .repo, .{ .name = "admin", .email = "admin@example.test" });
+        var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
+        defer user_repo.deinit(io, allocator);
+        try evt.remove(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, &repo_id, .repo, .{ .name = "admin", .email = "admin@example.test" });
     }
     const clone_path = try std.fs.path.join(allocator, &.{ temp_path, "fork-clone" });
     defer allocator.free(clone_path);
@@ -810,9 +815,9 @@ fn testPushFork(
     try std.testing.expectEqualStrings(&third_source_oid, &(try fork_clone.readRef(io, fork.ref) orelse return error.NotFound));
 
     {
-        var admin = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_path });
-        defer admin.deinit(io, allocator);
-        try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &.{
+        var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
+        defer user_repo.deinit(io, allocator);
+        try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
             .{
                 .id = std.fmt.bytesToHex(repo_id, .lower),
                 .timestamp = 2,
@@ -823,6 +828,10 @@ fn testPushFork(
                     .description = "",
                 } },
             },
+        });
+        var admin = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_path });
+        defer admin.deinit(io, allocator);
+        try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &.{
             .{
                 .id = std.fmt.bytesToHex(user_id, .lower),
                 .timestamp = 2,
@@ -1615,7 +1624,8 @@ fn copyDir(io: std.Io, src_dir: std.Io.Dir, dest_dir: std.Io.Dir) !void {
 // the dev SSH public key matching the private key written by runServer
 const admin_ssh_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeIs8mJqigBZ5y84J4COgnAJJ5bHPKy+lM2SliMXbYm radar@roark";
 
-// create the admin event repo with a user holding the dev SSH public key
+// create the admin event repo with a user holding the dev SSH public key, plus
+// that user's repo
 fn setupAdmin(io: std.Io, allocator: std.mem.Allocator, data_path: []const u8) !void {
     const admin_repo_path = try std.fs.path.join(allocator, &.{ data_path, "admin" });
     defer allocator.free(admin_repo_path);
@@ -1642,6 +1652,13 @@ fn setupAdmin(io: std.Io, allocator: std.mem.Allocator, data_path: []const u8) !
             .ssh_keys = admin_ssh_key,
         } },
     }});
+
+    const repos_dir = try std.fs.path.join(allocator, &.{ data_path, "repos" });
+    defer allocator.free(repos_dir);
+    const user_repo_path = try evt.userRepoPath(allocator, repos_dir, &user_id);
+    defer allocator.free(user_repo_path);
+    var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
+    defer user_repo.deinit(io, allocator);
 }
 
 // resolve admin/<repo_name> to its on-disk directory under <data_dir>/repos via

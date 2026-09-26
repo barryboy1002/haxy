@@ -37,6 +37,7 @@ pub const CreateInput = struct {
     id: [evt.event_id_size * 2]u8,
     user_id: [evt.event_id_size]u8,
     repo_id: [evt.event_id_size]u8,
+    repo_user_id: [evt.event_id_size]u8,
     title: []const u8,
     description: []const u8,
     labels: []const u8,
@@ -50,7 +51,7 @@ pub fn create(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo_root_path: []const u8,
-    admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
+    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
     input: CreateInput,
 ) ![]u8 {
     if (!evt.Patch.fieldsValid(input.title, input.labels)) return error.InvalidPatch;
@@ -64,12 +65,10 @@ pub fn create(
     // make sure the fork id doesn't already exist
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const existing = if (evt.currentMoment(evt.admin_repo_opts, admin_repo)) |moment|
-        try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, &arena, &fork_id)
-    else |err| switch (err) {
-        error.NotFound => null,
-        else => |other| return other,
-    };
+    const existing = if (try evt.userMoment(user_repo)) |moment|
+        try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, moment, &arena, &fork_id)
+    else
+        null;
     if (existing != null) return error.InvalidPatchDraft;
 
     // get the target repo
@@ -123,6 +122,7 @@ pub fn create(
             core: *rp.Repo(.xit, repo_opts).Core,
             io: std.Io,
             allocator: std.mem.Allocator,
+            forker_id: [evt.event_id_size * 2]u8,
 
             pub fn run(ctx: @This(), cursor: *DB.Cursor(.read_write)) !void {
                 var moment = try DB.HashMap(.read_write).init(cursor.*);
@@ -157,6 +157,7 @@ pub fn create(
                 var config = try xit.config.Config(.xit, repo_opts).init(state.readOnly(), ctx.io, ctx.allocator);
                 defer config.deinit();
                 try config.add(state, ctx.io, .{ .name = "receive.denydeletes", .value = "true" });
+                try config.add(state, ctx.io, .{ .name = "haxy.forker", .value = &ctx.forker_id });
 
                 // the copied db carries the target's file index, so the patch
                 // branch's entry starts from one of those rather than walking
@@ -173,7 +174,7 @@ pub fn create(
         const history = try DB.ArrayList(.read_write).init(fork_repo.core.db.rootCursor());
         try history.appendContext(
             .{ .slot = try history.getSlot(-1) },
-            Ctx{ .core = &fork_repo.core, .io = io, .allocator = allocator },
+            Ctx{ .core = &fork_repo.core, .io = io, .allocator = allocator, .forker_id = std.fmt.bytesToHex(input.user_id, .lower) },
         );
     }
 
@@ -191,13 +192,13 @@ pub fn create(
     }});
 
     // create the fork event
-    try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, admin_repo, evt.events_ref, &.{.{
+    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, evt.events_ref, &.{.{
         .id = input.id,
         .timestamp = input.timestamp,
         .author = input.author,
         .event = .{ .fork = .{
-            .user_id = &input.user_id,
             .repo_id = &input.repo_id,
+            .repo_user_id = &input.repo_user_id,
         } },
     }});
 
@@ -209,22 +210,31 @@ pub fn remove(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo_root_path: []const u8,
-    admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
+    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
     id: *const [evt.event_id_size * 2]u8,
-    expected_user_id: ?*const [evt.event_id_size]u8,
     author: evt.CommitAuthor,
 ) !void {
     const fork_id = try evt.parseEventId(id);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-    const record = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, &arena, &fork_id)) orelse return error.InvalidPatchDraft;
-    if (expected_user_id) |user_id| {
-        if (!std.mem.eql(u8, record.event.user_id, user_id)) return error.InvalidPatchDraft;
-    }
-    if (!record.removed) try evt.remove(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, admin_repo, &fork_id, .fork, author);
+    const moment = (try evt.userMoment(user_repo)) orelse return error.InvalidPatchDraft;
+    const record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, moment, &arena, &fork_id)) orelse return error.InvalidPatchDraft;
+    if (!record.removed) try evt.remove(.server, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, &fork_id, .fork, author);
 
     const path = try forkPath(allocator, repo_root_path, id);
     defer allocator.free(path);
     try std.Io.Dir.cwd().deleteTree(io, path);
+}
+
+// the id of the user who created the fork at `fork_path`, or null when it's gone
+pub fn readForkerId(io: std.Io, allocator: std.mem.Allocator, fork_path: []const u8) !?[evt.event_id_size]u8 {
+    var fork_repo = rp.Repo(.xit, .{}).open(io, allocator, .{ .path = fork_path, .require_repo_root = true }) catch |err| switch (err) {
+        error.RepoNotFound, error.FileNotFound => return null,
+        else => |e| return e,
+    };
+    defer fork_repo.deinit(io, allocator);
+    var config = try fork_repo.listConfig(io, allocator);
+    defer config.deinit();
+    const section = config.sections.get("haxy") orelse return error.InvalidPatchDraft;
+    return try evt.parseEventId(section.get("forker") orelse return error.InvalidPatchDraft);
 }

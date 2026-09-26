@@ -869,6 +869,7 @@ pub fn publish(
     io: std.Io,
     allocator: std.mem.Allocator,
     admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
+    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
     target_repo: *rp.Repo(.xit, repo_opts),
     fork_path: []const u8,
     input: PublishInput,
@@ -879,10 +880,9 @@ pub fn publish(
 
     // validate the fork ownership and publishing identity
     const admin_moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-    const fork_record = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &arena, &patch_id)) orelse return error.InvalidPatchDraft;
-    if (fork_record.removed or
-        !std.mem.eql(u8, fork_record.event.user_id, &input.user_id) or
-        !std.mem.eql(u8, fork_record.event.repo_id, &input.repo_id)) return error.InvalidPatchDraft;
+    const user_moment = (try evt.userMoment(user_repo)) orelse return error.InvalidPatchDraft;
+    const fork_record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, user_moment, &arena, &patch_id)) orelse return error.InvalidPatchDraft;
+    if (fork_record.removed or !std.mem.eql(u8, fork_record.event.repo_id, &input.repo_id)) return error.InvalidPatchDraft;
     const user = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &arena, &input.user_id)) orelse return error.InvalidPatchDraft;
     if (user.removed or
         !std.mem.eql(u8, user.event.name, input.author.name) or
@@ -937,11 +937,11 @@ pub fn publish(
         }});
     }
 
-    // mark the fork as published in the administration repository
+    // mark the fork as published in the forker's user repo
     if (fork_record.event.stage == .draft) {
         var published = fork_record.event;
         published.stage = .publish;
-        try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, admin_repo, evt.events_ref, &.{.{
+        try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, evt.events_ref, &.{.{
             .id = input.id,
             .timestamp = input.timestamp,
             .author = input.author,
@@ -955,6 +955,7 @@ pub fn editDraft(
     io: std.Io,
     allocator: std.mem.Allocator,
     admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
+    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
     fork_path: []const u8,
     input: EditDraftInput,
 ) !bool {
@@ -968,11 +969,10 @@ pub fn editDraft(
     // validate the draft ownership and editing identity
     {
         const admin_moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-        const fork_record = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &arena, &patch_id)) orelse return false;
+        const user_moment = (try evt.userMoment(user_repo)) orelse return false;
+        const fork_record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, user_moment, &arena, &patch_id)) orelse return false;
         if (fork_record.event.stage != .draft) return false;
-        if (fork_record.removed or
-            !std.mem.eql(u8, fork_record.event.user_id, &input.user_id) or
-            !std.mem.eql(u8, fork_record.event.repo_id, &input.repo_id)) return error.InvalidPatchDraft;
+        if (fork_record.removed or !std.mem.eql(u8, fork_record.event.repo_id, &input.repo_id)) return error.InvalidPatchDraft;
         const user = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &arena, &input.user_id)) orelse return error.InvalidPatchDraft;
         if (user.removed or
             !std.mem.eql(u8, user.event.name, input.author.name) or
@@ -1168,7 +1168,6 @@ pub fn mergeAndRemoveFork(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo_root_path: []const u8,
-    admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
     target_repo: *rp.Repo(.xit, repo_opts),
     input: MergeInput,
 ) !void {
@@ -1176,9 +1175,15 @@ pub fn mergeAndRemoveFork(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    // remove fork data only for patches backed by a fork.
+    // remove fork data only for patches backed by a fork
     const record = (try evt.readFromRepo(evt.Patch, .xit, repo_opts, io, allocator, &arena, target_repo, &try evt.parseEventId(&input.id))) orelse return error.InvalidPatch;
-    if (record.event.source_branch == null) try fork.remove(io, allocator, repo_root_path, admin_repo, &input.id, null, input.author);
+    if (record.event.source_branch != null) return;
+    // a fork already cleaned up has no repo left
+    const fork_path = try fork.forkPath(arena.allocator(), repo_root_path, &input.id);
+    const forker_id = (try fork.readForkerId(io, allocator, fork_path)) orelse return;
+    var user_repo = (try evt.openUserRepo(io, allocator, repo_root_path, &forker_id)) orelse return error.InvalidPatchDraft;
+    defer user_repo.deinit(io, allocator);
+    try fork.remove(io, allocator, repo_root_path, &user_repo, &input.id, input.author);
 }
 
 fn commitAuthor(line: []const u8) !evt.CommitAuthor {

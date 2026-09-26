@@ -842,6 +842,12 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
                 .password_hash = "",
             } },
         },
+    });
+    const user_repo_path = try evt.userRepoPath(allocator, repos_dir, &user_id);
+    defer allocator.free(user_repo_path);
+    var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
+    defer user_repo.deinit(io, allocator);
+    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
         .{
             .id = repo_id_hex,
             .timestamp = 1,
@@ -876,11 +882,12 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     const patch_id = evt.EventWithId.randomId(prng.random());
     const patch_id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    const draft_path = try fork.create(repo_opts, io, allocator, repos_dir, &admin, .{
+    const draft_path = try fork.create(repo_opts, io, allocator, repos_dir, &user_repo, .{
         .target_branch = "master",
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
+        .repo_user_id = user_id,
         .title = "add the answer",
         .labels = "enhancement",
         .description = "adds a reusable answer constant",
@@ -961,10 +968,11 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     const unpushed_id = evt.EventWithId.randomId(prng.random());
     const unpushed_id_hex = std.fmt.bytesToHex(unpushed_id, .lower);
-    const unpushed_path = try fork.create(repo_opts, io, allocator, repos_dir, &admin, .{
+    const unpushed_path = try fork.create(repo_opts, io, allocator, repos_dir, &user_repo, .{
         .id = unpushed_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
+        .repo_user_id = user_id,
         .title = "explain the answer",
         .labels = "documentation",
         .description = "describes the existing answer",
@@ -973,7 +981,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
         .timestamp = 3,
     });
     defer allocator.free(unpushed_path);
-    try pch.publish(repo_opts, io, allocator, &admin, &target, unpushed_path, .{
+    try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, unpushed_path, .{
         .id = unpushed_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -998,7 +1006,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     // edit the patch metadata in the fork
     //
 
-    try std.testing.expect(try pch.editDraft(repo_opts, io, allocator, &admin, draft_path, .{
+    try std.testing.expect(try pch.editDraft(repo_opts, io, allocator, &admin, &user_repo, draft_path, .{
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1015,7 +1023,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     //
 
     const before_publish = try target.core.db.rootCursor().count();
-    try pch.publish(repo_opts, io, allocator, &admin, &target, draft_path, .{
+    try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, draft_path, .{
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1023,7 +1031,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
         .timestamp = 5,
     });
     try std.testing.expectEqual(before_publish + 1, try target.core.db.rootCursor().count());
-    try pch.publish(repo_opts, io, allocator, &admin, &target, draft_path, .{
+    try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, draft_path, .{
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1041,13 +1049,12 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     try std.testing.expectEqual(null, try evt.PatchRev.readById(Repo.DB, repo_opts.hash, moment, &arena, &first_patchrev_id));
 
     _ = arena.reset(.retain_capacity);
-    const admin_moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-    const published_fork = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &arena, &patch_id)) orelse return error.NotFound;
+    const user_moment = try evt.currentMoment(evt.user_repo_opts, &user_repo);
+    const published_fork = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, user_moment, &arena, &patch_id)) orelse return error.NotFound;
     try std.testing.expect(!published_fork.removed);
     try std.testing.expectEqual(.publish, published_fork.event.stage);
-    const draft_key = evt.Fork.draftKey(&repo_id, &user_id);
-    try std.testing.expectEqual(0, try indexedForkCount(admin_moment, evt.Fork.repo_user_to_draft_id_set_key, &draft_key));
-    try std.testing.expectEqual(2, try indexedForkCount(admin_moment, evt.Fork.user_id_to_fork_id_set_key, &user_id));
+    try std.testing.expectEqual(0, try draftForkCount(user_moment, &repo_id));
+    try std.testing.expectEqual(2, try activeForkCount(user_moment));
     var squash_oid: [hash.hexLen(repo_opts.hash)]u8 = undefined;
     {
         var draft = try Repo.open(io, allocator, .{ .path = draft_path });
@@ -1093,7 +1100,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
         .squash => squash_oid,
         .source => source_oid,
     };
-    try pch.mergeAndRemoveFork(repo_opts, io, allocator, repos_dir, &admin, &target, .{
+    try pch.mergeAndRemoveFork(repo_opts, io, allocator, repos_dir, &target, .{
         .id = patch_id_hex,
         .revision = merge_revision,
         .author = author,
@@ -1118,19 +1125,21 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     try std.testing.expect(null != try evt.PatchRev.readById(Repo.DB, repo_opts.hash, merged_moment, &arena, &first_patchrev_id));
 
     _ = arena.reset(.retain_capacity);
-    const removed_fork = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, try evt.currentMoment(evt.admin_repo_opts, &admin), &arena, &patch_id)) orelse return error.NotFound;
+    const removed_fork = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, try evt.currentMoment(evt.user_repo_opts, &user_repo), &arena, &patch_id)) orelse return error.NotFound;
     try std.testing.expect(removed_fork.removed);
 }
 
-fn indexedForkCount(
-    moment: evt.AdminDB.HashMap(.read_only),
-    index_key: []const u8,
-    parent_id: []const u8,
-) !u64 {
-    const index_cursor = try moment.getCursor(hash.hashInt(evt.admin_repo_opts.hash, index_key)) orelse return 0;
-    const index = try evt.AdminDB.HashMap(.read_only).init(index_cursor);
-    const ids_cursor = try index.getCursor(hash.hashInt(evt.admin_repo_opts.hash, parent_id)) orelse return 0;
-    const ids = try evt.AdminDB.SortedSet(.read_only).init(ids_cursor);
+fn draftForkCount(moment: evt.UserDB.HashMap(.read_only), repo_id: []const u8) !u64 {
+    const index_cursor = try moment.getCursor(hash.hashInt(evt.user_repo_opts.hash, evt.Fork.repo_to_draft_id_set_key)) orelse return 0;
+    const index = try evt.UserDB.HashMap(.read_only).init(index_cursor);
+    const ids_cursor = try index.getCursor(hash.hashInt(evt.user_repo_opts.hash, repo_id)) orelse return 0;
+    const ids = try evt.UserDB.SortedSet(.read_only).init(ids_cursor);
+    return try ids.count();
+}
+
+fn activeForkCount(moment: evt.UserDB.HashMap(.read_only)) !u64 {
+    const ids_cursor = try moment.getCursor(hash.hashInt(evt.user_repo_opts.hash, evt.Fork.active_id_set_key)) orelse return 0;
+    const ids = try evt.UserDB.SortedSet(.read_only).init(ids_cursor);
     return try ids.count();
 }
 

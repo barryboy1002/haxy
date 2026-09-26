@@ -22,6 +22,8 @@ pub const page_size = 20; // how many repos one window of the repos tab shows
 
 pub const ForkItem = struct {
     id: []const u8,
+    // the fork route's identity, which names the forker
+    identity: []const u8,
     target: []const u8,
     title: []const u8,
 };
@@ -48,34 +50,29 @@ pub fn init(
     repos_start: usize,
     forks_start: usize,
 ) !Self {
+    // admin and user repos share one db type
     const DB = evt.AdminDB;
     const hash_kind = evt.admin_repo_opts.hash;
 
-    // a route identifies a user by name; resolve it to the user's event id via
-    // the name->user-id index, which everything below keys off of.
-    const name_to_user_id_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "name->user-id")) orelse return error.NotFound;
-    const name_to_user_id = try DB.HashMap(.read_only).init(name_to_user_id_cursor);
-    const user_id_cursor = try name_to_user_id.getCursor(hash.hashInt(hash_kind, name.slice())) orelse return error.NotFound;
-    var user_id_buf: [evt.event_id_size]u8 = undefined;
-    _ = try user_id_cursor.readBytes(&user_id_buf);
-    const user_id: []const u8 = &user_id_buf;
+    // a route identifies a user by name, which everything below keys off of
+    const user_id = (try evt.User.readIdByName(DB, hash_kind, haxy_moment, name.slice())) orelse return error.NotFound;
+    const user = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, &user_id)) orelse return error.NotFound;
 
-    const user = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, user_id)) orelse return error.NotFound;
+    const io = session.io orelse return error.NoMoment;
+    const repos_dir = session.repos_dir orelse return error.NoMoment;
+    const gpa = arena.child_allocator;
+
+    // a user with no user repo or no events has empty lists
+    var user_repo_maybe = try evt.openUserRepo(io, gpa, repos_dir, &user_id);
+    defer if (user_repo_maybe) |*user_repo| user_repo.deinit(io, gpa);
+    const user_moment = if (user_repo_maybe) |*user_repo| try evt.userMoment(user_repo) else null;
 
     var repos: std.ArrayList(evt.Repo.Record) = .empty;
     var repos_next_start: ?usize = null;
-
-    // the user-id->repo-id-set index maps each user to a set of their repo event
-    // ids ordered by creation (newest first); it only exists once a repo has
-    // been consumed, so a user with no repos simply yields an empty list.
-    if (try haxy_moment.getCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"))) |user_id_to_repo_id_set_cursor| {
-        const user_id_to_repo_id_set = try DB.HashMap(.read_only).init(user_id_to_repo_id_set_cursor);
-        if (try user_id_to_repo_id_set.getCursor(hash.hashInt(hash_kind, user_id))) |user_repos_cursor| {
+    if (user_moment) |moment| {
+        if (try moment.getCursor(hash.hashInt(hash_kind, evt.Repo.active_id_set_key))) |user_repos_cursor| {
             const user_repos = try DB.SortedSet(.read_only).init(user_repos_cursor);
             const count = try user_repos.count();
-
-            const event_id_to_repo_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->repo")) orelse return error.NotFound;
-            const event_id_to_repo = try DB.HashMap(.read_only).init(event_id_to_repo_cursor);
 
             // read the window [start, start+page_size) with one seek to the start
             // rank, then a sequential walk.
@@ -83,16 +80,9 @@ pub fn init(
             var repos_iter = try user_repos.iteratorFromIndex(repos_start);
             var i = repos_start;
             while (i < end) : (i += 1) {
-                var kv_cursor = (try repos_iter.next()) orelse break;
-                const kv = try kv_cursor.readKeyValuePair();
-                // the set key is orderKey = [created-order][event-id]; its trailing
-                // bytes are the repo event id.
-                var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
-                _ = try kv.key_cursor.readBytes(&order_key);
-                const event_id = order_key[@sizeOf(u64)..];
-                const repo_cursor = try event_id_to_repo.getCursor(hash.hashInt(hash_kind, event_id)) orelse continue;
-                const repo_map = try DB.HashMap(.read_only).init(repo_cursor);
-                const repo_event = try evt.read(evt.Repo.Record, DB, hash_kind, arena, repo_map);
+                const kv_cursor = (try repos_iter.next()) orelse break;
+                const event_id = try evt.readOrderKeyId(DB, kv_cursor);
+                const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &event_id)) orelse continue;
                 // unreadable repos leave their window short rather than shifting the others
                 if (evt.Repo.roleOf(repo_event, session.userId()) == .none) continue;
                 try repos.append(arena.allocator(), repo_event);
@@ -103,46 +93,38 @@ pub fn init(
 
     var forks: std.ArrayList(ForkItem) = .empty;
     var forks_next_start: ?usize = null;
-    if (try haxy_moment.getCursor(hash.hashInt(hash_kind, evt.Fork.user_id_to_fork_id_set_key))) |by_user_cursor| {
-        const by_user = try DB.HashMap(.read_only).init(by_user_cursor);
-        if (try by_user.getCursor(hash.hashInt(hash_kind, user_id))) |user_forks_cursor| {
+    if (user_moment) |moment| {
+        if (try moment.getCursor(hash.hashInt(hash_kind, evt.Fork.active_id_set_key))) |user_forks_cursor| {
             const user_forks = try DB.SortedSet(.read_only).init(user_forks_cursor);
-            const repos_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, evt.Repo.record_map_key)) orelse return error.NotFound;
-            const repo_records = try DB.HashMap(.read_only).init(repos_cursor);
             const count = try user_forks.count();
             const end = @min(forks_start +| page_size, count);
             var iter = try user_forks.iteratorFromIndex(forks_start);
             var i = forks_start;
             while (i < end) : (i += 1) {
-                const cursor = (try iter.next()) orelse break;
-                var kv_cursor = cursor;
-                const kv = try kv_cursor.readKeyValuePair();
-                var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
-                _ = try kv.key_cursor.readBytes(&order_key);
-                const fork_id = order_key[@sizeOf(u64)..];
-                const fork_id_hex = std.fmt.bytesToHex(fork_id.*, .lower);
-                const record = (try evt.Fork.readById(DB, hash_kind, haxy_moment, arena, fork_id)) orelse continue;
+                const kv_cursor = (try iter.next()) orelse break;
+                const fork_id = try evt.readOrderKeyId(DB, kv_cursor);
+                const fork_id_hex = std.fmt.bytesToHex(fork_id, .lower);
+                const record = (try evt.Fork.readById(DB, hash_kind, moment, arena, &fork_id)) orelse continue;
 
-                const repo_cursor = try repo_records.getCursor(hash.hashInt(hash_kind, record.event.repo_id)) orelse continue;
-                const target_repo = try evt.read(evt.Repo.Record, DB, hash_kind, arena, try DB.HashMap(.read_only).init(repo_cursor));
+                // the target lives in its owner's user repo
+                const owner_id = record.event.repo_user_id[0..evt.event_id_size];
+                const target_repo = (try evt.readRepoById(io, gpa, arena, repos_dir, owner_id, record.event.repo_id)) orelse continue;
                 if (evt.Repo.roleOf(target_repo, session.userId()) == .none) continue;
-                const owner = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, target_repo.event.user_id)) orelse continue;
-                const target = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ owner.event.name, target_repo.event.name });
+                const owner = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, owner_id)) orelse continue;
 
                 var title: []const u8 = "(unavailable)";
-                if (session.io) |io| if (session.repos_dir) |repos_dir| {
-                    const path = try fork.forkPath(arena.allocator(), repos_dir, &fork_id_hex);
-                    if (rp.Repo(.xit, .{}).open(io, arena.child_allocator, .{ .path = path, .require_repo_root = true })) |opened| {
-                        var fork_repo = opened;
-                        defer fork_repo.deinit(io, arena.child_allocator);
-                        if (evt.currentMoment(.{}, &fork_repo)) |moment| {
-                            if (try evt.Patch.readById(evt.EventDB(.sha1), .sha1, moment, arena, fork_id)) |patch| title = patch.event.title;
-                        } else |_| {}
+                const path = try fork.forkPath(arena.allocator(), repos_dir, &fork_id_hex);
+                if (rp.Repo(.xit, .{}).open(io, gpa, .{ .path = path, .require_repo_root = true })) |opened| {
+                    var fork_repo = opened;
+                    defer fork_repo.deinit(io, gpa);
+                    if (evt.currentMoment(.{}, &fork_repo)) |fork_moment| {
+                        if (try evt.Patch.readById(evt.EventDB(.sha1), .sha1, fork_moment, arena, &fork_id)) |patch| title = patch.event.title;
                     } else |_| {}
-                };
+                } else |_| {}
                 try forks.append(arena.allocator(), .{
                     .id = try arena.allocator().dupe(u8, &fork_id_hex),
-                    .target = target,
+                    .identity = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ user.event.name, target_repo.event.name }),
+                    .target = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ owner.event.name, target_repo.event.name }),
                     .title = title,
                 });
             }
@@ -228,7 +210,7 @@ pub const View = struct {
                 if (data.forks_start > 0)
                     try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:/user/{s}/forks/start:{d}", .{ data.user.name, data.forks_start -| page_size }) });
                 for (data.forks) |fork_item| {
-                    const route = ui.RoutablePage.forkPatchRoute(fork_item.target, fork_item.id) orelse return error.RouteTooLong;
+                    const route = ui.RoutablePage.forkPatchRoute(fork_item.identity, fork_item.id) orelse return error.RouteTooLong;
                     try items.append(aa, .{
                         .text = try std.fmt.allocPrint(aa, "{s}\n{s}", .{ fork_item.target, fork_item.title }),
                         .link = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)}),

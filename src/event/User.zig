@@ -17,12 +17,6 @@ pub const Record = struct {
     removed: bool = false,
     created_order: u64 = 0,
     updated_order: u64 = 0,
-
-    // a user's key in the name index
-    pub fn indexKey(self: Record, allocator: std.mem.Allocator) ![]const u8 {
-        _ = allocator;
-        return self.event.name;
-    }
 };
 
 // the subset of a user that anyone may see
@@ -125,29 +119,6 @@ pub fn consume(
         try name_to_user_id.put(hash.hashInt(hash_kind, record_to_write.event.name), .{ .bytes = event_id });
         try email_to_user_id.put(hash.hashInt(hash_kind, record_to_write.event.email), .{ .bytes = event_id });
     }
-
-    const became_removed = record_to_write.removed and if (existing_record_maybe) |existing| !existing.removed else true;
-    if (became_removed) {
-        // the user's repos go with them: the repo name index is keyed by owner
-        // id, so one left behind is listed but can never be resolved again
-        const user_id_to_repo_id_set_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "user-id->repo-id-set"));
-        const user_id_to_repo_id_set = try DB.HashMap(.read_write).init(user_id_to_repo_id_set_cursor);
-        if (try user_id_to_repo_id_set.getCursor(user_key)) |user_repos_cursor| {
-            const user_repos = try DB.SortedSet(.read_only).init(user_repos_cursor);
-
-            // collected up front, since removing a repo removes it from this set
-            var repo_ids: std.ArrayList([evt.event_id_size]u8) = .empty;
-            var repo_iter = try user_repos.iteratorFromIndex(0);
-            while (try repo_iter.next()) |kv_pair_cursor| {
-                try repo_ids.append(arena.allocator(), try evt.readOrderKeyId(DB, kv_pair_cursor));
-            }
-
-            for (repo_ids.items) |*repo_id| {
-                try evt.Repo.consume(DB, hash_kind, haxy_moment, repo_id, null, arena, null);
-            }
-        }
-        _ = try user_id_to_repo_id_set.remove(user_key);
-    }
 }
 
 pub const password_hash_max_len = bcrypt.hash_length * 2;
@@ -232,6 +203,41 @@ pub fn readByEmail(
     const user_map = try userMap(DB, hash_kind, haxy_moment, &user_id) orelse return null;
     const record = try evt.read(struct { event: Public }, DB, hash_kind, arena, user_map);
     return record.event;
+}
+
+// a user's id via the name->user-id index
+pub fn readIdByName(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    haxy_moment: DB.HashMap(.read_only),
+    name: []const u8,
+) !?[evt.event_id_size]u8 {
+    return try readIdFromIndex(DB, hash_kind, haxy_moment, name_index_key, name);
+}
+
+// a user's id via the email->user-id index
+pub fn readIdByEmail(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    haxy_moment: DB.HashMap(.read_only),
+    email: []const u8,
+) !?[evt.event_id_size]u8 {
+    return try readIdFromIndex(DB, hash_kind, haxy_moment, email_to_user_id_key, email);
+}
+
+fn readIdFromIndex(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    haxy_moment: DB.HashMap(.read_only),
+    index_key: []const u8,
+    key: []const u8,
+) !?[evt.event_id_size]u8 {
+    const index_cursor = (try haxy_moment.getCursor(hash.hashInt(hash_kind, index_key))) orelse return null;
+    const index = try DB.HashMap(.read_only).init(index_cursor);
+    const user_id_cursor = (try index.getCursor(hash.hashInt(hash_kind, key))) orelse return null;
+    var user_id: [evt.event_id_size]u8 = undefined;
+    _ = try user_id_cursor.readBytes(&user_id);
+    return user_id;
 }
 
 // a user's record map via the event-id->user index

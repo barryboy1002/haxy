@@ -211,7 +211,7 @@ pub fn main(init: std.process.Init) !void {
         // public key matching temp-try/key, given to admin so we can push as admin
         const admin_ssh_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeIs8mJqigBZ5y84J4COgnAJJ5bHPKy+lM2SliMXbYm radar@roark";
 
-        var events_to_consume: [user_data.len + repo_data.len]evt.EventWithId = undefined;
+        var events_to_consume: [user_data.len]evt.EventWithId = undefined;
         // inserted back to front, so the newest-first listing shows them in the
         // order they're written above
         for (0..user_data.len) |slot| {
@@ -232,11 +232,15 @@ pub fn main(init: std.process.Init) !void {
                 },
             };
         }
+        // commit the seed events and consume them into the database
+        try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
+
         // admin co-owns every repo, so it has full privileges everywhere
         // (including undo) while the other users only own their own
         const admin_user_id_hex = std.fmt.bytesToHex(admin_user_id, .lower);
+        var repo_events: [repo_data.len]evt.EventWithId = undefined;
         for (repo_data, 0..) |r, i| {
-            events_to_consume[user_data.len + i] = .{
+            repo_events[i] = .{
                 .id = std.fmt.bytesToHex(repo_event_ids[i], .lower),
                 .timestamp = @intCast(user_data.len + i + 1),
                 .author = .{ .name = user_data[r.user_index].name, .email = user_data[r.user_index].email },
@@ -252,8 +256,18 @@ pub fn main(init: std.process.Init) !void {
             };
         }
 
-        // commit the seed events and consume them into the database
-        try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
+        // each user's repo holds the repos they own
+        const repos_path = try std.fs.path.join(arena.allocator(), &.{ server_path, "repos" });
+        for (user_ids, 0..) |user_id, user_index| {
+            const user_repo_path = try evt.userRepoPath(arena.allocator(), repos_path, &user_id);
+            var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
+            defer user_repo.deinit(io, allocator);
+            var owned: std.ArrayList(evt.EventWithId) = .empty;
+            for (repo_data, repo_events) |r, event| {
+                if (r.user_index == user_index) try owned.append(arena.allocator(), event);
+            }
+            if (owned.items.len > 0) try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, owned.items);
+        }
 
         // every repo gets the same generated history, so build it once into a
         // template repo and copy that to each repo's location below rather than
@@ -868,7 +882,7 @@ pub fn main(init: std.process.Init) !void {
                 if (repo_index + 1 == repo_data.len) {
                     var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, .{ .path = repo_path, .require_repo_root = true });
                     defer target_repo.deinit(io, allocator);
-                    try seedPatches(io, allocator, server_path, &repo, &target_repo, &repo_event_ids[repo_index], &admin_user_id, prng.random());
+                    try seedPatches(io, allocator, server_path, &repo, &target_repo, &repo_event_ids[repo_index], &user_ids[repo_data[repo_index].user_index], &admin_user_id, prng.random());
                 }
             }
         }
@@ -1135,6 +1149,7 @@ fn seedPatches(
     admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
     target_repo: *rp.Repo(.xit, .{}),
     repo_id: *const [evt.event_id_size]u8,
+    repo_user_id: *const [evt.event_id_size]u8,
     user_id: *const [evt.event_id_size]u8,
     random: std.Random,
 ) !void {
@@ -1191,15 +1206,18 @@ fn seedPatches(
     const repos_path = try std.fs.path.join(allocator, &.{ server_path, "repos" });
     defer allocator.free(repos_path);
     const patch_author = evt.CommitAuthor{ .name = "admin", .email = "admin@example.test" };
+    var user_repo = (try evt.openUserRepo(io, allocator, repos_path, user_id)) orelse return error.NotFound;
+    defer user_repo.deinit(io, allocator);
     var patch_ids: [patch_data.len][evt.event_id_size]u8 = undefined;
     for (patch_data, 0..) |patch, i| {
         const timestamp: u64 = @intCast(500 + i * 10);
         patch_ids[i] = evt.EventWithId.randomId(random);
         const patch_hex = std.fmt.bytesToHex(patch_ids[i], .lower);
-        const path = try fork.create(.{}, io, allocator, repos_path, admin_repo, .{
+        const path = try fork.create(.{}, io, allocator, repos_path, &user_repo, .{
             .id = patch_hex,
             .user_id = user_id.*,
             .repo_id = repo_id.*,
+            .repo_user_id = repo_user_id.*,
             .title = patch.title,
             .description = patch.description,
             .labels = patch.labels,
@@ -1246,7 +1264,7 @@ fn seedPatches(
         const status = patch.status orelse continue;
         const fork_path = try fork.forkPath(allocator, repos_path, &patch_hex);
         defer allocator.free(fork_path);
-        try pch.publish(.{}, io, allocator, admin_repo, target_repo, fork_path, .{
+        try pch.publish(.{}, io, allocator, admin_repo, &user_repo, target_repo, fork_path, .{
             .id = patch_hex,
             .user_id = user_id.*,
             .repo_id = repo_id.*,
@@ -1255,7 +1273,7 @@ fn seedPatches(
         });
 
         if (status == .merged) {
-            try pch.mergeAndRemoveFork(.{}, io, allocator, repos_path, admin_repo, target_repo, .{
+            try pch.mergeAndRemoveFork(.{}, io, allocator, repos_path, target_repo, .{
                 .id = patch_hex,
                 .revision = .source,
                 .author = patch_author,

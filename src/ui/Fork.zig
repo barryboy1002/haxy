@@ -37,21 +37,26 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     const repos_dir = session.repos_dir orelse return error.NotFound;
     const haxy_moment = session.haxy_moment orelse return error.NoMoment;
     const route_fork = route.forkRoute() orelse return error.UnexpectedRoute;
+    // the route's identity names the forker and the target repo
     const identity = ui.RoutablePage.RepoIdentity.parse(route_fork.name.slice()) orelse return error.NotFound;
     const id = evt.parseEventId(route_fork.id.slice()) catch return error.NotFound;
-    const fork_record = (try evt.Fork.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, &id)) orelse return error.NotFound;
+    const gpa = arena.child_allocator;
+    const forker_id = (try evt.User.readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, identity.owner)) orelse return error.NotFound;
+    const fork_record = (try evt.readForkById(io, gpa, arena, repos_dir, &forker_id, &id)) orelse return error.NotFound;
     if (fork_record.removed) return error.NotFound;
     if (fork_record.event.repo_id.len != evt.event_id_size) return error.NotFound;
     var target_id: [evt.event_id_size]u8 = undefined;
     @memcpy(&target_id, fork_record.event.repo_id);
+    const owner_id = fork_record.event.repo_user_id[0..evt.event_id_size];
 
-    const target_record = (try evt.Repo.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, fork_record.event.repo_id)) orelse return error.NotFound;
+    const target_record = (try evt.readRepoById(io, gpa, arena, repos_dir, owner_id, fork_record.event.repo_id)) orelse return error.NotFound;
     // a draft is as readable as the repo it targets
     if (evt.Repo.roleOf(target_record, session.userId()) == .none) return error.NotFound;
-    const owner = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, target_record.event.user_id)) orelse return error.NotFound;
-    if (!std.mem.eql(u8, owner.event.name, identity.owner) or !std.mem.eql(u8, target_record.event.name, identity.name)) return error.NotFound;
+    const owner = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, owner_id)) orelse return error.NotFound;
+    if (!std.mem.eql(u8, target_record.event.name, identity.name)) return error.NotFound;
 
     const aa = arena.allocator();
+    const target_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ owner.event.name, target_record.event.name });
     const id_hex = std.fmt.bytesToHex(id, .lower);
     const fork_path = try fork.forkPath(aa, repos_dir, &id_hex);
     var fork_repo = try rp.Repo(.xit, .{}).open(io, arena.child_allocator, .{ .path = fork_path, .require_repo_root = true });
@@ -84,16 +89,17 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
         .draft = fork_record.event.stage == .draft,
         .revision_oid = try aa.dupe(u8, &fork_oid),
         .fork_exists = true,
+        .forker = identity.owner,
     };
-    var patch_data = try Patches.detailResult(aa, identity.identity, retained_entry);
+    var patch_data = try Patches.detailResult(aa, target_identity, retained_entry);
 
     if (target_repo_maybe) |*target_repo| switch (fork_record.event.stage) {
-        .draft => if (try Patches.loadDraftEntry(.xit, .{}, arena, io, haxy_moment, &fork_repo, target_repo, id)) |entry| {
-            patch_data = try Patches.detailResult(aa, identity.identity, entry);
+        .draft => if (try Patches.loadDraftEntry(.xit, .{}, arena, io, haxy_moment, &fork_repo, target_repo, id, identity.owner)) |entry| {
+            patch_data = try Patches.detailResult(aa, target_identity, entry);
             patch_data.repo_source = target_source;
         },
         .publish => {
-            patch_data = Patches.init(.xit, .{}, arena, target_repo, io, haxy_moment, session, target_id, identity.identity, target_branch, "", "", &id_hex, "", 0, "", .open) catch |err| switch (err) {
+            patch_data = Patches.init(.xit, .{}, arena, target_repo, io, haxy_moment, session, target_id, target_identity, target_branch, "", "", &id_hex, "", 0, "", .open) catch |err| switch (err) {
                 error.NotFound => patch_data,
                 else => |other| return other,
             };
@@ -145,7 +151,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     };
 
     return .{
-        .header = try Header.init(arena, target_record.event.name, owner.event.name, &id_hex, requested_value),
+        .header = try Header.init(arena, target_record.event.name, owner.event.name, identity.owner, &id_hex, requested_value),
         .files = files,
         .commits = commits,
         .patch = patch_data,

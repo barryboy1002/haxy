@@ -3,8 +3,9 @@ const evt = @import("../event.zig");
 const xit = @import("xit");
 const hash = xit.hash;
 
-user_id: []const u8,
 repo_id: []const u8,
+// the target repo's owner, whose user repo holds the target
+repo_user_id: []const u8,
 stage: Stage = .draft,
 
 // what the db stores: the event's data plus the commit-derived fields
@@ -25,20 +26,12 @@ pub const Stage = enum {
 pub const merge_policy: evt.MergePolicy = .target_wins;
 pub const record_map_key = "event-id->fork";
 pub const all_id_set_key = "fork-id-set";
-pub const user_id_to_fork_id_set_key = "user-id->fork-id-set";
-pub const repo_user_to_draft_id_set_key = "repo+user->draft-id-set";
-pub const DraftKey = [evt.event_id_size * 2]u8;
-
-pub fn draftKey(repo_id: []const u8, user_id: []const u8) DraftKey {
-    var key: DraftKey = undefined;
-    @memcpy(key[0..evt.event_id_size], repo_id);
-    @memcpy(key[evt.event_id_size..], user_id);
-    return key;
-}
+pub const active_id_set_key = "active-fork-id-set";
+pub const repo_to_draft_id_set_key = "repo->draft-id-set";
 
 fn validate(record: Record) !void {
-    if (record.event.user_id.len != evt.event_id_size) return error.InvalidUserId;
     if (record.event.repo_id.len != evt.event_id_size) return error.InvalidRepoId;
+    if (record.event.repo_user_id.len != evt.event_id_size) return error.InvalidUserId;
 }
 
 pub fn consume(
@@ -52,8 +45,8 @@ pub fn consume(
 ) !void {
     const fork_key = hash.hashInt(hash_kind, event_id);
     const records = try DB.HashMap(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, record_map_key)));
-    const user_forks = try DB.HashMap(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, user_id_to_fork_id_set_key)));
-    const drafts = try DB.HashMap(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, repo_user_to_draft_id_set_key)));
+    const active = try DB.SortedSet(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, active_id_set_key)));
+    const drafts = try DB.HashMap(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, repo_to_draft_id_set_key)));
 
     var existing_maybe: ?Record = null;
     const existing_cursor_maybe = try records.getCursor(fork_key);
@@ -66,16 +59,15 @@ pub fn consume(
     if (!record.removed) try validate(record);
 
     if (existing_maybe) |existing| {
-        if (!std.mem.eql(u8, existing.event.user_id, record.event.user_id) or
-            !std.mem.eql(u8, existing.event.repo_id, record.event.repo_id)) return error.ForkChanged;
+        if (!std.mem.eql(u8, existing.event.repo_id, record.event.repo_id) or
+            !std.mem.eql(u8, existing.event.repo_user_id, record.event.repo_user_id)) return error.ForkChanged;
         if (existing.event.stage == .publish and record.event.stage != .publish) return error.ForkAlreadyPublished;
         record.created_order = existing.created_order;
         if (!existing.removed) {
             const order_key = evt.orderKeyDesc(existing.created_order, event_id);
-            try removeFromParentSet(DB, hash_kind, user_forks, existing.event.user_id, &order_key);
+            _ = try active.remove(&order_key);
             if (existing.event.stage == .draft) {
-                const key = draftKey(existing.event.repo_id, existing.event.user_id);
-                try removeFromParentSet(DB, hash_kind, drafts, &key, &order_key);
+                try removeFromParentSet(DB, hash_kind, drafts, existing.event.repo_id, &order_key);
             }
         }
     }
@@ -91,12 +83,10 @@ pub fn consume(
     }
 
     if (!record.removed) {
-        const by_user = try DB.SortedSet(.read_write).init(try user_forks.putCursor(hash.hashInt(hash_kind, record.event.user_id)));
-        try by_user.put(&order_key);
+        try active.put(&order_key);
         if (record.event.stage == .draft) {
-            const key = draftKey(record.event.repo_id, record.event.user_id);
-            const by_repo_user = try DB.SortedSet(.read_write).init(try drafts.putCursor(hash.hashInt(hash_kind, &key)));
-            try by_repo_user.put(&order_key);
+            const by_repo = try DB.SortedSet(.read_write).init(try drafts.putCursor(hash.hashInt(hash_kind, record.event.repo_id)));
+            try by_repo.put(&order_key);
         }
     }
 }

@@ -246,7 +246,9 @@ pub fn init(
         owner_name = "";
     } else {
         const haxy_moment = session.haxy_moment orelse return error.NoMoment;
-        const found = (try evt.Repo.readByOwnerAndName(DB, hash_kind, haxy_moment, arena, repo_identity.owner, repo_identity.name)) orelse return error.NotFound;
+        const io = session.io orelse return error.NoMoment;
+        const repos_dir = session.repos_dir orelse return error.NoMoment;
+        const found = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, haxy_moment, repos_dir, repo_identity.owner, repo_identity.name)) orelse return error.NotFound;
         // a repo the session can't read doesn't exist to it
         if (evt.Repo.roleOf(found.repo, session.userId()) == .none) return error.NotFound;
         repo = found.repo;
@@ -258,13 +260,11 @@ pub fn init(
         owner_name = owner.event.name;
 
         // the repo's working copy lives at <repos_dir>/<hex event id>.
-        if (session.repos_dir) |repos_dir| {
-            const hex = std.fmt.bytesToHex(found.event_id, .lower);
-            source = .{
-                .path = try std.fs.path.join(arena.allocator(), &.{ repos_dir, &hex }),
-                .repo_kind = .xit,
-            };
-        }
+        const hex = std.fmt.bytesToHex(found.event_id, .lower);
+        source = .{
+            .path = try std.fs.path.join(arena.allocator(), &.{ repos_dir, &hex }),
+            .repo_kind = .xit,
+        };
     }
 
     // open the repo once for every tab. files and changes share a ref or revision.

@@ -12,7 +12,6 @@ const evt = @import("../event.zig");
 
 pub const About = @import("./Home/About.zig");
 pub const Users = @import("./Home/Users.zig");
-pub const Repos = @import("./Home/Repos.zig");
 pub const Header = @import("./Home/Header.zig");
 pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
@@ -21,7 +20,6 @@ pub const Quit = @import("./Quit.zig");
 header: Header,
 about: About,
 users: Users,
-repos: Repos,
 settings: Settings,
 auth: Auth,
 quit: Quit,
@@ -32,16 +30,14 @@ pub fn init(
     arena: *std.heap.ArenaAllocator,
     session: *ui.Session,
     haxy_moment: evt.AdminDB.HashMap(.read_only),
-    // pagination window start for each list tab; the inactive tab gets 0.
+    // pagination window start for the users tab
     users_start: usize,
-    repos_start: usize,
 ) !Self {
     const about = try About.init(arena, session);
     return .{
         .header = try Header.init(arena, about.title),
         .about = about,
         .users = try Users.init(arena, haxy_moment, users_start),
-        .repos = try Repos.init(arena, haxy_moment, session.userId(), repos_start),
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
@@ -74,12 +70,6 @@ pub const View = struct {
                 var about_view = try About.View.init(allocator, &data.about, session);
                 errdefer about_view.deinit(allocator);
                 try stack.children.put(allocator, about_view.getFocus().id, .{ .home_about = about_view });
-            }
-
-            {
-                var repos_view = try Repos.View.init(allocator, &data.repos, !session.is_terminal);
-                errdefer repos_view.deinit(allocator);
-                try stack.children.put(allocator, repos_view.getFocus().id, .{ .home_repos = repos_view });
             }
 
             {
