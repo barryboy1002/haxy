@@ -212,15 +212,11 @@ pub fn main(init: std.process.Init) !void {
         const admin_ssh_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeIs8mJqigBZ5y84J4COgnAJJ5bHPKy+lM2SliMXbYm radar@roark";
 
         var events_to_consume: [user_data.len]evt.EventWithId = undefined;
-        // inserted back to front, so the newest-first listing shows them in the
-        // order they're written above
-        for (0..user_data.len) |slot| {
-            const i = user_data.len - 1 - slot;
-            const u = user_data[i];
-            events_to_consume[slot] = .{
+        for (user_data, 0..) |u, i| {
+            events_to_consume[i] = .{
                 .id = std.fmt.bytesToHex(user_ids[i], .lower),
-                // stepped timestamps so the seeded users/repos list in a stable order
-                .timestamp = @intCast(slot + 1),
+                // stepped timestamps give the seeds a stable creation order
+                .timestamp = @intCast(i + 1),
                 .author = .{ .name = "admin", .email = "admin@example.test" },
                 .event = .{
                     .user = .{

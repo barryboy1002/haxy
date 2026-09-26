@@ -32,7 +32,6 @@ pub const name_max_len = 32;
 pub const merge_policy: evt.MergePolicy = .target_wins;
 pub const record_map_key = "event-id->user";
 pub const all_id_set_key = "user-id-set";
-pub const active_id_set_key = "active-user-id-set";
 pub const name_index_key = "name->user-id";
 
 // resolves a commit's author email to its user at read time
@@ -69,8 +68,8 @@ pub fn consume(
     const event_id_to_user_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "event-id->user"));
     const event_id_to_user = try DB.HashMap(.read_write).init(event_id_to_user_cursor);
 
-    const name_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "name->user-id"));
-    const name_to_user_id = try DB.HashMap(.read_write).init(name_to_user_id_cursor);
+    const name_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, name_index_key));
+    const name_to_user_id = try DB.SortedMap(.read_write).init(name_to_user_id_cursor);
 
     const email_to_user_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, email_to_user_id_key));
     const email_to_user_id = try DB.HashMap(.read_write).init(email_to_user_id_cursor);
@@ -92,7 +91,7 @@ pub fn consume(
 
         // drop the old active indexes; active values are re-added below
         if (!existing_record.removed) {
-            _ = try name_to_user_id.remove(hash.hashInt(hash_kind, existing_record.event.name));
+            _ = try name_to_user_id.remove(existing_record.event.name);
             _ = try email_to_user_id.remove(hash.hashInt(hash_kind, existing_record.event.email));
         }
     }
@@ -111,12 +110,8 @@ pub fn consume(
         try user_id_set.put(&order_key);
     }
 
-    const active = try DB.SortedSet(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, active_id_set_key)));
-    if (record_to_write.removed) {
-        _ = try active.remove(&order_key);
-    } else {
-        try active.put(&order_key);
-        try name_to_user_id.put(hash.hashInt(hash_kind, record_to_write.event.name), .{ .bytes = event_id });
+    if (!record_to_write.removed) {
+        try name_to_user_id.put(record_to_write.event.name, .{ .bytes = event_id });
         try email_to_user_id.put(hash.hashInt(hash_kind, record_to_write.event.email), .{ .bytes = event_id });
     }
 }
@@ -151,12 +146,7 @@ pub fn verifyCredentials(
     name: []const u8,
     password: []const u8,
 ) !VerifyResult {
-    const name_index_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "name->user-id")) orelse return .unknown_user;
-    const name_index = try DB.HashMap(.read_only).init(name_index_cursor);
-
-    const user_id_cursor = try name_index.getCursor(hash.hashInt(hash_kind, name)) orelse return .unknown_user;
-    var user_id: [evt.event_id_size]u8 = undefined;
-    _ = try user_id_cursor.readBytes(&user_id);
+    const user_id = try readIdByName(DB, hash_kind, haxy_moment, name) orelse return .unknown_user;
 
     const user_key = hash.hashInt(hash_kind, &user_id);
     const event_id_to_user_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, "event-id->user")) orelse return .unknown_user;
@@ -212,7 +202,12 @@ pub fn readIdByName(
     haxy_moment: DB.HashMap(.read_only),
     name: []const u8,
 ) !?[evt.event_id_size]u8 {
-    return try readIdFromIndex(DB, hash_kind, haxy_moment, name_index_key, name);
+    const index_cursor = (try haxy_moment.getCursor(hash.hashInt(hash_kind, name_index_key))) orelse return null;
+    const index = try DB.SortedMap(.read_only).init(index_cursor);
+    const user_id_cursor = (try index.getCursor(name)) orelse return null;
+    var user_id: [evt.event_id_size]u8 = undefined;
+    _ = try user_id_cursor.readBytes(&user_id);
+    return user_id;
 }
 
 // a user's id via the email->user-id index
@@ -222,19 +217,9 @@ pub fn readIdByEmail(
     haxy_moment: DB.HashMap(.read_only),
     email: []const u8,
 ) !?[evt.event_id_size]u8 {
-    return try readIdFromIndex(DB, hash_kind, haxy_moment, email_to_user_id_key, email);
-}
-
-fn readIdFromIndex(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    haxy_moment: DB.HashMap(.read_only),
-    index_key: []const u8,
-    key: []const u8,
-) !?[evt.event_id_size]u8 {
-    const index_cursor = (try haxy_moment.getCursor(hash.hashInt(hash_kind, index_key))) orelse return null;
+    const index_cursor = (try haxy_moment.getCursor(hash.hashInt(hash_kind, email_to_user_id_key))) orelse return null;
     const index = try DB.HashMap(.read_only).init(index_cursor);
-    const user_id_cursor = (try index.getCursor(hash.hashInt(hash_kind, key))) orelse return null;
+    const user_id_cursor = (try index.getCursor(hash.hashInt(hash_kind, email))) orelse return null;
     var user_id: [evt.event_id_size]u8 = undefined;
     _ = try user_id_cursor.readBytes(&user_id);
     return user_id;
@@ -270,11 +255,7 @@ pub fn readByName(
 
     const moment = try evt.currentMoment(evt.admin_repo_opts, &repo);
 
-    const name_to_user_id_cursor = try moment.getCursor(hash.hashInt(evt.admin_repo_opts.hash, "name->user-id")) orelse return null;
-    const name_to_user_id = try evt.AdminDB.HashMap(.read_only).init(name_to_user_id_cursor);
-    const user_id_cursor = try name_to_user_id.getCursor(hash.hashInt(evt.admin_repo_opts.hash, name)) orelse return null;
-    var user_id: [evt.event_id_size]u8 = undefined;
-    _ = try user_id_cursor.readBytes(&user_id);
+    const user_id = try readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, moment, name) orelse return null;
 
     return try readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, &user_id);
 }

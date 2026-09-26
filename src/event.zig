@@ -1423,8 +1423,8 @@ pub fn merge(
         // no longer owns
         if (!merged.removed and @hasDecl(T, "name_index_key")) {
             const name_index_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, T.name_index_key));
-            const name_index = try DB.HashMap(.read_write).init(name_index_cursor);
-            if (try name_index.getCursor(hash.hashInt(hash_kind, merged.event.name))) |owner_cursor| {
+            const name_index = try DB.SortedMap(.read_write).init(name_index_cursor);
+            if (try name_index.getCursor(merged.event.name)) |owner_cursor| {
                 var owner_id: [event_id_size]u8 = undefined;
                 _ = try owner_cursor.readBytes(&owner_id);
                 if (!std.mem.eql(u8, &owner_id, &event_id)) continue;

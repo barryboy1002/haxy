@@ -77,7 +77,6 @@ fn containsUserId(user_ids: []const u8, user_id_hex: []const u8) bool {
 pub const merge_policy: evt.MergePolicy = .target_wins;
 pub const record_map_key = "event-id->repo";
 pub const all_id_set_key = "repo-id-set";
-pub const active_id_set_key = "active-repo-id-set";
 pub const name_index_key = "name->repo-id";
 
 pub fn validateName(name: []const u8) !void {
@@ -110,8 +109,8 @@ pub fn consume(
     const event_id_to_repo_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "event-id->repo"));
     const event_id_to_repo = try DB.HashMap(.read_write).init(event_id_to_repo_cursor);
 
-    const name_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, "name->repo-id"));
-    const name_to_repo_id = try DB.HashMap(.read_write).init(name_to_repo_id_cursor);
+    const name_to_repo_id_cursor = try haxy_moment.putCursor(hash.hashInt(hash_kind, name_index_key));
+    const name_to_repo_id = try DB.SortedMap(.read_write).init(name_to_repo_id_cursor);
 
     var existing_record_maybe: ?Record = null;
     const existing_cursor_maybe = try event_id_to_repo.getCursor(repo_key);
@@ -135,7 +134,7 @@ pub fn consume(
 
         // drop the old active index; active values are re-added below
         if (!existing_record.removed) {
-            _ = try name_to_repo_id.remove(hash.hashInt(hash_kind, existing_record.event.name));
+            _ = try name_to_repo_id.remove(existing_record.event.name);
         }
     }
 
@@ -153,13 +152,8 @@ pub fn consume(
         try repo_id_set.put(&order_key);
     }
 
-    // the user's repos, ordered by creation time, newest first
-    const active = try DB.SortedSet(.read_write).init(try haxy_moment.putCursor(hash.hashInt(hash_kind, active_id_set_key)));
-    if (record_to_write.removed) {
-        _ = try active.remove(&order_key);
-    } else {
-        try active.put(&order_key);
-        try name_to_repo_id.put(hash.hashInt(hash_kind, record_to_write.event.name), .{ .bytes = event_id });
+    if (!record_to_write.removed) {
+        try name_to_repo_id.put(record_to_write.event.name, .{ .bytes = event_id });
     }
 }
 
@@ -179,8 +173,8 @@ pub fn readByName(
     name: []const u8,
 ) !?RepoWithId {
     const name_to_repo_id_cursor = try user_moment.getCursor(hash.hashInt(hash_kind, name_index_key)) orelse return null;
-    const name_to_repo_id = try DB.HashMap(.read_only).init(name_to_repo_id_cursor);
-    const repo_id_cursor = try name_to_repo_id.getCursor(hash.hashInt(hash_kind, name)) orelse return null;
+    const name_to_repo_id = try DB.SortedMap(.read_only).init(name_to_repo_id_cursor);
+    const repo_id_cursor = try name_to_repo_id.getCursor(name) orelse return null;
     var repo_id: [evt.event_id_size]u8 = undefined;
     _ = try repo_id_cursor.readBytes(&repo_id);
     const repo = (try readById(DB, hash_kind, user_moment, arena, &repo_id)) orelse return null;

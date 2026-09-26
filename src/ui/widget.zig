@@ -37,6 +37,7 @@ pub const Widget = union(enum) {
     sub_title: ui.SubTitle.View,
     home_header: ui.Home.Header.View,
     user_header: ui.User.Header.View,
+    user_repos: ui.User.ReposView,
     repo_header: ui.Repo.Header.View,
     fork_header: ui.Fork.Header.View,
     search_box: SearchBox,
@@ -111,7 +112,7 @@ pub const Widget = union(enum) {
     // whether moving up should return to the page header
     pub fn atTop(self: *Widget, root_focus: *Focus) bool {
         return switch (self.*) {
-            inline .home_about, .home_users, .flow_box_scroll, .home_settings, .auth_login, .auth_logout, .quit, .repo_files, .repo_commits, .diff_view, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo => |*view| view.atTop(),
+            inline .home_about, .home_users, .user_repos, .flow_box_scroll, .home_settings, .auth_login, .auth_logout, .quit, .repo_files, .repo_commits, .diff_view, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo => |*view| view.atTop(),
             inline .home_auth, .repo_patch_detail => |*view| view.atTop(root_focus),
             else => false,
         };
@@ -443,6 +444,10 @@ pub const FlowBox = struct {
 
         pub fn getFocus(self: *Scroll) *Focus {
             return self.scroll.getFocus();
+        }
+
+        pub fn isEmpty(self: Scroll) bool {
+            return self.scroll.child.flow_box.text_boxes.items.len == 0;
         }
 
         pub fn atTop(self: Scroll) bool {

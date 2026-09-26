@@ -30,14 +30,14 @@ pub fn init(
     arena: *std.heap.ArenaAllocator,
     session: *ui.Session,
     haxy_moment: evt.AdminDB.HashMap(.read_only),
-    // pagination window start for the users tab
-    users_start: usize,
+    // the users tab's window and search
+    users_route: ui.RoutablePage.HomeUsersRoute,
 ) !Self {
     const about = try About.init(arena, session);
     return .{
         .header = try Header.init(arena, about.title),
         .about = about,
-        .users = try Users.init(arena, haxy_moment, users_start),
+        .users = try Users.init(arena, haxy_moment, users_route),
         .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
@@ -73,7 +73,7 @@ pub const View = struct {
             }
 
             {
-                var users_view = try Users.View.init(allocator, &data.users, !session.is_terminal);
+                var users_view = try Users.View.init(allocator, &data.users, session);
                 errdefer users_view.deinit(allocator);
                 try stack.children.put(allocator, users_view.getFocus().id, .{ .home_users = users_view });
             }
@@ -104,7 +104,8 @@ pub const View = struct {
         var self = View{
             .box = box,
         };
-        self.getFocus().child_id = box.children.keys()[header_index];
+        // search results open in the tab's own search box
+        self.getFocus().child_id = box.children.keys()[if (data.users.search != null) stack_index else header_index];
         return self;
     }
 
@@ -124,6 +125,7 @@ pub const View = struct {
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        const stack = &self.box.children.values()[stack_index].widget.stack;
         if (self.getFocus().child_id) |child_id| {
             if (self.box.children.getIndex(child_id)) |current_index| {
                 const child = &self.box.children.values()[current_index].widget;
@@ -152,6 +154,10 @@ pub const View = struct {
                     .down => {
                         switch (child.*) {
                             .home_header => {
+                                if (stack.getSelected()) |selected_widget| switch (selected_widget.*) {
+                                    .home_users => |*v| return v.focusHeader(root_focus),
+                                    else => {},
+                                };
                                 index = stack_index;
                             },
                             .stack => {

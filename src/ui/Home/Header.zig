@@ -90,7 +90,7 @@ pub const View = struct {
         // link (rather than position) keeps this robust to tab changes.
         const current_tag = std.meta.activeTag(session.data.current_page);
         const about_link = try ui.inPageTabLink(session, .home_about, current_tag == .home_about);
-        const users_link = try ui.inPageTabLink(session, .{ .home_users = 0 }, current_tag == .home_users);
+        const users_link = try ui.inPageTabLink(session, .{ .home_users = .{} }, current_tag == .home_users);
         const settings_link = try ui.inPageTabLink(session, .home_settings, current_tag == .home_settings);
         const auth_link = try ui.inPageTabLink(session, .home_auth, current_tag == .home_auth);
         const current_link: []const u8 = switch (current_tag) {

@@ -71,15 +71,15 @@ pub const Page = union(PageKind) {
         // user pages always read from the admin db.
         return switch (route.parent()) {
             .home => .{ .home = try Home.init(arena, session, session.haxy_moment orelse return error.NoMoment, switch (route) {
-                .home_users => |start| start,
-                else => 0,
+                .home_users => |u| u,
+                else => .{},
             }) },
             .user => blk: {
                 const haxy_moment = session.haxy_moment orelse return error.NoMoment;
                 break :blk switch (route) {
-                    .user_repos => |u| .{ .user = try User.init(arena, session, haxy_moment, u.name, u.start, 0) },
-                    .user_forks => |u| .{ .user = try User.init(arena, session, haxy_moment, u.name, 0, u.start) },
-                    .user_settings, .user_auth => |name| .{ .user = try User.init(arena, session, haxy_moment, name, 0, 0) },
+                    .user_repos => |u| .{ .user = try User.init(arena, session, haxy_moment, u.name, u.start, u.search.slice(), 0) },
+                    .user_forks => |u| .{ .user = try User.init(arena, session, haxy_moment, u.name, 0, "", u.start) },
+                    .user_settings, .user_auth => |name| .{ .user = try User.init(arena, session, haxy_moment, name, 0, "", 0) },
                     else => return error.UnexpectedRoute,
                 };
             },
@@ -108,10 +108,15 @@ pub const Snapshot = struct {
 // updates the url) rather than navigating away.
 pub const RoutablePage = union(enum) {
     home_about,
-    home_users: usize, // 0 = first page
+    home_users: HomeUsersRoute,
     home_settings,
     home_auth,
-    user_repos: struct { name: Array(evt.User.name_max_len), start: usize = 0 },
+    user_repos: struct {
+        name: Array(evt.User.name_max_len),
+        start: usize = 0,
+        // the url-encoded name prefix the list is narrowed to ("" = none)
+        search: Array(search_route_max_len) = .{},
+    },
     user_forks: struct { name: Array(evt.User.name_max_len), start: usize = 0 },
     user_settings: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
@@ -268,6 +273,12 @@ pub const RoutablePage = union(enum) {
             }
             return result;
         }
+    };
+
+    pub const HomeUsersRoute = struct {
+        start: usize = 0,
+        // the url-encoded name prefix the list is narrowed to ("" = none)
+        search: Array(search_route_max_len) = .{},
     };
 
     const user_segment = "/user/";
@@ -591,7 +602,7 @@ pub const RoutablePage = union(enum) {
         return route;
     }
 
-    // carry a search query on a commits or thread-list route, url-encoding it
+    // carry a search query on a searchable route, url-encoding it
     // into the route.
     pub fn withSearch(self: RoutablePage, query: []const u8) ?RoutablePage {
         const search = encodeParam(search_route_max_len, query) orelse return null;
@@ -619,6 +630,8 @@ pub const RoutablePage = union(enum) {
         var route = self orelse return null;
         const search = Array(search_route_max_len).from(value) orelse return null;
         switch (route) {
+            .home_users => |*u| u.search = search,
+            .user_repos => |*u| u.search = search,
             .repo_commits => |*c| c.search = search,
             .repo_refs => |*r| r.search = search,
             .repo_issues => |*i| i.search = search,
@@ -1014,13 +1027,20 @@ pub const RoutablePage = union(enum) {
     pub fn toUrl(self: RoutablePage, arena: *std.heap.ArenaAllocator) ![]const u8 {
         return switch (self) {
             .home_about => "/",
-            .home_users => |start| if (start == 0) @as([]const u8, "/users") else try std.fmt.allocPrint(arena.allocator(), "/users/" ++ start_seg ++ "{d}", .{start}),
+            .home_users => |u| blk: {
+                var out: std.Io.Writer.Allocating = .init(arena.allocator());
+                try out.writer.writeAll("/users");
+                try writeListWindow(&out.writer, u.search.slice(), u.start);
+                break :blk out.written();
+            },
             .home_settings => "/settings",
             .home_auth => "/auth",
-            .user_repos => |u| if (u.start == 0)
-                try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/repos", .{u.name.slice()})
-            else
-                try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/repos/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
+            .user_repos => |u| blk: {
+                var out: std.Io.Writer.Allocating = .init(arena.allocator());
+                try out.writer.print(user_segment ++ "{s}/repos", .{u.name.slice()});
+                try writeListWindow(&out.writer, u.search.slice(), u.start);
+                break :blk out.written();
+            },
             .user_forks => |u| if (u.start == 0)
                 try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/forks", .{u.name.slice()})
             else
@@ -1242,16 +1262,22 @@ pub const RoutablePage = union(enum) {
         if (path.len < 2 or path[0] != '/') return null;
         var segments = std.mem.splitScalar(u8, path[1..], '/');
         const first = segments.next() orelse return null;
-        if (std.mem.eql(u8, first, "users")) return .{ .home_users = listStart(&segments) orelse return null };
+        if (std.mem.eql(u8, first, "users")) {
+            const params = listParams(&segments, &.{ .start, .search }) orelse return null;
+            return withEncodedSearch(.{ .home_users = .{ .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
+        }
         if (std.mem.eql(u8, first, "settings")) return if (segments.next() == null) .home_settings else null;
         if (std.mem.eql(u8, first, "auth")) return if (segments.next() == null) .home_auth else null;
-        // "user/<name>[/repos[/start:<n>]|/settings|/auth]"
+        // "user/<name>[/repos[/search:<s>][/start:<n>]|/settings|/auth]"
         if (std.mem.eql(u8, first, "user")) {
             const name = segments.next() orelse return null;
             if (name.len == 0) return null;
             const parsed = Array(evt.User.name_max_len).from(name) orelse return null; // name too long
             const sub = segments.next() orelse return .{ .user_repos = .{ .name = parsed } };
-            if (std.mem.eql(u8, sub, "repos")) return .{ .user_repos = .{ .name = parsed, .start = listStart(&segments) orelse return null } };
+            if (std.mem.eql(u8, sub, "repos")) {
+                const params = listParams(&segments, &.{ .start, .search }) orelse return null;
+                return withEncodedSearch(.{ .user_repos = .{ .name = parsed, .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
+            }
             if (std.mem.eql(u8, sub, "forks")) return .{ .user_forks = .{ .name = parsed, .start = listStart(&segments) orelse return null } };
             if (std.mem.eql(u8, sub, "settings")) return if (segments.next() == null) .{ .user_settings = parsed } else null;
             if (std.mem.eql(u8, sub, "auth")) return if (segments.next() == null) .{ .user_auth = parsed } else null;
@@ -1415,10 +1441,22 @@ pub const RoutablePage = union(enum) {
 
     // a list route's tail: at most a "start:<n>" param, null on anything else
     fn listStart(segments: *std.mem.SplitIterator(u8, .scalar)) ?usize {
+        const params = listParams(segments, &.{.start}) orelse return null;
+        return params.start();
+    }
+
+    // a list route's tail of `allowed` params, null on anything else
+    fn listParams(segments: *std.mem.SplitIterator(u8, .scalar), allowed: []const Params.ParamKey) ?Params {
         var params = Params{};
         const word = params.scanTail(segments) catch return null;
-        if (word != null or !params.only(&.{.start})) return null;
-        return params.start();
+        if (word != null or !params.only(allowed)) return null;
+        return params;
+    }
+
+    // a searchable list url's search and window segments, each optional
+    fn writeListWindow(writer: *std.Io.Writer, search: []const u8, start: usize) !void {
+        if (search.len != 0) try writer.print("/" ++ search_seg ++ "{s}", .{search});
+        if (start != 0) try writer.print("/" ++ start_seg ++ "{d}", .{start});
     }
 
     // parse the sub-path after a repo route's identity ("" for a local
@@ -1681,8 +1719,8 @@ pub const RoutablePage = union(enum) {
     pub fn eql(a: RoutablePage, b: RoutablePage) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
         return switch (a) {
-            .home_users => |a_start| a_start == b.home_users,
-            .user_repos => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_repos.name.slice()) and a_u.start == b.user_repos.start,
+            .home_users => |a_u| a_u.start == b.home_users.start and std.mem.eql(u8, a_u.search.slice(), b.home_users.search.slice()),
+            .user_repos => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_repos.name.slice()) and a_u.start == b.user_repos.start and std.mem.eql(u8, a_u.search.slice(), b.user_repos.search.slice()),
             .user_forks => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_forks.name.slice()) and a_u.start == b.user_forks.start,
             .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
@@ -1788,12 +1826,12 @@ pub const RoutablePage = union(enum) {
     }
 
     // true when `a` and `b` are the same user paginated to a different repos
-    // window. switching between a user's tabs is in-page, so
-    // only a changed `start` on the repos list navigates.
+    // window or search. switching between a user's tabs is in-page, so only a
+    // changed `start` or search on the same list navigates.
     pub fn userPageChanged(a: RoutablePage, b: RoutablePage) bool {
         return switch (a) {
             .user_repos => |aa| switch (b) {
-                .user_repos => |bb| std.mem.eql(u8, aa.name.slice(), bb.name.slice()) and aa.start != bb.start,
+                .user_repos => |bb| std.mem.eql(u8, aa.name.slice(), bb.name.slice()) and !a.eql(b),
                 else => false,
             },
             .user_forks => |aa| switch (b) {
@@ -1805,12 +1843,12 @@ pub const RoutablePage = union(enum) {
     }
 
     // true when `a` and `b` are the same home list tab paginated to a different
-    // window. switching tabs is in-page, so only a changed `start` on the same
-    // tab navigates.
+    // window or search. switching tabs is in-page, so only a changed `start` or
+    // search on the same tab navigates.
     pub fn homePageChanged(a: RoutablePage, b: RoutablePage) bool {
         return switch (a) {
-            .home_users => |aa| switch (b) {
-                .home_users => |bb| aa != bb,
+            .home_users => switch (b) {
+                .home_users => !a.eql(b),
                 else => false,
             },
             else => false,

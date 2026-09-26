@@ -119,16 +119,6 @@ test "user and repo" {
         try std.testing.expectEqualSlices(u8, &user_event_id, repo_record.event.user_id);
         try std.testing.expectEqualStrings("ziglings", repo_record.event.name);
 
-        // get the repos created by the user
-        const user_repos_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, evt.Repo.active_id_set_key)) orelse return error.NotFound;
-        const user_repos = try Repo.DB.SortedSet(.read_only).init(user_repos_cursor);
-
-        try std.testing.expectEqual(1, try user_repos.count());
-
-        // the set is keyed by orderKeyDesc([created-order][event-id])
-        const order_key = evt.orderKeyDesc(repo_record.created_order, &repo_event_id);
-        try std.testing.expect(try user_repos.contains(&order_key));
-
         // the repo resolves by its name alone
         const found = (try evt.Repo.readByName(Repo.DB, repo_opts.hash, haxy_moment, &arena, "ziglings")) orelse return error.NotFound;
         try std.testing.expectEqualSlices(u8, &repo_event_id, &found.event_id);
@@ -161,12 +151,7 @@ test "user and repo" {
         const repo_record = try evt.read(evt.Repo.Record, Repo.DB, repo_opts.hash, &arena, repo_map);
         try std.testing.expect(repo_record.removed);
 
-        // get the repos created by the user
-        const user_repos_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, evt.Repo.active_id_set_key)) orelse return error.NotFound;
-        const user_repos = try Repo.DB.SortedSet(.read_only).init(user_repos_cursor);
-
-        // removing the repo emptied the user's set
-        try std.testing.expectEqual(0, try user_repos.count());
+        // removing the repo dropped it from the name index
         try std.testing.expectEqual(null, try evt.Repo.readByName(Repo.DB, repo_opts.hash, haxy_moment, &arena, "ziglings"));
     }
 
@@ -182,9 +167,7 @@ test "user and repo" {
         const repo_record = try evt.read(evt.Repo.Record, Repo.DB, repo_opts.hash, &arena, repo_map);
         try std.testing.expect(!repo_record.removed);
 
-        const user_repos_cursor = try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, evt.Repo.active_id_set_key)) orelse return error.NotFound;
-        const user_repos = try Repo.DB.SortedSet(.read_only).init(user_repos_cursor);
-        try std.testing.expectEqual(1, try user_repos.count());
+        try std.testing.expect(try evt.Repo.readByName(Repo.DB, repo_opts.hash, haxy_moment, &arena, "ziglings") != null);
     }
 
     //

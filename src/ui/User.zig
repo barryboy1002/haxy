@@ -33,6 +33,7 @@ user: evt.User.Public,
 repos: []const evt.Repo.Record,
 repos_start: usize, // the repos window this page was built with, mirrored into the url
 repos_next_start: ?usize, // the `start` for the "next" row, or null on the last window
+repos_search: ?[]const u8, // the name prefix the repos are narrowed to (decoded; null = no search)
 forks: []const ForkItem,
 forks_start: usize,
 forks_next_start: ?usize,
@@ -48,6 +49,8 @@ pub fn init(
     haxy_moment: evt.AdminDB.HashMap(.read_only),
     name: ui.RoutablePage.Array(evt.User.name_max_len),
     repos_start: usize,
+    // the url-encoded repos search ("" = none)
+    repos_search: []const u8,
     forks_start: usize,
 ) !Self {
     // admin and user repos share one db type
@@ -67,27 +70,35 @@ pub fn init(
     defer if (user_repo_maybe) |*user_repo| user_repo.deinit(io, gpa);
     const user_moment = if (user_repo_maybe) |*user_repo| try evt.userMoment(user_repo) else null;
 
+    const search: ?[]const u8 = if (repos_search.len == 0) null else std.Uri.percentDecodeInPlace(try arena.allocator().dupe(u8, repos_search));
+    const prefix = search orelse "";
+
     var repos: std.ArrayList(evt.Repo.Record) = .empty;
     var repos_next_start: ?usize = null;
     if (user_moment) |moment| {
-        if (try moment.getCursor(hash.hashInt(hash_kind, evt.Repo.active_id_set_key))) |user_repos_cursor| {
-            const user_repos = try DB.SortedSet(.read_only).init(user_repos_cursor);
-            const count = try user_repos.count();
+        if (try moment.getCursor(hash.hashInt(hash_kind, evt.Repo.name_index_key))) |index_cursor| {
+            const index = try DB.SortedMap(.read_only).init(index_cursor);
 
-            // read the window [start, start+page_size) with one seek to the start
-            // rank, then a sequential walk.
-            const end = @min(repos_start +| page_size, count);
-            var repos_iter = try user_repos.iteratorFromIndex(repos_start);
-            var i = repos_start;
-            while (i < end) : (i += 1) {
-                const kv_cursor = (try repos_iter.next()) orelse break;
-                const event_id = try evt.readOrderKeyId(DB, kv_cursor);
+            // the names with the prefix are contiguous from its rank, so the
+            // window is one seek then a walk that stops at the first name without it
+            var taken: usize = 0;
+            var repos_iter = try index.iteratorFromIndex(try index.rank(prefix) +| repos_start);
+            while (try repos_iter.next()) |cursor| {
+                const pair = try cursor.readKeyValuePair();
+                const repo_name = try pair.key_cursor.readBytesAlloc(arena.allocator(), null);
+                if (!std.mem.startsWith(u8, repo_name, prefix)) break;
+                if (taken == page_size) {
+                    repos_next_start = repos_start + page_size;
+                    break;
+                }
+                taken += 1;
+                var event_id: [evt.event_id_size]u8 = undefined;
+                _ = try pair.value_cursor.readBytes(&event_id);
                 const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &event_id)) orelse continue;
                 // unreadable repos leave their window short rather than shifting the others
                 if (evt.Repo.roleOf(repo_event, session.userId()) == .none) continue;
                 try repos.append(arena.allocator(), repo_event);
             }
-            repos_next_start = if (end < count) end else null;
         }
     }
 
@@ -138,6 +149,7 @@ pub fn init(
         .repos = repos.items,
         .repos_start = repos_start,
         .repos_next_start = repos_next_start,
+        .repos_search = search,
         .forks = forks.items,
         .forks_start = forks_start,
         .forks_next_start = forks_next_start,
@@ -171,31 +183,9 @@ pub const View = struct {
 
             // repos list — the default tab
             {
-                var list = try ui.widget.FlowBox.Scroll.init(allocator, .{}, !session.is_terminal);
-                errdefer list.deinit(allocator);
-
-                var arena = std.heap.ArenaAllocator.init(allocator);
-                defer arena.deinit();
-                const aa = arena.allocator();
-
-                // a leading "previous" row off the first window, one row per repo,
-                // then a trailing "next" row when more remain. each window row
-                // navigates to the adjacent window of this user's repos.
-                var items: std.ArrayList(ui.widget.FlowBox.Item) = .empty;
-                if (data.repos_start > 0)
-                    try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:/user/{s}/repos/start:{d}", .{ data.user.name, data.repos_start -| page_size }) });
-                for (data.repos) |repo|
-                    // clicking a repo opens its page; the "a:" prefix makes the web
-                    // renderer emit an <a href="/repo/alice/foo"> anchor.
-                    try items.append(aa, .{
-                        .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
-                        .link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.user.name, repo.event.name }),
-                    });
-                if (data.repos_next_start) |next_start|
-                    try items.append(aa, .{ .text = "next →", .link = try std.fmt.allocPrint(aa, "a:/user/{s}/repos/start:{d}", .{ data.user.name, next_start }) });
-                try list.setItems(allocator, items.items);
-
-                try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
+                var repos_view = try ReposView.init(allocator, data, session);
+                errdefer repos_view.deinit(allocator);
+                try stack.children.put(allocator, repos_view.getFocus().id, .{ .user_repos = repos_view });
             }
 
             // forks list
@@ -246,7 +236,8 @@ pub const View = struct {
         }
 
         var self = View{ .box = box };
-        self.getFocus().child_id = box.children.keys()[header_index];
+        // search results open in the tab's own search box
+        self.getFocus().child_id = box.children.keys()[if (data.repos_search != null) stack_index else header_index];
         return self;
     }
 
@@ -266,6 +257,7 @@ pub const View = struct {
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        const stack = &self.box.children.values()[stack_index].widget.stack;
         if (self.getFocus().child_id) |child_id| {
             if (self.box.children.getIndex(child_id)) |current_index| {
                 const child = &self.box.children.values()[current_index].widget;
@@ -294,6 +286,12 @@ pub const View = struct {
                     .down => {
                         switch (child.*) {
                             .user_header => {
+                                if (stack.getSelected()) |selected_widget| switch (selected_widget.*) {
+                                    .user_repos => |*v| return v.focusHeader(root_focus),
+                                    // an empty list has nothing to focus
+                                    .flow_box_scroll => |*v| if (v.isEmpty()) return,
+                                    else => {},
+                                };
                                 index = stack_index;
                             },
                             .stack => {
@@ -326,3 +324,153 @@ pub const View = struct {
         return self.box.getFocus();
     }
 };
+
+pub const ReposView = struct {
+    // a vertical box: the search sub-header above the scrolling list. focus
+    // points at the header's box or the list's selected row.
+    box: wgt.Box(ui.Widget),
+    data: *const Self,
+    session: *ui.Session,
+
+    const header_index = 0;
+    const list_index = 1;
+
+    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !ReposView {
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        errdefer box.deinit(allocator);
+
+        {
+            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            errdefer header.deinit(allocator);
+            {
+                var search_box = try ui.widget.SearchBox.init(allocator, session, " search ", "search", data.repos_search);
+                errdefer search_box.deinit(allocator);
+                header.getFocus().child_id = search_box.getFocus().id;
+                try header.children.put(allocator, search_box.getFocus().id, .{ .widget = .{ .search_box = search_box }, .rect = null, .min_size = ui.widget.SearchBox.min_size });
+            }
+            // the spacer keeps the box at its own width
+            {
+                var spacer = try ui.widget.Spacer.init(allocator);
+                errdefer spacer.deinit(allocator);
+                try header.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null });
+            }
+            try box.children.put(allocator, header.getFocus().id, .{ .widget = .{ .box = header }, .rect = null, .min_size = .{ .width = null, .height = ui.widget.SearchBox.min_size.height } });
+        }
+
+        {
+            var list = try ui.widget.FlowBox.Scroll.init(allocator, .{}, !session.is_terminal);
+            errdefer list.deinit(allocator);
+
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const aa = arena.allocator();
+
+            const route = (reposRoute(data.user.name) orelse return error.RouteTooLong).withSearch(data.repos_search orelse "") orelse return error.RouteTooLong;
+
+            // a leading "previous" row off the first window, one row per repo,
+            // then a trailing "next" row when more remain. each window row
+            // navigates to the adjacent window of this user's repos.
+            var items: std.ArrayList(ui.widget.FlowBox.Item) = .empty;
+            if (data.repos_start > 0) {
+                var prev = route;
+                prev.user_repos.start = data.repos_start -| page_size;
+                try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:{s}", .{try prev.toUrl(&arena)}) });
+            }
+            for (data.repos) |repo|
+                // clicking a repo opens its page; the "a:" prefix makes the web
+                // renderer emit an <a href="/repo/alice/foo"> anchor.
+                try items.append(aa, .{
+                    .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
+                    .link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.user.name, repo.event.name }),
+                });
+            if (data.repos_next_start) |next_start| {
+                var next = route;
+                next.user_repos.start = next_start;
+                try items.append(aa, .{ .text = "next →", .link = try std.fmt.allocPrint(aa, "a:{s}", .{try next.toUrl(&arena)}) });
+            }
+            try list.setItems(allocator, items.items);
+
+            try box.children.put(allocator, list.getFocus().id, .{ .widget = .{ .flow_box_scroll = list }, .rect = null, .min_size = null });
+        }
+
+        // search results start in the box so the term can be refined right away
+        box.getFocus().child_id = box.children.keys()[if (data.repos_search != null) header_index else list_index];
+        return .{ .box = box, .data = data, .session = session };
+    }
+
+    pub fn deinit(self: *ReposView, allocator: std.mem.Allocator) void {
+        self.box.deinit(allocator);
+    }
+
+    pub fn build(self: *ReposView, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+        // clear the incoming min height so the list scrolls within what's left
+        try self.box.build(allocator, .{
+            .min_size = .{ .width = null, .height = null },
+            .max_size = constraint.max_size,
+        }, root_focus);
+    }
+
+    pub fn input(self: *ReposView, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        const direction = inp.vertDirection(key);
+        if (self.headerActive()) {
+            const search_box = self.searchBox();
+            if (direction == .down) return root_focus.setFocus(self.listScroll().getFocus().id);
+            if (key == .enter) {
+                const text = try search_box.text(allocator);
+                defer allocator.free(text);
+                return self.submit(text);
+            }
+            return search_box.input(allocator, key, root_focus);
+        }
+        // up from the first row reaches the search box
+        if (direction == .up and self.listScroll().atTop()) return self.focusHeader(root_focus);
+        try self.listScroll().input(allocator, key, root_focus);
+    }
+
+    // the repos narrowed to `text` from the first window. an empty box on an
+    // unsearched page has nothing to clear.
+    fn submit(self: *ReposView, text: []const u8) !void {
+        if (text.len == 0 and self.data.repos_search == null) return;
+        const route = reposRoute(self.data.user.name) orelse return;
+        try self.session.navigate(route.withSearch(text) orelse return);
+    }
+
+    fn searchBox(self: *ReposView) *ui.widget.SearchBox {
+        return &self.box.children.values()[header_index].widget.box.children.values()[0].widget.search_box;
+    }
+
+    fn listScroll(self: *ReposView) *ui.widget.FlowBox.Scroll {
+        return &self.box.children.values()[list_index].widget.flow_box_scroll;
+    }
+
+    fn headerActive(self: *ReposView) bool {
+        return self.box.getFocus().child_id == self.box.children.keys()[header_index];
+    }
+
+    pub fn clearGrid(self: *ReposView) void {
+        self.box.clearGrid();
+    }
+
+    pub fn getGrid(self: ReposView) ?Grid {
+        return self.box.getGrid();
+    }
+
+    pub fn getFocus(self: *ReposView) *Focus {
+        return self.box.getFocus();
+    }
+
+    // up leaves the tab from the search box
+    pub fn atTop(self: *ReposView) bool {
+        return self.headerActive();
+    }
+
+    pub fn focusHeader(self: *ReposView, root_focus: *Focus) void {
+        root_focus.setFocus(self.searchBox().getFocus().id);
+    }
+};
+
+// the first window of `name`'s repos
+fn reposRoute(name: []const u8) ?ui.RoutablePage {
+    return .{ .user_repos = .{ .name = ui.RoutablePage.Array(evt.User.name_max_len).from(name) orelse return null } };
+}
