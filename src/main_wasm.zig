@@ -74,7 +74,8 @@ fn tick(min_height: u32, max_width: u32) !void {
     // push input-driven in-page route changes into the browser url without
     // adding history entries. real cross-page navigations go through _navigate.
     const current_page = session.data.current_page;
-    const should_push = if (last_pushed_page_maybe) |lp| !lp.eql(current_page) else true;
+    // the not-found page keeps the url that named the missing page
+    const should_push = current_page != .not_found and if (last_pushed_page_maybe) |lp| !lp.eql(current_page) else true;
     if (should_push) {
         last_pushed_page_maybe = current_page;
         const url = try current_page.toUrl(&page_arena);

@@ -186,7 +186,10 @@ fn ansiArtModule(b: *std.Build) *std.Build.Module {
         };
     }
 
+    const not_found = b.build_root.handle.readFileAlloc(io, "src/embed/not-found.txt", b.allocator, .limited(16 * 1024 * 1024)) catch unreachable;
+
     const options = b.addOptions();
     options.addOption([]const []const u8, "art", contents);
+    options.addOption([]const u8, "not_found", not_found);
     return options.createModule();
 }

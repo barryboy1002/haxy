@@ -11,7 +11,12 @@ const layout = xitui.layout;
 const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
-const ansi_arts: []const []const u8 = if (builtin.cpu.arch == .wasm32) &.{} else @import("ansi_art").art;
+// the random page art and the not-found page's fixed art. wasm receives its art
+// from the server, so it links none.
+const ansi_art = if (builtin.cpu.arch == .wasm32) struct {
+    const art: []const []const u8 = &.{};
+    const not_found: []const u8 = "";
+} else @import("ansi_art");
 const evt = @import("./event.zig");
 const inp = @import("./ui/input.zig");
 
@@ -23,6 +28,7 @@ pub const Title = @import("./ui/Title.zig");
 pub const SubTitle = @import("./ui/SubTitle.zig");
 pub const Quit = @import("./ui/Quit.zig");
 pub const Unauthorized = @import("./ui/Unauthorized.zig");
+pub const NotFound = @import("./ui/NotFound.zig");
 pub const NewRepo = @import("./ui/NewRepo.zig");
 pub const widget = @import("./ui/widget.zig");
 pub const Widget = widget.Widget;
@@ -59,6 +65,7 @@ pub const PageKind = enum {
     user,
     repo,
     fork,
+    not_found,
 };
 
 pub const Page = union(PageKind) {
@@ -66,6 +73,7 @@ pub const Page = union(PageKind) {
     user: User,
     repo: Repo,
     fork: Fork,
+    not_found,
 
     pub fn init(arena: *std.heap.ArenaAllocator, session: *Session, route: RoutablePage) !Page {
         // the repo page can build without a moment in local mode; the home and
@@ -92,6 +100,7 @@ pub const Page = union(PageKind) {
                 .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_new_repo, .fork_auth => .{ .fork = try Fork.init(arena, session, route) },
                 else => return error.UnexpectedRoute,
             },
+            .not_found => .not_found,
         };
     }
 };
@@ -182,6 +191,7 @@ pub const RoutablePage = union(enum) {
     fork_commits: ForkCommitsRoute,
     fork_new_repo: ForkRoute,
     fork_auth: ForkRoute,
+    not_found,
 
     pub const default: RoutablePage = .home_about;
 
@@ -1036,6 +1046,7 @@ pub const RoutablePage = union(enum) {
             },
             .home_new_repo => "/new-repo",
             .home_auth => "/auth",
+            .not_found => "/not-found",
             .user_repos => |u| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
                 try out.writer.print(user_segment ++ "{s}/repos", .{u.name.slice()});
@@ -1419,6 +1430,7 @@ pub const RoutablePage = union(enum) {
                 const f = self.forkRoute() orelse break :blk self;
                 break :blk forkPatchRoute(f.name.slice(), f.id.slice()) orelse self;
             },
+            .not_found => self,
         };
     }
 
@@ -1428,6 +1440,7 @@ pub const RoutablePage = union(enum) {
             .user_repos, .user_forks, .user_new_repo, .user_auth => .user,
             .repo_files, .repo_commits, .repo_diff, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo, .repo_new_repo, .repo_auth => .repo,
             .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_new_repo, .fork_auth => .fork,
+            .not_found => .not_found,
         };
     }
 
@@ -2723,13 +2736,8 @@ pub const Nav = struct {
             allocator.destroy(arena);
         }
 
-        session.page_arena = arena;
-        const route = session.data.current_page;
-
-        const page = try arena.allocator().create(Page);
-        page.* = try Page.init(arena, session, route);
         return .{
-            .root = try initRoot(allocator, page, session),
+            .root = try initCurrentRoot(allocator, arena, session),
             .arena = arena,
             .user_id = session.userId(),
             .history = .empty,
@@ -2746,6 +2754,37 @@ pub const Nav = struct {
         self.history.deinit(allocator);
     }
 
+    // rebuild the current page in place from a current moment
+    fn rebuild(self: *Nav, allocator: std.mem.Allocator, session: *Session) !void {
+        if (session.haxy_moment == null and session.local == null) return;
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        errdefer freeArena(allocator, arena);
+
+        const new_root = try initCurrentRoot(allocator, arena, session);
+
+        self.root.deinit(allocator);
+        freeArena(allocator, self.arena);
+        self.root = new_root;
+        self.arena = arena;
+        self.user_id = session.userId();
+    }
+
+    // build the current page's root in `arena`, or the not-found page's when
+    // the route names nothing
+    fn initCurrentRoot(allocator: std.mem.Allocator, arena: *std.heap.ArenaAllocator, session: *Session) !Widget {
+        session.page_arena = arena;
+        const page = try arena.allocator().create(Page);
+        page.* = Page.init(arena, session, session.data.current_page) catch |err| switch (err) {
+            error.NotFound => blk: {
+                session.data.current_page = .not_found;
+                break :blk .not_found;
+            },
+            else => |e| return e,
+        };
+        return initRoot(allocator, page, session);
+    }
+
     fn freeArena(allocator: std.mem.Allocator, arena: *std.heap.ArenaAllocator) void {
         arena.deinit();
         allocator.destroy(arena);
@@ -2760,24 +2799,7 @@ pub const Nav = struct {
         // refresh: rebuild the current page in place from a current moment
         if (session.refresh_requested) {
             session.refresh_requested = false;
-            if (session.haxy_moment != null or session.local != null) {
-                const arena = try allocator.create(std.heap.ArenaAllocator);
-                arena.* = std.heap.ArenaAllocator.init(allocator);
-                errdefer freeArena(allocator, arena);
-
-                session.page_arena = arena;
-
-                const route = session.data.current_page;
-                const page = try arena.allocator().create(Page);
-                page.* = try Page.init(arena, session, route);
-                const new_root = try initRoot(allocator, page, session);
-
-                self.root.deinit(allocator);
-                freeArena(allocator, self.arena);
-                self.root = new_root;
-                self.arena = arena;
-                self.user_id = session.userId();
-            }
+            try self.rebuild(allocator, session);
             return;
         }
 
@@ -2793,8 +2815,8 @@ pub const Nav = struct {
                 session.data.current_page = entry.route;
                 // a page built under another login is rebuilt rather than restored
                 if (!std.meta.eql(entry.user_id, session.userId())) {
-                    session.refresh_requested = true;
-                    return self.sync(allocator, session);
+                    try self.rebuild(allocator, session);
+                    return;
                 }
                 chooseAnsiArtForNavigation(session);
                 return;
@@ -2839,11 +2861,7 @@ pub const Nav = struct {
             arena.* = std.heap.ArenaAllocator.init(allocator);
             errdefer freeArena(allocator, arena);
 
-            session.page_arena = arena;
-
-            const page = try arena.allocator().create(Page);
-            page.* = try Page.init(arena, session, route);
-            const new_root = try initRoot(allocator, page, session);
+            const new_root = try initCurrentRoot(allocator, arena, session);
 
             try self.history.append(allocator, .{ .root = self.root, .route = previous_route, .arena = self.arena, .user_id = self.user_id });
             // drop the oldest entry (freeing its widget tree and arena) once over cap
@@ -2865,6 +2883,7 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
         .user => |*p| .{ .user = try .init(allocator, p, session) },
         .repo => |*p| .{ .repo = try .init(allocator, p, session) },
         .fork => |*p| .{ .fork = try .init(allocator, p, session) },
+        .not_found => .{ .not_found = try .init(allocator, session) },
     };
 
     chooseAnsiArtForNavigation(session);
@@ -2906,9 +2925,13 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
 // native and server-side sessions choose from the embedded collection. WASM
 // keeps the art serialized by the server instead.
 fn chooseAnsiArtForNavigation(session: *Session) void {
-    if (comptime ansi_arts.len == 0) return;
+    if (comptime ansi_art.art.len == 0) return;
+    if (session.data.current_page == .not_found) {
+        session.data.ansi_art = ansi_art.not_found;
+        return;
+    }
     const io = session.io orelse return;
     var random: usize = undefined;
     io.random(std.mem.asBytes(&random));
-    session.data.ansi_art = ansi_arts[random % ansi_arts.len];
+    session.data.ansi_art = ansi_art.art[random % ansi_art.art.len];
 }

@@ -211,11 +211,24 @@ fn handleRequest(
     // before the routable pages
     if (attachmentRequest(path)) |attachment| return serveAttachment(io, request, allocator, attachment, host);
 
-    const current_page_maybe = switch (host) {
+    const route_maybe = switch (host) {
         .server => ui.RoutablePage.fromUrl(path),
         .local => ui.RoutablePage.fromUrlLocal(path),
     };
-    if (current_page_maybe) |current_page| {
+    // a path that's neither a page nor an embed gets the not-found page
+    if (route_maybe == null) if (findEmbed(path)) |embed| {
+        // the embeds change with every build, so the browser must revalidate
+        // rather than heuristically cache them across server restarts
+        try request.respond(embed.body, .{
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = embed.content_type },
+                .{ .name = "cache-control", .value = "no-cache" },
+            },
+        });
+        return;
+    };
+    {
+        const current_page = route_maybe orelse .not_found;
         // resolve the haxy_session cookie's token to a user_id via the
         // store. user_id_buf lives on the stack for the rest of handleRequest,
         // which is plenty for renderIndexHtml to consume. local mode has no
@@ -281,7 +294,7 @@ fn handleRequest(
             .server => |server| .{ server.git_http_port, server.git_ssh_port, server.git_ssh_prefix },
             .local => .{ null, null, "" },
         };
-        const html = renderIndexHtml(io, allocator, host, session_token, .{
+        var session_data: ui.Session.Data = .{
             .user_id = user_id,
             .form_feedback = form_feedback,
             .sync_failure = sync_failure,
@@ -290,13 +303,12 @@ fn handleRequest(
             .git_http_port = git_http_port,
             .git_ssh_port = git_ssh_port,
             .git_ssh_prefix = git_ssh_prefix,
-        }) catch |err| switch (err) {
-            error.NotFound => {
-                try request.respond("not found", .{
-                    .status = .not_found,
-                    .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
-                });
-                return;
+        };
+        // a page that can't be built shows the not-found page instead
+        const html = renderIndexHtml(io, allocator, host, session_token, session_data) catch |err| switch (err) {
+            error.NotFound => blk: {
+                session_data.current_page = .not_found;
+                break :blk try renderIndexHtml(io, allocator, host, session_token, session_data);
             },
             else => |e| return e,
         };
@@ -313,26 +325,11 @@ fn handleRequest(
         if (expired_form_cookie) |cookie| headers.appendAssumeCapacity(.{ .name = "set-cookie", .value = cookie });
         if (local_flash_seen) headers.appendAssumeCapacity(.{ .name = "set-cookie", .value = local_flash_cookie ++ "=; Path=/; Max-Age=0" });
         if (session_cookie) |cookie| headers.appendAssumeCapacity(.{ .name = "set-cookie", .value = cookie });
-        try request.respond(html, .{ .extra_headers = headers.items });
-        return;
-    }
-
-    const embed = findEmbed(path) orelse {
-        try request.respond("not found", .{
-            .status = .not_found,
-            .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
+        try request.respond(html, .{
+            .status = if (session_data.current_page == .not_found) .not_found else .ok,
+            .extra_headers = headers.items,
         });
-        return;
-    };
-
-    // the embeds change with every build, so the browser must revalidate
-    // rather than heuristically cache them across server restarts
-    try request.respond(embed.body, .{
-        .extra_headers = &.{
-            .{ .name = "content-type", .value = embed.content_type },
-            .{ .name = "cache-control", .value = "no-cache" },
-        },
-    });
+    }
 }
 
 fn handleLogin(
