@@ -231,13 +231,13 @@ pub const FlowBox = struct {
         self.arena.deinit();
     }
 
-    // one flow item: its display text plus an optional link. a non-empty `link`
-    // sets the item's focus kind such as `.{ .custom = "a:/user/foo" }`, which
-    // the web renderer turns into an anchor.
-    pub const Item = struct { text: []const u8, link: []const u8 = "" };
+    // one flow item: its display text plus an optional link and bottom label. a
+    // non-empty `link` sets the item's focus kind such as `.{ .custom = "a:/user/foo" }`,
+    // which the web renderer turns into an anchor.
+    pub const Item = struct { text: []const u8, link: []const u8 = "", bottom_label: []const u8 = "" };
 
-    // the text box copies the item text; links are copied into the arena, so the
-    // caller's slices needn't outlive this call.
+    // the text box copies the item text; links and bottom labels are copied into
+    // the arena, so the caller's slices needn't outlive this call.
     pub fn setItems(self: *FlowBox, allocator: std.mem.Allocator, items: []const Item) !void {
         for (self.text_boxes.items) |*tb| tb.deinit(allocator);
         self.text_boxes.clearAndFree(allocator);
@@ -251,7 +251,7 @@ pub const FlowBox = struct {
         self.focus.child_id = null;
 
         for (items) |item| {
-            var text_box = try wgt.TextBox.init(allocator, item.text, .{ .border_style = .hidden, .round_corners = true, .wrap_kind = .word });
+            var text_box = try wgt.TextBox.init(allocator, item.text, .{ .border_style = .hidden, .round_corners = true, .wrap_kind = .word, .bottom_label = try aa.dupe(u8, item.bottom_label) });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
 

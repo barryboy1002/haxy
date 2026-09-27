@@ -21,10 +21,18 @@ pub const page_size = 20; // how many repos one window of the repos tab shows
 
 pub const ForkItem = struct {
     id: []const u8,
-    // the target repo's name
-    name: []const u8,
+    // the target repo, whose name and access the fork shares
+    target: evt.Repo,
     title: []const u8,
 };
+
+// a repo's access, shown under its list item
+fn accessLabel(repo: evt.Repo) []const u8 {
+    return switch (repo.read_access) {
+        .public => "(public)",
+        .private => "(private)",
+    };
+}
 
 header: Header,
 user: evt.User.Public,
@@ -152,7 +160,7 @@ pub fn init(
                 } else |_| {}
                 try forks.append(arena.allocator(), .{
                     .id = try arena.allocator().dupe(u8, &fork_id_hex),
-                    .name = target_repo.event.name,
+                    .target = target_repo.event,
                     .title = title,
                 });
             }
@@ -217,11 +225,12 @@ pub const View = struct {
                     try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:/user/{s}/forks/start:{d}", .{ data.user.name, data.forks_start -| page_size }) });
                 for (data.forks) |fork_item| {
                     // the fork route names the forker
-                    const identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.user.name, fork_item.name });
+                    const identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.user.name, fork_item.target.name });
                     const route = ui.RoutablePage.forkPatchRoute(identity, fork_item.id) orelse return error.RouteTooLong;
                     try items.append(aa, .{
-                        .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ fork_item.name, fork_item.title }),
+                        .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ fork_item.target.name, fork_item.title }),
                         .link = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)}),
+                        .bottom_label = accessLabel(fork_item.target),
                     });
                 }
                 if (data.forks_next_start) |next_start|
@@ -401,6 +410,7 @@ pub const ReposView = struct {
                 try items.append(aa, .{
                     .text = if (repo.event.description.len == 0) repo.event.name else try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
                     .link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.user.name, repo.event.name }),
+                    .bottom_label = accessLabel(repo.event),
                 });
             if (data.repos_next_start) |next_start| {
                 var next = route;
