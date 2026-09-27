@@ -22,9 +22,8 @@ pub const page_size = 20; // how many repos one window of the repos tab shows
 
 pub const ForkItem = struct {
     id: []const u8,
-    // the fork route's identity, which names the forker
-    identity: []const u8,
-    target: []const u8,
+    // the target repo's name
+    name: []const u8,
     title: []const u8,
 };
 
@@ -121,7 +120,6 @@ pub fn init(
                 const owner_id = record.event.repo_user_id[0..evt.event_id_size];
                 const target_repo = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, record.event.repo_id)) orelse continue;
                 if (evt.Repo.roleOf(target_repo, session.userId()) == .none) continue;
-                const owner = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, owner_id)) orelse continue;
 
                 var title: []const u8 = "(unavailable)";
                 const path = try fork.forkPath(arena.allocator(), users_dir, &user_id, &fork_id);
@@ -134,8 +132,7 @@ pub fn init(
                 } else |_| {}
                 try forks.append(arena.allocator(), .{
                     .id = try arena.allocator().dupe(u8, &fork_id_hex),
-                    .identity = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ user.event.name, target_repo.event.name }),
-                    .target = try std.fmt.allocPrint(arena.allocator(), "{s}/{s}", .{ owner.event.name, target_repo.event.name }),
+                    .name = target_repo.event.name,
                     .title = title,
                 });
             }
@@ -200,9 +197,11 @@ pub const View = struct {
                 if (data.forks_start > 0)
                     try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:/user/{s}/forks/start:{d}", .{ data.user.name, data.forks_start -| page_size }) });
                 for (data.forks) |fork_item| {
-                    const route = ui.RoutablePage.forkPatchRoute(fork_item.identity, fork_item.id) orelse return error.RouteTooLong;
+                    // the fork route names the forker
+                    const identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.user.name, fork_item.name });
+                    const route = ui.RoutablePage.forkPatchRoute(identity, fork_item.id) orelse return error.RouteTooLong;
                     try items.append(aa, .{
-                        .text = try std.fmt.allocPrint(aa, "{s}\n{s}", .{ fork_item.target, fork_item.title }),
+                        .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ fork_item.name, fork_item.title }),
                         .link = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)}),
                     });
                 }
@@ -380,7 +379,7 @@ pub const ReposView = struct {
                 // clicking a repo opens its page; the "a:" prefix makes the web
                 // renderer emit an <a href="/repo/alice/foo"> anchor.
                 try items.append(aa, .{
-                    .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
+                    .text = if (repo.event.description.len == 0) repo.event.name else try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
                     .link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.user.name, repo.event.name }),
                 });
             if (data.repos_next_start) |next_start| {

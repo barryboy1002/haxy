@@ -69,16 +69,16 @@ pub const View = struct {
 
         try ui.widget.addBackButton(allocator, &title_box, session);
 
-        // the user's name links to their page.
+        // the forker's name links to their page.
         {
             var text_buf: [evt.User.name_max_len + 1]u8 = undefined;
-            const text = try std.fmt.bufPrint(&text_buf, "{s}/", .{data.owner_name});
-            var owner = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
-            errdefer owner.deinit(allocator);
-            owner.getFocus().mode = .all;
-            owner.getFocus().kind = .{ .custom = try std.fmt.allocPrint(aa, "a:/user/{s}", .{data.owner_name}) };
+            const text = try std.fmt.bufPrint(&text_buf, "{s}/", .{data.forker_name});
+            var forker = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
+            errdefer forker.deinit(allocator);
+            forker.getFocus().mode = .all;
+            forker.getFocus().kind = .{ .custom = try std.fmt.allocPrint(aa, "a:/user/{s}", .{data.forker_name}) };
             first_group_width += try xitui.width.displayWidth(text) + 2;
-            try title_box.children.put(allocator, owner.getFocus().id, .{ .widget = .{ .text_box = owner }, .rect = null, .min_size = null });
+            try title_box.children.put(allocator, forker.getFocus().id, .{ .widget = .{ .text_box = forker }, .rect = null, .min_size = null });
         }
 
         // the title links to the target repository.
