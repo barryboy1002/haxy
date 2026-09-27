@@ -14,7 +14,6 @@ const inp = @import("./input.zig");
 const fork = @import("../fork.zig");
 
 pub const Header = @import("./User/Header.zig");
-pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
@@ -36,7 +35,6 @@ repos_search: ?[]const u8, // the name prefix the repos are narrowed to (decoded
 forks: []const ForkItem,
 forks_start: usize,
 forks_next_start: ?usize,
-settings: Settings,
 auth: Auth,
 quit: Quit,
 
@@ -172,7 +170,6 @@ pub fn init(
         .forks = forks.items,
         .forks_start = forks_start,
         .forks_next_start = forks_next_start,
-        .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
     };
@@ -233,19 +230,13 @@ pub const View = struct {
                 try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
             }
 
-            // the header has no new repo or settings tab without a login, so keep the
-            // stack's children 1:1 with the tabs by skipping those views too
+            // the header has no new repo tab without a login, so keep the
+            // stack's children 1:1 with the tabs by skipping that view too
             if (session.data.user_id != null) {
                 const route = ui.RoutablePage{ .user_new_repo = ui.RoutablePage.Array(evt.User.name_max_len).from(data.user.name) orelse return error.RouteTooLong };
                 var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);
                 errdefer new_repo_view.deinit(allocator);
                 try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
-            }
-
-            if (session.data.user_id != null) {
-                var settings_view = try Settings.View.init(allocator, session);
-                errdefer settings_view.deinit(allocator);
-                try stack.children.put(allocator, settings_view.getFocus().id, .{ .home_settings = settings_view });
             }
 
             {

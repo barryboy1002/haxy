@@ -493,8 +493,8 @@ fn handleAnsi(
         try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, &repo, users_dir, &user_id);
     }
 
-    // return to the settings tab the toggle came from so the change is visible.
-    const location = try std.fmt.allocPrint(allocator, "{s}/settings", .{base});
+    // return to the auth tab the toggle came from so the change is visible.
+    const location = try std.fmt.allocPrint(allocator, "{s}/auth", .{base});
     defer allocator.free(location);
 
     // like logout, this is a bodyless POST, so close the connection rather than

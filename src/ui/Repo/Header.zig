@@ -18,7 +18,6 @@ const issues_tab_label = "issues";
 const patches_tab_label = "patches";
 const discuss_tab_label = "discuss";
 const events_tab_label = "events";
-const settings_tab_label = "settings";
 const new_repo_tab_label = "new repo";
 
 pub const AuthTab = @import("./../AuthTab.zig");
@@ -140,7 +139,7 @@ pub const View = struct {
 
         // every tab link is repo-scoped so selecting one stays on this page —
         // switching its stack and updating the url — instead of navigating to
-        // the global settings or auth pages. the "ai:" prefix makes each an
+        // the global new repo or auth pages. the "ai:" prefix makes each an
         // in-page anchor: crossPageLink ignores it so a wasm click just switches
         // tabs (the page already holds every tab's content), while the href is
         // still followed with js off. the files tab routes through the shared
@@ -167,8 +166,6 @@ pub const View = struct {
         const discussions_link = try ui.inPageTabLink(session, discussions_route, current_tag == .repo_discussions);
         const events_route = ui.RoutablePage.repoEventsRoute(identity, .active, null, "", null) orelse return error.RouteTooLong;
         const events_link = try ui.inPageTabLink(session, events_route, current_tag == .repo_events);
-        const settings_route = ui.RoutablePage{ .repo_settings = Array.from(identity) orelse return error.RouteTooLong };
-        const settings_link = try ui.inPageTabLink(session, settings_route, current_tag == .repo_settings);
         const new_repo_route = ui.RoutablePage{ .repo_new_repo = Array.from(identity) orelse return error.RouteTooLong };
         const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .repo_new_repo);
         const auth_route = ui.RoutablePage{ .repo_auth = Array.from(identity) orelse return error.RouteTooLong };
@@ -298,7 +295,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes settings, new repo and auth to the right
+        // spacer pushes new repo and auth to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -322,22 +319,6 @@ pub const View = struct {
                 .widget = .{ .text_box = text_box },
                 .rect = null,
                 .min_size = .{ .width = new_repo_tab_label.len + 2, .height = null },
-            });
-        }
-
-        // settings tab. settings are account preferences, so it needs a login
-        // (which also rules out local mode, which has no accounts).
-        if (session.data.user_id != null) {
-            var text_box = try wgt.TextBox.init(allocator, settings_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
-            errdefer text_box.deinit(allocator);
-            text_box.getFocus().mode = .all;
-            text_box.getFocus().kind = .{ .custom = settings_link };
-            try tab_ids.put(allocator, text_box.getFocus().id, {});
-            if (current_tag == .repo_settings) selected_tab = text_box.getFocus().id;
-            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
-                .widget = .{ .text_box = text_box },
-                .rect = null,
-                .min_size = .{ .width = settings_tab_label.len + 2, .height = null },
             });
         }
 

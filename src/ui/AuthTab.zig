@@ -9,13 +9,10 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
 const login_tab_label = "login";
-const logout_tab_label = "logout";
 
 pub const View = struct {
     text_box: wgt.TextBox,
     session: *ui.Session,
-    // backs the bottom label, which borrows it
-    bottom_label_buf: [ui.clipped_bottom_label_max_len]u8,
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         var text_box = try wgt.TextBox.init(allocator, login_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
@@ -25,7 +22,6 @@ pub const View = struct {
         return .{
             .text_box = text_box,
             .session = session,
-            .bottom_label_buf = undefined,
         };
     }
 
@@ -33,23 +29,18 @@ pub const View = struct {
         self.text_box.deinit(allocator);
     }
 
+    // the logged-in user's name, or the login label
     fn text(self: *const View) []const u8 {
-        return if (self.session.data.user_id == null) login_tab_label else logout_tab_label;
+        if (self.session.data.user_id == null) return login_tab_label;
+        return self.session.data.user_name orelse unreachable;
     }
 
-    fn bottomLabel(self: *View) []const u8 {
-        if (self.session.data.user_id == null) return "";
-        const name = self.session.data.user_name orelse return "";
-        return ui.clippedBottomLabel(&self.bottom_label_buf, name) catch unreachable;
-    }
-
-    pub fn minWidth(self: *View) usize {
-        return @max(self.text().len, self.bottomLabel().len) + 2;
+    pub fn minWidth(self: *const View) usize {
+        return self.text().len + 2;
     }
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         try self.text_box.setContent(allocator, self.text());
-        self.text_box.options.bottom_label = self.bottomLabel();
         try self.text_box.build(allocator, constraint, root_focus);
     }
 

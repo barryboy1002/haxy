@@ -13,14 +13,12 @@ const evt = @import("../event.zig");
 pub const About = @import("./Home/About.zig");
 pub const Users = @import("./Home/Users.zig");
 pub const Header = @import("./Home/Header.zig");
-pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
 header: Header,
 about: About,
 users: Users,
-settings: Settings,
 auth: Auth,
 quit: Quit,
 
@@ -38,7 +36,6 @@ pub fn init(
         .header = try Header.init(arena, about.title),
         .about = about,
         .users = try Users.init(arena, haxy_moment, users_route),
-        .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
     };
@@ -78,18 +75,12 @@ pub const View = struct {
                 try stack.children.put(allocator, users_view.getFocus().id, .{ .home_users = users_view });
             }
 
-            // the header has no new repo or settings tab without a login, so keep the
-            // stack's children 1:1 with the tabs by skipping those views too
+            // the header has no new repo tab without a login, so keep the
+            // stack's children 1:1 with the tabs by skipping that view too
             if (session.data.user_id != null) {
                 var new_repo_view = try ui.NewRepo.View.init(allocator, session, .home_new_repo);
                 errdefer new_repo_view.deinit(allocator);
                 try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
-            }
-
-            if (session.data.user_id != null) {
-                var settings_view = try Settings.View.init(allocator, session);
-                errdefer settings_view.deinit(allocator);
-                try stack.children.put(allocator, settings_view.getFocus().id, .{ .home_settings = settings_view });
             }
 
             {

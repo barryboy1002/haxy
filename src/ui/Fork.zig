@@ -17,7 +17,6 @@ pub const Files = @import("./Repo/Files.zig");
 pub const Commits = @import("./Repo/Commits.zig");
 pub const Diff = @import("./Repo/Diff.zig");
 pub const Patches = @import("./Repo/Patches.zig");
-pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
@@ -26,7 +25,6 @@ files: Files,
 commits: Commits,
 patch: Patches,
 diff: Diff,
-settings: Settings,
 auth: Auth,
 quit: Quit,
 
@@ -163,7 +161,6 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                     .path = diff_path,
                     .window = try Diff.render(.xit, repo_opts, io, arena.child_allocator, aa, fork_repo, &commits_base_oid, fork_oid, diff_start, diff_path),
                 },
-                .settings = Settings.init(),
                 .auth = Auth.init(),
                 .quit = Quit.init(),
             };
@@ -213,11 +210,6 @@ pub const View = struct {
                 var new_repo = try ui.NewRepo.View.init(allocator, session, route);
                 errdefer new_repo.deinit(allocator);
                 try stack.children.put(allocator, new_repo.getFocus().id, .{ .new_repo = new_repo });
-            }
-            if (session.data.user_id != null) {
-                var settings = try Settings.View.init(allocator, session);
-                errdefer settings.deinit(allocator);
-                try stack.children.put(allocator, settings.getFocus().id, .{ .home_settings = settings });
             }
             if (session.data.host_kind == .server) {
                 var auth = try Auth.View.init(allocator, &data.auth, session);

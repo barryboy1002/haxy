@@ -80,16 +80,16 @@ pub const Page = union(PageKind) {
                 break :blk switch (route) {
                     .user_repos => |u| .{ .user = try User.init(arena, session, haxy_moment, u.name, u.start, u.search.slice(), 0) },
                     .user_forks => |u| .{ .user = try User.init(arena, session, haxy_moment, u.name, 0, "", u.start) },
-                    .user_settings, .user_new_repo, .user_auth => |name| .{ .user = try User.init(arena, session, haxy_moment, name, 0, "", 0) },
+                    .user_new_repo, .user_auth => |name| .{ .user = try User.init(arena, session, haxy_moment, name, 0, "", 0) },
                     else => return error.UnexpectedRoute,
                 };
             },
             .repo => switch (route) {
-                .repo_files, .repo_commits, .repo_diff, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo, .repo_settings, .repo_new_repo, .repo_auth => .{ .repo = try Repo.init(arena, session, route) },
+                .repo_files, .repo_commits, .repo_diff, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo, .repo_new_repo, .repo_auth => .{ .repo = try Repo.init(arena, session, route) },
                 else => return error.UnexpectedRoute,
             },
             .fork => switch (route) {
-                .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_settings, .fork_new_repo, .fork_auth => .{ .fork = try Fork.init(arena, session, route) },
+                .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_new_repo, .fork_auth => .{ .fork = try Fork.init(arena, session, route) },
                 else => return error.UnexpectedRoute,
             },
         };
@@ -110,7 +110,6 @@ pub const Snapshot = struct {
 pub const RoutablePage = union(enum) {
     home_about,
     home_users: HomeUsersRoute,
-    home_settings,
     home_new_repo,
     home_auth,
     user_repos: struct {
@@ -120,7 +119,6 @@ pub const RoutablePage = union(enum) {
         search: Array(search_route_max_len) = .{},
     },
     user_forks: struct { name: Array(evt.User.name_max_len), start: usize = 0 },
-    user_settings: Array(evt.User.name_max_len),
     user_new_repo: Array(evt.User.name_max_len),
     user_auth: Array(evt.User.name_max_len),
     repo_files: RepoFilesRoute,
@@ -176,14 +174,12 @@ pub const RoutablePage = union(enum) {
     },
     repo_events: RepoEventsRoute,
     repo_undo: RepoUndoRoute,
-    repo_settings: Array(repo_route_max_len),
     repo_new_repo: Array(repo_route_max_len),
     repo_auth: Array(repo_route_max_len),
     fork_patch: ForkRoute,
     fork_diff: struct { fork: ForkRoute, start: usize = 0, path: Array(repo_route_max_len) = .{} },
     fork_files: ForkFilesRoute,
     fork_commits: ForkCommitsRoute,
-    fork_settings: ForkRoute,
     fork_new_repo: ForkRoute,
     fork_auth: ForkRoute,
 
@@ -570,10 +566,6 @@ pub const RoutablePage = union(enum) {
             .oid = Array(ref_route_max_len).from(oid) orelse return null,
             .content = .message,
         } };
-    }
-
-    pub fn forkSettingsRoute(identity: []const u8, id: []const u8) ?RoutablePage {
-        return .{ .fork_settings = initForkRoute(identity, id) orelse return null };
     }
 
     pub fn forkNewRepoRoute(identity: []const u8, id: []const u8) ?RoutablePage {
@@ -1042,7 +1034,6 @@ pub const RoutablePage = union(enum) {
                 try writeListWindow(&out.writer, u.search.slice(), u.start);
                 break :blk out.written();
             },
-            .home_settings => "/settings",
             .home_new_repo => "/new-repo",
             .home_auth => "/auth",
             .user_repos => |u| blk: {
@@ -1055,7 +1046,6 @@ pub const RoutablePage = union(enum) {
                 try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/forks", .{u.name.slice()})
             else
                 try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/forks/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
-            .user_settings => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/settings", .{name.slice()}),
             .user_new_repo => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/new-repo", .{name.slice()}),
             .user_auth => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/auth", .{name.slice()}),
             .repo_files => |f| blk: {
@@ -1231,7 +1221,6 @@ pub const RoutablePage = union(enum) {
                 else
                     try std.fmt.allocPrint(arena.allocator(), "{s}/events/{s}{s}", .{ prefix, @tagName(e.view), moment });
             },
-            .repo_settings => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/settings", .{try repoUrlPrefix(arena, name.slice())}),
             .repo_new_repo => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/new-repo", .{try repoUrlPrefix(arena, name.slice())}),
             .repo_auth => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/auth", .{try repoUrlPrefix(arena, name.slice())}),
             .fork_patch => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}", .{ f.name.slice(), f.id.slice() }),
@@ -1264,7 +1253,6 @@ pub const RoutablePage = union(enum) {
                 }
                 break :blk out.written();
             },
-            .fork_settings => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/settings", .{ f.name.slice(), f.id.slice() }),
             .fork_new_repo => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/new-repo", .{ f.name.slice(), f.id.slice() }),
             .fork_auth => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/auth", .{ f.name.slice(), f.id.slice() }),
         };
@@ -1279,10 +1267,9 @@ pub const RoutablePage = union(enum) {
             const params = listParams(&segments, &.{ .start, .search }) orelse return null;
             return withEncodedSearch(.{ .home_users = .{ .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
         }
-        if (std.mem.eql(u8, first, "settings")) return if (segments.next() == null) .home_settings else null;
         if (std.mem.eql(u8, first, "new-repo")) return if (segments.next() == null) .home_new_repo else null;
         if (std.mem.eql(u8, first, "auth")) return if (segments.next() == null) .home_auth else null;
-        // "user/<name>[/repos[/search:<s>][/start:<n>]|/settings|/new-repo|/auth]"
+        // "user/<name>[/repos[/search:<s>][/start:<n>]|/new-repo|/auth]"
         if (std.mem.eql(u8, first, "user")) {
             const name = segments.next() orelse return null;
             if (name.len == 0) return null;
@@ -1293,7 +1280,6 @@ pub const RoutablePage = union(enum) {
                 return withEncodedSearch(.{ .user_repos = .{ .name = parsed, .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
             }
             if (std.mem.eql(u8, sub, "forks")) return .{ .user_forks = .{ .name = parsed, .start = listStart(&segments) orelse return null } };
-            if (std.mem.eql(u8, sub, "settings")) return if (segments.next() == null) .{ .user_settings = parsed } else null;
             if (std.mem.eql(u8, sub, "new-repo")) return if (segments.next() == null) .{ .user_new_repo = parsed } else null;
             if (std.mem.eql(u8, sub, "auth")) return if (segments.next() == null) .{ .user_auth = parsed } else null;
             return null; // unknown sub-path
@@ -1340,7 +1326,6 @@ pub const RoutablePage = union(enum) {
                 const file_path = pathValue(segments.rest()) orelse return null;
                 return forkCommitsRoute(identity, id, oid, start, file_path);
             }
-            if (std.mem.eql(u8, tab, "settings")) return if (segments.next() == null) forkSettingsRoute(identity, id) else null;
             if (std.mem.eql(u8, tab, "new-repo")) return if (segments.next() == null) forkNewRepoRoute(identity, id) else null;
             if (std.mem.eql(u8, tab, "auth")) return if (segments.next() == null) forkAuthRoute(identity, id) else null;
             return null;
@@ -1400,7 +1385,7 @@ pub const RoutablePage = union(enum) {
             .repo_discussions => |*t| t.name.slice(),
             .repo_events => |*e| e.name.slice(),
             .repo_undo => |*u| u.name.slice(),
-            .repo_settings, .repo_new_repo, .repo_auth => |*name| name.slice(),
+            .repo_new_repo, .repo_auth => |*name| name.slice(),
             else => null,
         };
     }
@@ -1411,7 +1396,6 @@ pub const RoutablePage = union(enum) {
             .fork_diff => |*d| &d.fork,
             .fork_files => |*f| &f.fork,
             .fork_commits => |*f| &f.fork,
-            .fork_settings => |*f| f,
             .fork_new_repo => |*f| f,
             .fork_auth => |*f| f,
             else => null,
@@ -1426,7 +1410,7 @@ pub const RoutablePage = union(enum) {
             .user => switch (self) {
                 .user_repos => |u| .{ .user_repos = .{ .name = u.name } },
                 .user_forks => |u| .{ .user_repos = .{ .name = u.name } },
-                .user_settings, .user_new_repo, .user_auth => |name| .{ .user_repos = .{ .name = name } },
+                .user_new_repo, .user_auth => |name| .{ .user_repos = .{ .name = name } },
                 else => self,
             },
             // every repo route stores the same identity, so it always fits
@@ -1440,10 +1424,10 @@ pub const RoutablePage = union(enum) {
 
     pub fn parent(self: RoutablePage) PageKind {
         return switch (self) {
-            .home_about, .home_users, .home_settings, .home_new_repo, .home_auth => .home,
-            .user_repos, .user_forks, .user_settings, .user_new_repo, .user_auth => .user,
-            .repo_files, .repo_commits, .repo_diff, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo, .repo_settings, .repo_new_repo, .repo_auth => .repo,
-            .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_settings, .fork_new_repo, .fork_auth => .fork,
+            .home_about, .home_users, .home_new_repo, .home_auth => .home,
+            .user_repos, .user_forks, .user_new_repo, .user_auth => .user,
+            .repo_files, .repo_commits, .repo_diff, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo, .repo_new_repo, .repo_auth => .repo,
+            .fork_patch, .fork_diff, .fork_files, .fork_commits, .fork_new_repo, .fork_auth => .fork,
         };
     }
 
@@ -1483,7 +1467,6 @@ pub const RoutablePage = union(enum) {
         var segments = std.mem.splitScalar(u8, sub, '/');
         const tab = segments.next() orelse return null;
         var params = Params{};
-        if (std.mem.eql(u8, tab, "settings")) return if (segments.next() == null) .{ .repo_settings = Array(repo_route_max_len).from(pair) orelse return null } else null;
         if (std.mem.eql(u8, tab, "new-repo")) return if (segments.next() == null) .{ .repo_new_repo = Array(repo_route_max_len).from(pair) orelse return null } else null;
         if (std.mem.eql(u8, tab, "auth")) return if (segments.next() == null) .{ .repo_auth = Array(repo_route_max_len).from(pair) orelse return null } else null;
         if (std.mem.eql(u8, tab, "refs")) {
@@ -1740,7 +1723,6 @@ pub const RoutablePage = union(enum) {
             .home_users => |a_u| a_u.start == b.home_users.start and std.mem.eql(u8, a_u.search.slice(), b.home_users.search.slice()),
             .user_repos => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_repos.name.slice()) and a_u.start == b.user_repos.start and std.mem.eql(u8, a_u.search.slice(), b.user_repos.search.slice()),
             .user_forks => |a_u| std.mem.eql(u8, a_u.name.slice(), b.user_forks.name.slice()) and a_u.start == b.user_forks.start,
-            .user_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.user_settings.slice()),
             .user_new_repo => |a_name| std.mem.eql(u8, a_name.slice(), b.user_new_repo.slice()),
             .user_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.user_auth.slice()),
             .repo_files => |a_f| std.mem.eql(u8, a_f.name.slice(), b.repo_files.name.slice()) and
@@ -1802,7 +1784,6 @@ pub const RoutablePage = union(enum) {
                 a_e.moment == b.repo_events.moment and
                 a_e.kind == b.repo_events.kind and
                 std.mem.eql(u8, a_e.selected.slice(), b.repo_events.selected.slice()),
-            .repo_settings => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_settings.slice()),
             .repo_new_repo => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_new_repo.slice()),
             .repo_auth => |a_name| std.mem.eql(u8, a_name.slice(), b.repo_auth.slice()),
             .fork_patch => |a_f| std.mem.eql(u8, a_f.name.slice(), b.fork_patch.name.slice()) and std.mem.eql(u8, a_f.id.slice(), b.fork_patch.id.slice()),
@@ -1825,7 +1806,6 @@ pub const RoutablePage = union(enum) {
                     },
                     .message => std.meta.activeTag(b.fork_commits.content) == .message,
                 },
-            .fork_settings => |a_f| std.mem.eql(u8, a_f.name.slice(), b.fork_settings.name.slice()) and std.mem.eql(u8, a_f.id.slice(), b.fork_settings.id.slice()),
             .fork_new_repo => |a_f| std.mem.eql(u8, a_f.name.slice(), b.fork_new_repo.name.slice()) and std.mem.eql(u8, a_f.id.slice(), b.fork_new_repo.id.slice()),
             .fork_auth => |a_f| std.mem.eql(u8, a_f.name.slice(), b.fork_auth.name.slice()) and std.mem.eql(u8, a_f.id.slice(), b.fork_auth.id.slice()),
             else => true,

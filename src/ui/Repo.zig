@@ -24,7 +24,6 @@ pub const Discussions = @import("./Repo/Discussions.zig");
 pub const Comment = @import("./Repo/Comment.zig");
 pub const Undo = @import("./Repo/Undo.zig");
 pub const Events = @import("./Repo/Events.zig");
-pub const Settings = @import("./Settings.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
@@ -38,7 +37,6 @@ patches: Patches,
 discussions: Discussions,
 events: Events,
 undo: ?Undo = null,
-settings: Settings,
 auth: Auth,
 quit: Quit,
 
@@ -364,7 +362,6 @@ pub fn init(
         .discussions = discussions,
         .events = events,
         .undo = undo_data,
-        .settings = Settings.init(),
         .auth = Auth.init(),
         .quit = Quit.init(),
     };
@@ -452,7 +449,7 @@ pub const View = struct {
                 try stack.children.put(allocator, undo_view.getFocus().id, .{ .repo_undo = undo_view });
             }
 
-            // the header only shows the new repo and settings tabs with a login
+            // the header only shows the new repo tab with a login
             // and the auth tab outside local mode, so keep the stack's children 1:1 with
             // the tabs by skipping the same views.
             if (session.data.user_id != null) {
@@ -461,12 +458,6 @@ pub const View = struct {
                 var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);
                 errdefer new_repo_view.deinit(allocator);
                 try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
-            }
-
-            if (session.data.user_id != null) {
-                var settings_view = try Settings.View.init(allocator, session);
-                errdefer settings_view.deinit(allocator);
-                try stack.children.put(allocator, settings_view.getFocus().id, .{ .home_settings = settings_view });
             }
 
             if (session.data.host_kind == .server) {
