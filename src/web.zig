@@ -2261,6 +2261,22 @@ fn renderPanelControls(
                     }
                     var pos_buf: [128]u8 = undefined;
                     try output.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, " style=\"left:{d}ch;top:{d}em;width:{d}ch;height:{d}em\"></button>", .{ r.x, r.y, r.size.width, r.size.height }));
+                } else if (std.mem.startsWith(u8, custom, ui.radio_prefix)) {
+                    // an invisible native radio over the option, checked when the option is its row's selection
+                    const field = custom[ui.radio_prefix.len..];
+                    const separator = std.mem.indexOfScalar(u8, field, '=') orelse continue;
+                    const row = root_focus.children.get(child.parent_id) orelse continue;
+                    var id_buf: [128]u8 = undefined;
+                    try output.appendSlice(allocator, try std.fmt.bufPrint(&id_buf, "<input type=\"radio\" data-key=\"control:{d}\" data-focus-id=\"{d}\"", .{ id, id }));
+                    try appendFormAttribute(allocator, output, root_focus, id);
+                    try output.appendSlice(allocator, " name=\"");
+                    try appendEscapedHtml(allocator, output, field[0..separator]);
+                    try output.appendSlice(allocator, "\" value=\"");
+                    try appendEscapedHtml(allocator, output, field[separator + 1 ..]);
+                    try output.append(allocator, '"');
+                    if (row.focus.child_id == id) try output.appendSlice(allocator, " checked");
+                    var pos_buf: [128]u8 = undefined;
+                    try output.appendSlice(allocator, try std.fmt.bufPrint(&pos_buf, " style=\"opacity:0;left:{d}ch;top:{d}em;width:{d}ch;height:{d}em\">", .{ r.x, r.y, r.size.width, r.size.height }));
                 } else if (std.mem.startsWith(u8, custom, ui.file_input_prefix)) {
                     try output.appendSlice(allocator, "<input type=\"file\" data-preserve-value data-action=\"");
                     try appendEscapedHtml(allocator, output, custom[ui.file_input_prefix.len..]);

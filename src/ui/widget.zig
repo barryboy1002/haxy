@@ -41,6 +41,7 @@ pub const Widget = union(enum) {
     repo_header: ui.Repo.Header.View,
     fork_header: ui.Fork.Header.View,
     search_box: SearchBox,
+    radio: Radio,
     search_header: SearchHeader,
     repo_issues_header: ui.Repo.Issues.Header,
     repo_patches_header: ui.Repo.Patches.Header,
@@ -939,6 +940,69 @@ pub const SearchBox = struct {
 
     pub fn getFocus(self: *SearchBox) *Focus {
         return self.text_input.getFocus();
+    }
+};
+
+// a row of bordered options posted as one form field. the selection is the
+// focused option, so a click selects on the web too.
+pub const Radio = struct {
+    box: wgt.Box(Widget),
+    values: []const []const u8,
+
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, name: []const u8, values: []const []const u8, initial: []const u8) !Radio {
+        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        errdefer box.deinit(allocator);
+        for (values) |value| {
+            var option = try wgt.TextBox.init(allocator, value, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer option.deinit(allocator);
+            option.getFocus().mode = .all;
+            option.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), ui.radio_prefix ++ "{s}={s}", .{ name, value }) };
+            if (std.mem.eql(u8, value, initial)) box.getFocus().child_id = option.getFocus().id;
+            try box.children.put(allocator, option.getFocus().id, .{ .widget = .{ .text_box = option }, .rect = null, .min_size = .{ .width = try xitui.width.displayWidth(value) + 2, .height = 3 } });
+        }
+        return .{ .box = box, .values = values };
+    }
+
+    pub fn deinit(self: *Radio, allocator: std.mem.Allocator) void {
+        self.box.deinit(allocator);
+    }
+
+    // the focused option's value
+    pub fn selected(self: *Radio) []const u8 {
+        const index = self.box.children.getIndex(self.box.getFocus().child_id orelse unreachable) orelse unreachable;
+        return self.values[index];
+    }
+
+    pub fn build(self: *Radio, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        self.clearGrid();
+        const selected_id = self.box.getFocus().child_id;
+        for (self.box.children.keys(), self.box.children.values()) |id, *child| {
+            child.widget.text_box.options.border_style = if (id == selected_id) .single else .hidden;
+        }
+        try self.box.build(allocator, constraint, root_focus);
+    }
+
+    pub fn input(self: *Radio, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        _ = allocator;
+        const ids = self.box.children.keys();
+        const index = self.box.children.getIndex(self.box.getFocus().child_id orelse return) orelse return;
+        switch (key) {
+            .arrow_left => if (index > 0) root_focus.setFocus(ids[index - 1]),
+            .arrow_right => if (index + 1 < ids.len) root_focus.setFocus(ids[index + 1]),
+            else => {},
+        }
+    }
+
+    pub fn clearGrid(self: *Radio) void {
+        self.box.clearGrid();
+    }
+
+    pub fn getGrid(self: Radio) ?Grid {
+        return self.box.getGrid();
+    }
+
+    pub fn getFocus(self: *Radio) *Focus {
+        return self.box.getFocus();
     }
 };
 

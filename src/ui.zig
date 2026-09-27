@@ -2554,6 +2554,9 @@ pub const file_input_prefix = "file:";
 // a submit button that overrides its enclosing form's action
 pub const submit_action_prefix = "submit:";
 
+// one option of a radio field, as `radio:<name>=<value>`
+pub const radio_prefix = "radio:";
+
 // the url an `ax:` link points at, or null for anything else. a host that
 // suppresses the anchor's own navigation needs this to follow the link.
 pub fn rawLink(root_focus: *Focus, focus_id: usize) ?[]const u8 {

@@ -127,6 +127,8 @@ function syncAttributes(current, desired) {
     if (current.tagName === "INPUT" && !preserveValue && current.type !== "file" && current.value !== desired.value) {
         current.value = desired.value;
     }
+    // the live checked state is what posts, so it follows the grid's selection
+    if (current.tagName === "INPUT" && current.type === "radio") current.checked = desired.checked;
 }
 
 function patchNode(current, desired) {
