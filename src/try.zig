@@ -253,9 +253,9 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // each user's repo holds the repos they own
-        const repos_path = try std.fs.path.join(arena.allocator(), &.{ server_path, "repos" });
+        const users_dir = try std.fs.path.join(arena.allocator(), &.{ server_path, "users" });
         for (user_ids, 0..) |user_id, user_index| {
-            const user_repo_path = try evt.userRepoPath(arena.allocator(), repos_path, &user_id);
+            const user_repo_path = try evt.userRepoPath(arena.allocator(), users_dir, &user_id);
             var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
             defer user_repo.deinit(io, allocator);
             var owned: std.ArrayList(evt.EventWithId) = .empty;
@@ -865,8 +865,7 @@ pub fn main(init: std.process.Init) !void {
             defer template_repo_dir.close(io);
 
             for (repo_event_ids, 0..) |id_bytes, repo_index| {
-                const repo_id = std.fmt.bytesToHex(id_bytes, .lower);
-                const repo_path = try std.fs.path.join(arena.allocator(), &.{ server_path, "repos", &repo_id });
+                const repo_path = try evt.repoPath(arena.allocator(), users_dir, &user_ids[repo_data[repo_index].user_index], &id_bytes);
                 {
                     var dest_dir = try cwd.createDirPathOpen(io, repo_path, .{});
                     defer dest_dir.close(io);
@@ -892,7 +891,7 @@ pub fn main(init: std.process.Init) !void {
 
     // let the native TUI's page builders open the on-disk repos for the file tree
     session.io = io;
-    session.repos_dir = try std.fs.path.join(session_arena.allocator(), &.{ server_path, "repos" });
+    session.users_dir = try std.fs.path.join(session_arena.allocator(), &.{ server_path, "users" });
 
     // leave a one-shot session for the first browser to hit the web ui, so it
     // starts logged in as admin
@@ -1059,7 +1058,8 @@ fn commitTree(
 fn seedPatchRevision(
     io: std.Io,
     allocator: std.mem.Allocator,
-    repos_path: []const u8,
+    users_dir: []const u8,
+    forker_id: *const [evt.event_id_size]u8,
     patch_id: *const [evt.event_id_size]u8,
     title: []const u8,
     author: evt.CommitAuthor,
@@ -1070,7 +1070,7 @@ fn seedPatchRevision(
     contents: []const []const u8,
 ) !void {
     const patch_hex = std.fmt.bytesToHex(patch_id.*, .lower);
-    const fork_path = try fork.forkPath(allocator, repos_path, &patch_hex);
+    const fork_path = try fork.forkPath(allocator, users_dir, forker_id, patch_id);
     defer allocator.free(fork_path);
     var fork_repo = try rp.Repo(.xit, .{}).open(io, allocator, .{ .path = fork_path, .require_repo_root = true });
     defer fork_repo.deinit(io, allocator);
@@ -1199,17 +1199,15 @@ fn seedPatches(
         },
     };
 
-    const repos_path = try std.fs.path.join(allocator, &.{ server_path, "repos" });
-    defer allocator.free(repos_path);
+    const users_dir = try std.fs.path.join(allocator, &.{ server_path, "users" });
+    defer allocator.free(users_dir);
     const patch_author = evt.CommitAuthor{ .name = "admin", .email = "admin@example.test" };
-    var user_repo = (try evt.openUserRepo(io, allocator, repos_path, user_id)) orelse return error.NotFound;
-    defer user_repo.deinit(io, allocator);
     var patch_ids: [patch_data.len][evt.event_id_size]u8 = undefined;
     for (patch_data, 0..) |patch, i| {
         const timestamp: u64 = @intCast(500 + i * 10);
         patch_ids[i] = evt.EventWithId.randomId(random);
         const patch_hex = std.fmt.bytesToHex(patch_ids[i], .lower);
-        const path = try fork.create(.{}, io, allocator, repos_path, &user_repo, .{
+        const path = try fork.create(.{}, io, allocator, users_dir, .{
             .id = patch_hex,
             .user_id = user_id.*,
             .repo_id = repo_id.*,
@@ -1255,12 +1253,10 @@ fn seedPatches(
                 }
                 break :blk .{ "patch.txt", contents.len };
             };
-            try seedPatchRevision(io, allocator, repos_path, &patch_ids[i], patch.title, patch_author, timestamp + 1, random, base_oid, file_path, contents[0..count]);
+            try seedPatchRevision(io, allocator, users_dir, user_id, &patch_ids[i], patch.title, patch_author, timestamp + 1, random, base_oid, file_path, contents[0..count]);
         }
         const status = patch.status orelse continue;
-        const fork_path = try fork.forkPath(allocator, repos_path, &patch_hex);
-        defer allocator.free(fork_path);
-        try pch.publish(.{}, io, allocator, admin_repo, &user_repo, target_repo, fork_path, .{
+        try pch.publish(.{}, io, allocator, users_dir, admin_repo, target_repo, .{
             .id = patch_hex,
             .user_id = user_id.*,
             .repo_id = repo_id.*,
@@ -1269,7 +1265,7 @@ fn seedPatches(
         });
 
         if (status == .merged) {
-            try pch.mergeAndRemoveFork(.{}, io, allocator, repos_path, target_repo, .{
+            try pch.mergeAndRemoveFork(.{}, io, allocator, users_dir, target_repo, .{
                 .id = patch_hex,
                 .revision = .source,
                 .author = patch_author,

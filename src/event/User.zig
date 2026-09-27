@@ -210,21 +210,6 @@ pub fn readIdByName(
     return user_id;
 }
 
-// a user's id via the email->user-id index
-pub fn readIdByEmail(
-    comptime DB: type,
-    comptime hash_kind: hash.HashKind,
-    haxy_moment: DB.HashMap(.read_only),
-    email: []const u8,
-) !?[evt.event_id_size]u8 {
-    const index_cursor = (try haxy_moment.getCursor(hash.hashInt(hash_kind, email_to_user_id_key))) orelse return null;
-    const index = try DB.HashMap(.read_only).init(index_cursor);
-    const user_id_cursor = (try index.getCursor(hash.hashInt(hash_kind, email))) orelse return null;
-    var user_id: [evt.event_id_size]u8 = undefined;
-    _ = try user_id_cursor.readBytes(&user_id);
-    return user_id;
-}
-
 // a user's record map via the event-id->user index
 fn userMap(
     comptime DB: type,

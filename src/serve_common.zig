@@ -15,21 +15,22 @@ pub const RepoPath = union(enum) {
 pub fn resolveRepoPath(
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     admin_repo_path: []const u8,
     requested: []const u8,
     create_if_missing: bool,
 ) !RepoPath {
     const owner_repo = evt.parseOwnerRepoPath(requested) orelse return .invalid;
-    const event_id_hex = (try evt.resolveOrCreateRepo(
+    const location = (try evt.resolveOrCreateRepo(
         io,
         allocator,
+        users_dir,
         admin_repo_path,
         owner_repo.owner,
         owner_repo.name,
         if (create_if_missing) .{} else null,
     )) orelse return .not_found;
-    return .{ .ok = try std.fs.path.join(allocator, &.{ repo_root_path, &event_id_hex }) };
+    return .{ .ok = try evt.repoPath(allocator, users_dir, &location.owner_id, &location.repo_id) };
 }
 
 // every connection task shares one error writer, so writing to it takes a

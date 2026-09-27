@@ -376,10 +376,9 @@ fn authorizedSource(session: *ui.Session, identity: []const u8) !?ui.RepoSource 
     const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
     const pair = ui.RoutablePage.RepoIdentity.parse(identity) orelse return error.NotFound;
     const io = session.io orelse return error.NotFound;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
-    const found = try evt.readRepoByOwnerAndName(io, session.page_arena.child_allocator, session.page_arena, moment, repos_dir, pair.owner, pair.name) orelse return error.NotFound;
-    const hex = std.fmt.bytesToHex(found.event_id, .lower);
-    return .{ .path = try std.fs.path.join(session.page_arena.allocator(), &.{ repos_dir, &hex }), .repo_kind = .xit };
+    const users_dir = session.users_dir orelse return error.NotFound;
+    const found = try evt.readRepoByOwnerAndName(io, session.page_arena.child_allocator, session.page_arena, moment, users_dir, pair.owner, pair.name) orelse return error.NotFound;
+    return .{ .path = try evt.repoPath(session.page_arena.allocator(), users_dir, found.repo.event.user_id, &found.event_id), .repo_kind = .xit };
 }
 
 pub const View = struct {

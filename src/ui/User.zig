@@ -62,11 +62,11 @@ pub fn init(
     const user = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, &user_id)) orelse return error.NotFound;
 
     const io = session.io orelse return error.NoMoment;
-    const repos_dir = session.repos_dir orelse return error.NoMoment;
+    const users_dir = session.users_dir orelse return error.NoMoment;
     const gpa = arena.child_allocator;
 
     // a user with no user repo or no events has empty lists
-    var user_repo_maybe = try evt.openUserRepo(io, gpa, repos_dir, &user_id);
+    var user_repo_maybe = try evt.openUserRepo(io, gpa, users_dir, &user_id);
     defer if (user_repo_maybe) |*user_repo| user_repo.deinit(io, gpa);
     const user_moment = if (user_repo_maybe) |*user_repo| try evt.userMoment(user_repo) else null;
 
@@ -119,12 +119,12 @@ pub fn init(
 
                 // the target lives in its owner's user repo
                 const owner_id = record.event.repo_user_id[0..evt.event_id_size];
-                const target_repo = (try evt.readRepoById(io, gpa, arena, repos_dir, owner_id, record.event.repo_id)) orelse continue;
+                const target_repo = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, record.event.repo_id)) orelse continue;
                 if (evt.Repo.roleOf(target_repo, session.userId()) == .none) continue;
                 const owner = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, owner_id)) orelse continue;
 
                 var title: []const u8 = "(unavailable)";
-                const path = try fork.forkPath(arena.allocator(), repos_dir, &fork_id_hex);
+                const path = try fork.forkPath(arena.allocator(), users_dir, &user_id, &fork_id);
                 if (rp.Repo(.xit, .{}).open(io, gpa, .{ .path = path, .require_repo_root = true })) |opened| {
                     var fork_repo = opened;
                     defer fork_repo.deinit(io, gpa);

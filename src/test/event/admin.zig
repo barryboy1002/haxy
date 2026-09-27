@@ -311,15 +311,14 @@ test "fork query and removal lifecycle" {
     const temp_path = try temp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    const repos_dir = try std.fs.path.join(allocator, &.{ temp_path, "repos" });
-    defer allocator.free(repos_dir);
+    const users_dir = try std.fs.path.join(allocator, &.{ temp_path, "users" });
+    defer allocator.free(users_dir);
     const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const user_id = evt.EventWithId.randomId(prng.random());
     const repo_id = evt.EventWithId.randomId(prng.random());
-    const repo_id_hex = std.fmt.bytesToHex(repo_id, .lower);
     const fork_id = evt.EventWithId.randomId(prng.random());
     const fork_id_hex = std.fmt.bytesToHex(fork_id, .lower);
 
@@ -337,7 +336,7 @@ test "fork query and removal lifecycle" {
             } },
         },
     });
-    const user_repo_path = try evt.userRepoPath(allocator, repos_dir, &user_id);
+    const user_repo_path = try evt.userRepoPath(allocator, users_dir, &user_id);
     defer allocator.free(user_repo_path);
     var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
     defer user_repo.deinit(io, allocator);
@@ -354,7 +353,7 @@ test "fork query and removal lifecycle" {
         },
     });
 
-    const target_path = try std.fs.path.join(allocator, &.{ repos_dir, &repo_id_hex });
+    const target_path = try evt.repoPath(allocator, users_dir, &user_id, &repo_id);
     defer allocator.free(target_path);
     var target = try rp.Repo(.xit, fork_repo_opts).init(io, allocator, .{ .path = target_path });
     defer target.deinit(io, allocator);
@@ -366,7 +365,7 @@ test "fork query and removal lifecycle" {
     try target.add(io, allocator, &.{"README"});
     _ = try target.commit(io, allocator, .{ .message = "initial" });
 
-    const draft_path = try fork.create(fork_repo_opts, io, allocator, repos_dir, &user_repo, .{
+    const draft_path = try fork.create(fork_repo_opts, io, allocator, users_dir, .{
         .target_branch = "master",
         .id = fork_id_hex,
         .user_id = user_id,
@@ -397,7 +396,7 @@ test "fork query and removal lifecycle" {
     try std.testing.expectEqualStrings("add a feature", draft.event.title);
     try std.testing.expectEqual(null, draft.event.revision);
 
-    try fork.remove(io, allocator, repos_dir, &user_repo, &fork_id_hex, author);
+    try fork.remove(io, allocator, users_dir, &user_id, &fork_id_hex, author);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.accessAbsolute(io, draft_path, .{}));
     _ = arena.reset(.retain_capacity);
     moment = try evt.currentMoment(evt.user_repo_opts, &user_repo);
@@ -406,7 +405,7 @@ test "fork query and removal lifecycle" {
     try std.testing.expectEqual(0, try activeForkCount(moment));
     try std.testing.expectEqual(0, try draftForkCount(moment, &repo_id));
 
-    try fork.remove(io, allocator, repos_dir, &user_repo, &fork_id_hex, author);
+    try fork.remove(io, allocator, users_dir, &user_id, &fork_id_hex, author);
 }
 
 fn draftForkCount(moment: evt.UserDB.HashMap(.read_only), repo_id: []const u8) !u64 {

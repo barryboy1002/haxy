@@ -2019,7 +2019,7 @@ pub fn authorizeUser(
     io: std.Io,
     moment: evt.AdminDB.HashMap(.read_only),
     arena: *std.heap.ArenaAllocator,
-    repos_dir: []const u8,
+    users_dir: []const u8,
     user_id: [evt.event_id_size]u8,
     identity: []const u8,
     min_role: evt.Repo.Role,
@@ -2027,7 +2027,7 @@ pub fn authorizeUser(
     const user = (try activeUser(moment, arena, user_id)) orelse return .login_required;
 
     const owner_repo = evt.parseOwnerRepoPath(identity) orelse return .repo_not_found;
-    const repo = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, moment, repos_dir, owner_repo.owner, owner_repo.name)) orelse return .repo_not_found;
+    const repo = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, moment, users_dir, owner_repo.owner, owner_repo.name)) orelse return .repo_not_found;
     const role = evt.Repo.roleOf(repo.repo, user_id);
     // a repo the user can't read doesn't exist to them
     if (role == .none) return .repo_not_found;
@@ -2091,7 +2091,7 @@ pub const Session = struct {
     // rebuilds pages from the serialized snapshot rather than from disk.
     io: ?std.Io = null,
     admin_repo: ?*rp.Repo(.xit, evt.admin_repo_opts) = null,
-    repos_dir: ?[]const u8 = null,
+    users_dir: ?[]const u8 = null,
     // the single on-disk repo this session views, when running in local mode
     // (haxy invoked with no arguments inside a repo). null on the server paths,
     // which resolve repos from the admin db instead.
@@ -2283,9 +2283,9 @@ pub const Session = struct {
         // the session's moment predates this input, so read the roles afresh
         const admin_repo = self.admin_repo orelse return null;
         const io = self.io orelse return null;
-        const repos_dir = self.repos_dir orelse return null;
+        const users_dir = self.users_dir orelse return null;
         const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-        return switch (try authorizeUser(io, moment, self.page_arena, repos_dir, user_id, identity, min_role)) {
+        return switch (try authorizeUser(io, moment, self.page_arena, users_dir, user_id, identity, min_role)) {
             .actor => |actor| actor,
             .login_required, .repo_not_found, .forbidden => null,
         };

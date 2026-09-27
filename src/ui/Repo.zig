@@ -247,8 +247,8 @@ pub fn init(
     } else {
         const haxy_moment = session.haxy_moment orelse return error.NoMoment;
         const io = session.io orelse return error.NoMoment;
-        const repos_dir = session.repos_dir orelse return error.NoMoment;
-        const found = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, haxy_moment, repos_dir, repo_identity.owner, repo_identity.name)) orelse return error.NotFound;
+        const users_dir = session.users_dir orelse return error.NoMoment;
+        const found = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, haxy_moment, users_dir, repo_identity.owner, repo_identity.name)) orelse return error.NotFound;
         // a repo the session can't read doesn't exist to it
         if (evt.Repo.roleOf(found.repo, session.userId()) == .none) return error.NotFound;
         repo = found.repo;
@@ -259,10 +259,9 @@ pub fn init(
         const owner = (try evt.User.readById(DB, hash_kind, haxy_moment, arena, repo.event.user_id)) orelse return error.NotFound;
         owner_name = owner.event.name;
 
-        // the repo's working copy lives at <repos_dir>/<hex event id>.
-        const hex = std.fmt.bytesToHex(found.event_id, .lower);
+        // the repo's working copy lives in its owner's dir.
         source = .{
-            .path = try std.fs.path.join(arena.allocator(), &.{ repos_dir, &hex }),
+            .path = try evt.repoPath(arena.allocator(), users_dir, repo.event.user_id, &found.event_id),
             .repo_kind = .xit,
         };
     }

@@ -9,7 +9,7 @@ pub fn runListener(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     admin_repo_path: []const u8,
     net_server: *std.Io.net.Server,
     tasks: *std.Io.Group,
@@ -18,7 +18,7 @@ pub fn runListener(
     const Context = struct {
         io: std.Io,
         allocator: std.mem.Allocator,
-        repo_root_path: []const u8,
+        users_dir: []const u8,
         admin_repo_path: []const u8,
         err: *std.Io.Writer,
     };
@@ -26,7 +26,7 @@ pub fn runListener(
     const handle = struct {
         fn h(ctx: Context, stream: std.Io.net.Stream) void {
             defer stream.close(ctx.io);
-            handleConnection(repo_kind, any_repo_opts, ctx.io, ctx.allocator, ctx.repo_root_path, ctx.admin_repo_path, stream, ctx.err) catch |request_err| {
+            handleConnection(repo_kind, any_repo_opts, ctx.io, ctx.allocator, ctx.users_dir, ctx.admin_repo_path, stream, ctx.err) catch |request_err| {
                 serve_common.logError(ctx.io, ctx.err, "connection failed: {s}\n", .{@errorName(request_err)});
             };
         }
@@ -35,7 +35,7 @@ pub fn runListener(
     serve_common.runListener(io, net_server, tasks, err, "http", Context{
         .io = io,
         .allocator = allocator,
-        .repo_root_path = repo_root_path,
+        .users_dir = users_dir,
         .admin_repo_path = admin_repo_path,
         .err = err,
     }, handle);
@@ -46,7 +46,7 @@ fn handleConnection(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     admin_repo_path: []const u8,
     stream: std.Io.net.Stream,
     err: *std.Io.Writer,
@@ -64,7 +64,7 @@ fn handleConnection(
             else => |e| return e,
         };
 
-        handleGitRequest(repo_kind, any_repo_opts, io, allocator, repo_root_path, admin_repo_path, &http_server, &request) catch |request_err| {
+        handleGitRequest(repo_kind, any_repo_opts, io, allocator, users_dir, admin_repo_path, &http_server, &request) catch |request_err| {
             serve_common.logError(io, err, "request failed: {s}\n", .{@errorName(request_err)});
             if (http_server.reader.state == .received_head) {
                 http_server.reader.state = .ready;
@@ -80,7 +80,7 @@ fn handleGitRequest(
     comptime any_repo_opts: rp.AnyRepoOpts(repo_kind),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     admin_repo_path: []const u8,
     http_server: *std.http.Server,
     request: *std.http.Server.Request,
@@ -133,15 +133,14 @@ fn handleGitRequest(
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-        const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, repo_root_path, owner_repo.owner, owner_repo.name)) orelse
+        const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, users_dir, owner_repo.owner, owner_repo.name)) orelse
             return error.RepoNotFound;
         if (repo.repo.event.read_access == .private) {
             if (http_server.reader.state == .received_head) http_server.reader.state = .ready;
             try writeSimpleResponse(http_server, 403, "Forbidden", "text/plain", "private repos cannot be fetched over HTTP");
             return;
         }
-        const repo_id = std.fmt.bytesToHex(repo.event_id, .lower);
-        break :blk try std.fs.path.join(allocator, &.{ repo_root_path, &repo_id });
+        break :blk try evt.repoPath(allocator, users_dir, repo.repo.event.user_id, &repo.event_id);
     };
     defer allocator.free(repo_path);
 

@@ -62,7 +62,7 @@ test "repo undo visibility and fresh owner authorization" {
     const aa = arena.allocator();
     const base = try temp.dir.realPathFileAlloc(io, ".", aa);
     const admin_path = try std.fs.path.join(aa, &.{ base, "admin" });
-    const repos_dir = try std.fs.path.join(aa, &.{ base, "repos" });
+    const users_dir = try std.fs.path.join(aa, &.{ base, "users" });
     var admin = try xit.repo.Repo(.xit, evt.admin_repo_opts).init(io, allocator, .{ .path = admin_path });
     defer admin.deinit(io, allocator);
     const owner = [_]u8{1} ** evt.event_id_size;
@@ -78,11 +78,10 @@ test "repo undo visibility and fresh owner authorization" {
         .{ .id = std.fmt.bytesToHex(reader, .lower), .author = author, .event = .{ .user = .{ .name = "reader", .email = "reader@example.test", .password_hash = "unused" } } },
     };
     try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &seed);
-    var user_repo = try evt.initUserRepo(io, allocator, try evt.userRepoPath(aa, repos_dir, &owner));
+    var user_repo = try evt.initUserRepo(io, allocator, try evt.userRepoPath(aa, users_dir, &owner));
     defer user_repo.deinit(io, allocator);
     try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{ .id = std.fmt.bytesToHex(repo_id, .lower), .author = author, .event = .{ .repo = repo_event } }});
-    const repo_hex = std.fmt.bytesToHex(repo_id, .lower);
-    const path = try std.fs.path.join(aa, &.{ repos_dir, &repo_hex });
+    const path = try evt.repoPath(aa, users_dir, &owner, &repo_id);
     {
         var repo = try xit.repo.Repo(.xit, .{}).init(io, allocator, .{ .path = path });
         defer repo.deinit(io, allocator);
@@ -92,7 +91,7 @@ test "repo undo visibility and fresh owner authorization" {
     for ([_]?[]const u8{ &owner, &writer, &reader, null }, [_]bool{ true, true, false, false }) |user, allowed| {
         var session = try ui.Session.init(&arena, &admin, .{ .user_id = user });
         session.io = io;
-        session.repos_dir = repos_dir;
+        session.users_dir = users_dir;
         const files = ui.RoutablePage.repoFilesRoute("alice/demo", null, "", "", 0).?;
         session.data.current_page = files;
         const page = try ui.Repo.init(&arena, &session, files);
@@ -116,7 +115,7 @@ test "repo undo visibility and fresh owner authorization" {
     }
     var session = try ui.Session.init(&arena, &admin, .{ .user_id = &owner });
     session.io = io;
-    session.repos_dir = repos_dir;
+    session.users_dir = users_dir;
     try Undo.perform(allocator, &session, ui.RoutablePage.repoUndoRoute("alice/demo", 2).?.repo_undo);
     try std.testing.expectEqual(null, session.next_page.?.repo_undo.index);
     {
@@ -140,7 +139,7 @@ test "repo undo visibility and fresh owner authorization" {
     try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{ .id = std.fmt.bytesToHex(repo_id, .lower), .author = author, .event = .{ .repo = repo_event } }});
     var anonymous = try ui.Session.init(&arena, &admin, .{});
     anonymous.io = io;
-    anonymous.repos_dir = repos_dir;
+    anonymous.users_dir = users_dir;
     try std.testing.expectError(error.NotFound, ui.Repo.init(&arena, &anonymous, ui.RoutablePage.repoUndoRoute("alice/demo", null).?));
 }
 

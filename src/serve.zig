@@ -61,12 +61,12 @@ pub fn run(
     const data_dir = try std.Io.Dir.cwd().createDirPathOpen(io, data_dir_path, .{});
     defer data_dir.close(io);
 
-    // create the repos dir
+    // create the users dir
 
-    const repo_root_path = try std.fs.path.resolve(allocator, &.{ data_dir_path, "repos" });
-    defer allocator.free(repo_root_path);
+    const users_dir = try std.fs.path.resolve(allocator, &.{ data_dir_path, "users" });
+    defer allocator.free(users_dir);
 
-    try std.Io.Dir.cwd().createDirPath(io, repo_root_path);
+    try std.Io.Dir.cwd().createDirPath(io, users_dir);
 
     // the admin repo path is where the user/repo metadata events live
 
@@ -114,7 +114,7 @@ pub fn run(
             .host_key = try serve_ssh_protocol.HostKey.loadOrGenerate(io, allocator, data_dir_path),
             .session_handler = .{
                 .admin_repo_path = admin_repo_path,
-                .repo_root_path = repo_root_path,
+                .users_dir = users_dir,
                 .wui_port = wui_server.socket.address.getPort(),
                 .git_http_port = git_http_port,
                 .git_ssh_port = ssh_port,
@@ -135,9 +135,9 @@ pub fn run(
     const git_ssh_port: ?u16 = if (ssh_maybe) |*ssh| ssh.listener.port() else null;
 
     if (http_maybe) |*http| {
-        try err.print("serving HTTP on {s}:{d}, repo root {s}\n", .{ http.address.host, http.port(), repo_root_path });
+        try err.print("serving HTTP on {s}:{d}, users dir {s}\n", .{ http.address.host, http.port(), users_dir });
         try err.flush();
-        serve_http.runListener(repo_kind, any_repo_opts, io, allocator, repo_root_path, admin_repo_path, &http.server, &tasks, err);
+        serve_http.runListener(repo_kind, any_repo_opts, io, allocator, users_dir, admin_repo_path, &http.server, &tasks, err);
     }
 
     if (ssh_maybe) |*ssh| {
@@ -151,7 +151,7 @@ pub fn run(
 
     runWebListener(io, allocator, &wui_server, &tasks, .{ .server = .{
         .admin_repo_path = admin_repo_path,
-        .repo_root_path = repo_root_path,
+        .users_dir = users_dir,
         .session_store = session_store,
         .git_http_port = git_http_port,
         .git_ssh_port = git_ssh_port,

@@ -28,9 +28,24 @@ pub fn parseRoute(route_path: []const u8) ?Route {
     return .{ .identity = identity, .id = std.fmt.bytesToHex(id_bytes, .lower) };
 }
 
-pub fn forkPath(allocator: std.mem.Allocator, repo_root_path: []const u8, id: []const u8) ![]u8 {
-    _ = try evt.parseEventId(id);
-    return try std.fs.path.join(allocator, &.{ std.fs.path.dirname(repo_root_path) orelse ".", "forks", id });
+// a fork's path, inside its forker's dir
+pub fn forkPath(allocator: std.mem.Allocator, users_dir: []const u8, forker_id: *const [evt.event_id_size]u8, fork_id: *const [evt.event_id_size]u8) ![]u8 {
+    return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(forker_id.*, .lower), "forks", &std.fmt.bytesToHex(fork_id.*, .lower) });
+}
+
+const forker_section = "haxy";
+const forker_prefix = "fork-";
+
+// the target repo config name recording who forked a published patch
+pub fn forkerConfigName(patch_id: *const [evt.event_id_size]u8) [forker_section.len + 1 + forker_prefix.len + evt.event_id_size * 2]u8 {
+    return (forker_section ++ "." ++ forker_prefix).* ++ std.fmt.bytesToHex(patch_id.*, .lower);
+}
+
+// the forker of a published patch from the target repo's config, or null when it has no fork
+pub fn readForkerId(sections: *const xit.config.Sections, patch_id: *const [evt.event_id_size]u8) !?[evt.event_id_size]u8 {
+    const section = sections.get(forker_section) orelse return null;
+    const name = forkerConfigName(patch_id);
+    return try evt.parseEventId(section.get(name[forker_section.len + 1 ..]) orelse return null);
 }
 
 pub const CreateInput = struct {
@@ -50,8 +65,7 @@ pub fn create(
     comptime repo_opts: rp.RepoOpts(.xit),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
-    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
+    users_dir: []const u8,
     input: CreateInput,
 ) ![]u8 {
     if (!evt.Patch.fieldsValid(input.title, input.labels)) return error.InvalidPatch;
@@ -59,21 +73,22 @@ pub fn create(
 
     // get the fork id and path
     const fork_id = try evt.parseEventId(&input.id);
-    const fork_path = try forkPath(allocator, repo_root_path, &input.id);
+    const fork_path = try forkPath(allocator, users_dir, &input.user_id, &fork_id);
     errdefer allocator.free(fork_path);
 
     // make sure the fork id doesn't already exist
+    var user_repo = (try evt.openUserRepo(io, allocator, users_dir, &input.user_id)) orelse return error.InvalidPatchDraft;
+    defer user_repo.deinit(io, allocator);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const existing = if (try evt.userMoment(user_repo)) |moment|
+    const existing = if (try evt.userMoment(&user_repo)) |moment|
         try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, moment, &arena, &fork_id)
     else
         null;
     if (existing != null) return error.InvalidPatchDraft;
 
     // get the target repo
-    const target_id = std.fmt.bytesToHex(input.repo_id, .lower);
-    const target_path = try std.fs.path.join(allocator, &.{ repo_root_path, &target_id });
+    const target_path = try evt.repoPath(allocator, users_dir, &input.repo_user_id, &input.repo_id);
     defer allocator.free(target_path);
     var target_repo = try rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = target_path, .require_repo_root = true });
     defer target_repo.deinit(io, allocator);
@@ -122,7 +137,6 @@ pub fn create(
             core: *rp.Repo(.xit, repo_opts).Core,
             io: std.Io,
             allocator: std.mem.Allocator,
-            forker_id: [evt.event_id_size * 2]u8,
 
             pub fn run(ctx: @This(), cursor: *DB.Cursor(.read_write)) !void {
                 var moment = try DB.HashMap(.read_write).init(cursor.*);
@@ -157,7 +171,18 @@ pub fn create(
                 var config = try xit.config.Config(.xit, repo_opts).init(state.readOnly(), ctx.io, ctx.allocator);
                 defer config.deinit();
                 try config.add(state, ctx.io, .{ .name = "receive.denydeletes", .value = "true" });
-                try config.add(state, ctx.io, .{ .name = "haxy.forker", .value = &ctx.forker_id });
+
+                // the copied db carries the target's forker entries
+                if (config.local_sections.get(forker_section)) |section| {
+                    var names_arena = std.heap.ArenaAllocator.init(ctx.allocator);
+                    defer names_arena.deinit();
+                    const na = names_arena.allocator();
+                    var names: std.ArrayList([]const u8) = .empty;
+                    for (section.keys()) |key| {
+                        if (std.mem.startsWith(u8, key, forker_prefix)) try names.append(na, try std.fmt.allocPrint(na, forker_section ++ ".{s}", .{key}));
+                    }
+                    for (names.items) |name| try config.remove(state, ctx.io, .{ .name = name });
+                }
 
                 // the copied db carries the target's file index, so the patch
                 // branch's entry starts from one of those rather than walking
@@ -174,7 +199,7 @@ pub fn create(
         const history = try DB.ArrayList(.read_write).init(fork_repo.core.db.rootCursor());
         try history.appendContext(
             .{ .slot = try history.getSlot(-1) },
-            Ctx{ .core = &fork_repo.core, .io = io, .allocator = allocator, .forker_id = std.fmt.bytesToHex(input.user_id, .lower) },
+            Ctx{ .core = &fork_repo.core, .io = io, .allocator = allocator },
         );
     }
 
@@ -192,7 +217,7 @@ pub fn create(
     }});
 
     // create the fork event
-    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, evt.events_ref, &.{.{
+    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{
         .id = input.id,
         .timestamp = input.timestamp,
         .author = input.author,
@@ -209,32 +234,21 @@ pub fn create(
 pub fn remove(
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
-    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
+    users_dir: []const u8,
+    forker_id: *const [evt.event_id_size]u8,
     id: *const [evt.event_id_size * 2]u8,
     author: evt.CommitAuthor,
 ) !void {
     const fork_id = try evt.parseEventId(id);
+    var user_repo = (try evt.openUserRepo(io, allocator, users_dir, forker_id)) orelse return error.InvalidPatchDraft;
+    defer user_repo.deinit(io, allocator);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const moment = (try evt.userMoment(user_repo)) orelse return error.InvalidPatchDraft;
+    const moment = (try evt.userMoment(&user_repo)) orelse return error.InvalidPatchDraft;
     const record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, moment, &arena, &fork_id)) orelse return error.InvalidPatchDraft;
-    if (!record.removed) try evt.remove(.server, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, &fork_id, .fork, author);
+    if (!record.removed) try evt.remove(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, &fork_id, .fork, author);
 
-    const path = try forkPath(allocator, repo_root_path, id);
+    const path = try forkPath(allocator, users_dir, forker_id, &fork_id);
     defer allocator.free(path);
     try std.Io.Dir.cwd().deleteTree(io, path);
-}
-
-// the id of the user who created the fork at `fork_path`, or null when it's gone
-pub fn readForkerId(io: std.Io, allocator: std.mem.Allocator, fork_path: []const u8) !?[evt.event_id_size]u8 {
-    var fork_repo = rp.Repo(.xit, .{}).open(io, allocator, .{ .path = fork_path, .require_repo_root = true }) catch |err| switch (err) {
-        error.RepoNotFound, error.FileNotFound => return null,
-        else => |e| return e,
-    };
-    defer fork_repo.deinit(io, allocator);
-    var config = try fork_repo.listConfig(io, allocator);
-    defer config.deinit();
-    const section = config.sections.get("haxy") orelse return error.InvalidPatchDraft;
-    return try evt.parseEventId(section.get("forker") orelse return error.InvalidPatchDraft);
 }

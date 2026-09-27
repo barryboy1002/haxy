@@ -41,7 +41,7 @@ pub const Host = union(evt.HostKind) {
     local: ui.RepoSource,
     server: struct {
         admin_repo_path: []const u8,
-        repo_root_path: []const u8,
+        users_dir: []const u8,
         session_store: SessionStore,
         git_http_port: ?u16,
         git_ssh_port: ?u16,
@@ -64,7 +64,7 @@ fn requestRepoSource(io: std.Io, allocator: std.mem.Allocator, host: Host, repo_
         .server => |server| blk: {
             const repo_prefix = "/repo/";
             if (!std.mem.startsWith(u8, repo_base, repo_prefix)) break :blk null;
-            const path = switch (try serve_common.resolveRepoPath(io, allocator, server.repo_root_path, server.admin_repo_path, repo_base[repo_prefix.len..], false)) {
+            const path = switch (try serve_common.resolveRepoPath(io, allocator, server.users_dir, server.admin_repo_path, repo_base[repo_prefix.len..], false)) {
                 .ok => |value| value,
                 .invalid, .not_found => break :blk null,
             };
@@ -522,7 +522,7 @@ fn authorizeWrite(
         var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
         defer admin_repo.deinit(io, allocator);
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin_repo);
-        break :blk try ui.authorizeUser(io, moment, arena, server.repo_root_path, user_id, repo_base[repo_prefix.len..], min_role);
+        break :blk try ui.authorizeUser(io, moment, arena, server.users_dir, user_id, repo_base[repo_prefix.len..], min_role);
     };
     switch (authorization) {
         .actor => |actor| return actor,
@@ -559,7 +559,7 @@ fn mayRead(
         break :blk if (try ui.activeUser(moment, &arena, id) != null) id else null;
     };
     const owner_repo = evt.parseOwnerRepoPath(repo_base[repo_prefix.len..]) orelse return false;
-    const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, server.repo_root_path, owner_repo.owner, owner_repo.name)) orelse return false;
+    const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, server.users_dir, owner_repo.owner, owner_repo.name)) orelse return false;
     return evt.Repo.roleOf(repo.repo, user_id) != .none;
 }
 
@@ -708,9 +708,7 @@ fn handleThreadNew(
         }
         const repo_id = evt.parseEventId(std.fs.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
         const repo_user_id = actor.repo_user_id orelse unreachable;
-        var user_repo = (try evt.openUserRepo(io, allocator, server.repo_root_path, &user_id)) orelse return respondRemoveNotFound(request);
-        defer user_repo.deinit(io, allocator);
-        const fork_path = try fork.create(.{}, io, allocator, server.repo_root_path, &user_repo, .{
+        const fork_path = try fork.create(.{}, io, allocator, server.users_dir, .{
             .id = event_id_hex,
             .user_id = user_id,
             .repo_id = repo_id,
@@ -816,11 +814,7 @@ fn handlePatchPublish(
     var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
     defer admin_repo.deinit(io, allocator);
     const id = std.fmt.bytesToHex(parts.thread_id, .lower);
-    const fork_path = try fork.forkPath(allocator, server.repo_root_path, &id);
-    defer allocator.free(fork_path);
-    var user_repo = (try evt.openUserRepo(io, allocator, server.repo_root_path, &user_id)) orelse return respondRemoveNotFound(request);
-    defer user_repo.deinit(io, allocator);
-    try pch.publish(.{}, io, allocator, &admin_repo, &user_repo, &target_repo, fork_path, .{
+    try pch.publish(.{}, io, allocator, server.users_dir, &admin_repo, &target_repo, .{
         .id = id,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -857,7 +851,7 @@ fn handlePatchMerge(
     defer target_repo.deinit(io, allocator);
 
     const id = std.fmt.bytesToHex(parts.thread_id, .lower);
-    pch.mergeAndRemoveFork(.{}, io, allocator, server.repo_root_path, &target_repo, .{
+    pch.mergeAndRemoveFork(.{}, io, allocator, server.users_dir, &target_repo, .{
         .id = id,
         .revision = revision,
         .author = author,
@@ -1334,13 +1328,11 @@ fn handleRemove(
             const user_id = actor.user_id orelse return respondLoginRequired(request);
 
             // a draft lives in its author's user repo
-            if (try evt.readForkById(io, allocator, &author_arena, server.repo_root_path, &user_id, &parts.id)) |fork_record| {
+            if (try evt.readForkById(io, allocator, &author_arena, server.users_dir, &user_id, &parts.id)) |fork_record| {
                 const repo_id = evt.parseEventId(std.fs.path.basename(source.path)) catch return respondRemoveNotFound(request);
                 if (!fork_record.removed and fork_record.event.stage == .draft and std.mem.eql(u8, fork_record.event.repo_id, &repo_id)) {
                     const id = std.fmt.bytesToHex(parts.id, .lower);
-                    var user_repo = (try evt.openUserRepo(io, allocator, server.repo_root_path, &user_id)) orelse unreachable;
-                    defer user_repo.deinit(io, allocator);
-                    try fork.remove(io, allocator, server.repo_root_path, &user_repo, &id, author);
+                    try fork.remove(io, allocator, server.users_dir, &user_id, &id, author);
 
                     const location = try std.fmt.allocPrint(allocator, "{s}/patches/drafts", .{parts.repo_base});
                     defer allocator.free(location);
@@ -1536,11 +1528,7 @@ fn handleThreadEdit(
         var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
         defer admin_repo.deinit(io, allocator);
         const id = std.fmt.bytesToHex(parts.thread_id, .lower);
-        const fork_path = try fork.forkPath(allocator, server.repo_root_path, &id);
-        defer allocator.free(fork_path);
-        var user_repo = (try evt.openUserRepo(io, allocator, server.repo_root_path, &user_id)) orelse return respondRemoveNotFound(request);
-        defer user_repo.deinit(io, allocator);
-        if (try pch.editDraft(.{}, io, allocator, &admin_repo, &user_repo, fork_path, .{
+        if (try pch.editDraft(.{}, io, allocator, server.users_dir, &admin_repo, .{
             .id = id,
             .user_id = user_id,
             .repo_id = repo_id,
@@ -1814,9 +1802,9 @@ fn renderIndexHtml(
                 if (session.data.user_id == null) server.session_store.remove(token);
             }
             // give the page builders filesystem access to the on-disk repos (a
-            // sibling "repos" dir next to the admin repo) so the Repo page can
+            // sibling "users" dir next to the admin repo) so the Repo page can
             // read its files.
-            session.repos_dir = server.repo_root_path;
+            session.users_dir = server.users_dir;
             break :blk session;
         },
         .local => |local| ui.Session{

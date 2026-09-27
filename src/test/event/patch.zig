@@ -813,8 +813,8 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     const temp_path = try temp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    const repos_dir = try std.fs.path.join(allocator, &.{ temp_path, "repos" });
-    defer allocator.free(repos_dir);
+    const users_dir = try std.fs.path.join(allocator, &.{ temp_path, "users" });
+    defer allocator.free(users_dir);
     const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
     const upstream_path = try std.fs.path.join(allocator, &.{ temp_path, "upstream" });
@@ -826,7 +826,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     const user_id = evt.EventWithId.randomId(prng.random());
     const repo_id = evt.EventWithId.randomId(prng.random());
     const repo_id_hex = std.fmt.bytesToHex(repo_id, .lower);
-    const target_path = try std.fs.path.join(allocator, &.{ repos_dir, &repo_id_hex });
+    const target_path = try evt.repoPath(allocator, users_dir, &user_id, &repo_id);
     defer allocator.free(target_path);
 
     var admin = try rp.Repo(.xit, evt.admin_repo_opts).init(io, allocator, .{ .path = admin_path });
@@ -843,7 +843,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
             } },
         },
     });
-    const user_repo_path = try evt.userRepoPath(allocator, repos_dir, &user_id);
+    const user_repo_path = try evt.userRepoPath(allocator, users_dir, &user_id);
     defer allocator.free(user_repo_path);
     var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
     defer user_repo.deinit(io, allocator);
@@ -882,7 +882,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     const patch_id = evt.EventWithId.randomId(prng.random());
     const patch_id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    const draft_path = try fork.create(repo_opts, io, allocator, repos_dir, &user_repo, .{
+    const draft_path = try fork.create(repo_opts, io, allocator, users_dir, .{
         .target_branch = "master",
         .id = patch_id_hex,
         .user_id = user_id,
@@ -968,7 +968,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     const unpushed_id = evt.EventWithId.randomId(prng.random());
     const unpushed_id_hex = std.fmt.bytesToHex(unpushed_id, .lower);
-    const unpushed_path = try fork.create(repo_opts, io, allocator, repos_dir, &user_repo, .{
+    const unpushed_path = try fork.create(repo_opts, io, allocator, users_dir, .{
         .id = unpushed_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -981,7 +981,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
         .timestamp = 3,
     });
     defer allocator.free(unpushed_path);
-    try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, unpushed_path, .{
+    try pch.publish(repo_opts, io, allocator, users_dir, &admin, &target, .{
         .id = unpushed_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1006,7 +1006,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     // edit the patch metadata in the fork
     //
 
-    try std.testing.expect(try pch.editDraft(repo_opts, io, allocator, &admin, &user_repo, draft_path, .{
+    try std.testing.expect(try pch.editDraft(repo_opts, io, allocator, users_dir, &admin, .{
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1023,7 +1023,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     //
 
     const before_publish = try target.core.db.rootCursor().count();
-    try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, draft_path, .{
+    try pch.publish(repo_opts, io, allocator, users_dir, &admin, &target, .{
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1031,7 +1031,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
         .timestamp = 5,
     });
     try std.testing.expectEqual(before_publish + 1, try target.core.db.rootCursor().count());
-    try pch.publish(repo_opts, io, allocator, &admin, &user_repo, &target, draft_path, .{
+    try pch.publish(repo_opts, io, allocator, users_dir, &admin, &target, .{
         .id = patch_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -1083,7 +1083,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     //
 
     try evt.Patch.update(.server, .xit, repo_opts, io, allocator, &target, &patch_id, .{ .status = .closed }, author);
-    try std.testing.expectError(error.PatchClosed, pch.merge(repo_opts, io, allocator, repos_dir, &target, .{
+    try std.testing.expectError(error.PatchClosed, pch.merge(repo_opts, io, allocator, users_dir, &target, .{
         .id = patch_id_hex,
         .revision = merge_revision,
         .author = author,
@@ -1093,14 +1093,14 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     // run the cache scenario once; both lifecycle runs still perform a merge
     if (merge_revision == .source) {
-        try testMergeability(&target, io, allocator, repos_dir, &patch_id, &base_oid, &source_oid);
+        try testMergeability(&target, io, allocator, users_dir, &user_id, &patch_id, &base_oid, &source_oid);
     }
 
     const selected_oid = switch (merge_revision) {
         .squash => squash_oid,
         .source => source_oid,
     };
-    try pch.mergeAndRemoveFork(repo_opts, io, allocator, repos_dir, &target, .{
+    try pch.mergeAndRemoveFork(repo_opts, io, allocator, users_dir, &target, .{
         .id = patch_id_hex,
         .revision = merge_revision,
         .author = author,
@@ -1183,7 +1183,8 @@ fn testMergeability(
     target: *Repo,
     io: std.Io,
     allocator: std.mem.Allocator,
-    repos_dir: []const u8,
+    users_dir: []const u8,
+    forker_id: *const [evt.event_id_size]u8,
     id: *const [evt.event_id_size]u8,
     base: *const [hash.hexLen(repo_opts.hash)]u8,
     source: *const [hash.hexLen(repo_opts.hash)]u8,
@@ -1219,8 +1220,8 @@ fn testMergeability(
     var squash_input = input;
     squash_input.revision = .squash;
     try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
-    try std.testing.expectError(error.MergeCheckUnavailable, pch.merge(repo_opts, io, allocator, repos_dir, target, input));
-    try std.testing.expectError(error.MergeCheckUnavailable, pch.merge(repo_opts, io, allocator, repos_dir, target, squash_input));
+    try std.testing.expectError(error.MergeCheckUnavailable, pch.merge(repo_opts, io, allocator, users_dir, target, input));
+    try std.testing.expectError(error.MergeCheckUnavailable, pch.merge(repo_opts, io, allocator, users_dir, target, squash_input));
 
     // local edits and server comments leave checks alone
     var edit = evt.Patch.Update{ .fields = .{
@@ -1242,8 +1243,8 @@ fn testMergeability(
     const events_before = try target.readRef(io, evt.events_ref);
     try std.testing.expectEqualDeep(pch.Mergeability{ .source = .conflict, .squash = .conflict }, try readMergeability(target, io, allocator, id, patch));
     try expectMergeabilityShortBytes(try target.core.latestMoment(), id);
-    try std.testing.expectError(error.MergeConflict, pch.merge(repo_opts, io, allocator, repos_dir, target, input));
-    try std.testing.expectError(error.MergeConflict, pch.merge(repo_opts, io, allocator, repos_dir, target, squash_input));
+    try std.testing.expectError(error.MergeConflict, pch.merge(repo_opts, io, allocator, users_dir, target, input));
+    try std.testing.expectError(error.MergeConflict, pch.merge(repo_opts, io, allocator, users_dir, target, squash_input));
     try std.testing.expectEqual(events_before, try target.readRef(io, evt.events_ref));
     try std.testing.expectEqual(conflicting_target, (try target.readRef(io, .{ .kind = .head, .name = "master" })).?);
     try std.testing.expectEqual(null, try target.readRef(io, .{ .kind = .none, .name = "MERGE_HEAD" }));
@@ -1266,7 +1267,7 @@ fn testMergeability(
     try std.testing.expectEqualDeep(clean, try readMergeability(target, io, allocator, id, patch));
 
     // a missing fork disables merging without changing the accepted events
-    const draft_path = try fork.forkPath(allocator, repos_dir, &std.fmt.bytesToHex(id.*, .lower));
+    const draft_path = try fork.forkPath(allocator, users_dir, forker_id, id);
     defer allocator.free(draft_path);
     const away_path = try std.fmt.allocPrint(allocator, "{s}.away", .{draft_path});
     defer allocator.free(away_path);
@@ -1277,7 +1278,7 @@ fn testMergeability(
             const log_level = std.testing.log_level;
             std.testing.log_level = .err;
             defer std.testing.log_level = log_level;
-            try std.testing.expectError(error.PatchDataUnavailable, pch.merge(repo_opts, io, allocator, repos_dir, target, input));
+            try std.testing.expectError(error.PatchDataUnavailable, pch.merge(repo_opts, io, allocator, users_dir, target, input));
         }
         try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
         try std.testing.expectEqual(events_before, try target.readRef(io, evt.events_ref));

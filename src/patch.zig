@@ -86,7 +86,7 @@ pub fn writeBranchPatch(
             // a branch patch has no fork, so this only names the patch to check
             var checks: MergeCheckInputs(repo_opts) = .{};
             defer checks.deinit(io, allocator);
-            if (host_kind == .server) try checks.add(io, allocator, repo.core.work_path, try evt.parseEventId(&id), patch);
+            if (host_kind == .server) try checks.add(io, allocator, &repo.core, try evt.parseEventId(&id), patch);
 
             try repo.core.db_file.lock(io, .exclusive);
             defer repo.core.db_file.unlock(io);
@@ -278,7 +278,7 @@ pub fn refreshBranchesInTransaction(
         // a branch patch opens no fork, so its checks need no lock of their own
         var checks: MergeCheckInputs(repo_opts) = .{};
         defer checks.deinit(io, allocator);
-        if (host_kind == .server) try checks.add(io, allocator, state.core.work_path, id, record.event);
+        if (host_kind == .server) try checks.add(io, allocator, state.core, id, record.event);
 
         const author = evt.CommitAuthor{ .name = "haxy", .email = record.author_email orelse "user@haxy" };
         writeBranchPatchInTransaction(repo_opts, state, moment, io, &arena, std.fmt.bytesToHex(id, .lower), record.event, record.event, author, first_parent, &checks) catch |err| {
@@ -577,7 +577,7 @@ fn refreshMergeCheck(
     // acquire fork locks before the target repository lock
     var checks: MergeCheckInputs(repo_opts) = .{};
     defer checks.deinit(io, allocator);
-    try checks.add(io, allocator, target_repo.core.work_path, id.*, initial.event);
+    try checks.add(io, allocator, &target_repo.core, id.*, initial.event);
 
     // cancel the cache transaction when the result is unchanged
     {
@@ -625,21 +625,35 @@ pub fn MergeCheckInputs(comptime repo_opts: rp.RepoOpts(.xit)) type {
             for (events) |event| {
                 if (event.event != .patch) continue;
                 const patch = event.event.patch orelse continue;
-                try self.add(io, allocator, repo.core.work_path, try evt.parseEventId(&event.id), patch);
+                try self.add(io, allocator, &repo.core, try evt.parseEventId(&event.id), patch);
             }
         }
 
-        fn add(self: *Self, io: std.Io, allocator: std.mem.Allocator, work_path: []const u8, id: [evt.event_id_size]u8, patch: evt.Patch) !void {
-            // track each open patch once, including branch-backed patches
+        fn add(self: *Self, io: std.Io, allocator: std.mem.Allocator, core: *Repo.Core, id: [evt.event_id_size]u8, patch: evt.Patch) !void {
+            if (patch.source_branch != null) return self.addFork(io, allocator, id, patch, null);
+
+            // find the fork through the forker recorded in the target's config
+            var moment = try core.latestMoment();
+            var config = try xit.config.Config(.xit, repo_opts).init(.{ .core = core, .extra = .{ .moment = &moment } }, io, allocator);
+            defer config.deinit();
+            const forker_id = (try fork.readForkerId(&config.sections, &id)) orelse return self.addFork(io, allocator, id, patch, null);
+
+            // the target lives at <users dir>/<owner>/repos/<id>
+            const users_dir = std.fs.path.dirname(std.fs.path.dirname(std.fs.path.dirname(core.work_path) orelse ".") orelse ".") orelse ".";
+            const path = try fork.forkPath(allocator, users_dir, &forker_id, &id);
+            defer allocator.free(path);
+            try self.addFork(io, allocator, id, patch, path);
+        }
+
+        // track an open patch once, locking the fork at `fork_path` when it has one
+        fn addFork(self: *Self, io: std.Io, allocator: std.mem.Allocator, id: [evt.event_id_size]u8, patch: evt.Patch, fork_path: ?[]const u8) !void {
             if (patch.status.kind() != .open) return;
             const entry = try self.forks.getOrPut(allocator, id);
             if (entry.found_existing) return;
             entry.value_ptr.* = null;
-            if (patch.source_branch != null) return;
+            const path = fork_path orelse return;
 
             // open the fork before acquiring its shared lock
-            const path = try fork.forkPath(allocator, std.fs.path.dirname(work_path) orelse ".", &std.fmt.bytesToHex(id, .lower));
-            defer allocator.free(path);
             var opened = Repo.open(io, allocator, .{ .path = path, .require_repo_root = true }) catch |err| {
                 std.log.warn("mergeability fork unavailable: {s}", .{@errorName(err)});
                 return;
@@ -868,10 +882,9 @@ pub fn publish(
     comptime repo_opts: rp.RepoOpts(.xit),
     io: std.Io,
     allocator: std.mem.Allocator,
+    users_dir: []const u8,
     admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
-    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
     target_repo: *rp.Repo(.xit, repo_opts),
-    fork_path: []const u8,
     input: PublishInput,
 ) !void {
     const patch_id = try evt.parseEventId(&input.id);
@@ -879,8 +892,10 @@ pub fn publish(
     defer arena.deinit();
 
     // validate the fork ownership and publishing identity
+    var user_repo = (try evt.openUserRepo(io, allocator, users_dir, &input.user_id)) orelse return error.InvalidPatchDraft;
+    defer user_repo.deinit(io, allocator);
     const admin_moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-    const user_moment = (try evt.userMoment(user_repo)) orelse return error.InvalidPatchDraft;
+    const user_moment = (try evt.userMoment(&user_repo)) orelse return error.InvalidPatchDraft;
     const fork_record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, user_moment, &arena, &patch_id)) orelse return error.InvalidPatchDraft;
     if (fork_record.removed or !std.mem.eql(u8, fork_record.event.repo_id, &input.repo_id)) return error.InvalidPatchDraft;
     const user = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, admin_moment, &arena, &input.user_id)) orelse return error.InvalidPatchDraft;
@@ -889,6 +904,7 @@ pub fn publish(
         !std.mem.eql(u8, user.event.email, input.author.email)) return error.InvalidPatchDraft;
 
     // read the patch staged in the fork
+    const fork_path = try fork.forkPath(arena.allocator(), users_dir, &input.user_id, &patch_id);
     var fork_repo = rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = fork_path }) catch return error.PatchDataUnavailable;
     defer fork_repo.deinit(io, allocator);
     const fork_moment = evt.currentMoment(repo_opts, &fork_repo) catch return error.PatchDataUnavailable;
@@ -920,13 +936,65 @@ pub fn publish(
         }
         if (existing == null) patch.status = .open;
 
-        // write the published patch to the target repository
-        try evt.consume(.server, .repo, .xit, repo_opts, io, allocator, target_repo, evt.events_ref, &.{.{
-            .id = input.id,
-            .timestamp = input.timestamp,
-            .author = input.author,
-            .event = .{ .patch = patch },
-        }});
+        // write the published patch and its forker to the target repository
+        {
+            var checks: MergeCheckInputs(repo_opts) = .{};
+            defer checks.deinit(io, allocator);
+            try checks.addFork(io, allocator, patch_id, patch, fork_path);
+            const first_parent = try eventsFirstParent(.xit, repo_opts, io, allocator, target_repo);
+
+            const DB = rp.Repo(.xit, repo_opts).DB;
+            const State = rp.Repo(.xit, repo_opts).State;
+            const Ctx = struct {
+                core: *rp.Repo(.xit, repo_opts).Core,
+                io: std.Io,
+                allocator: std.mem.Allocator,
+                events: []const evt.EventWithId,
+                patch_id: [evt.event_id_size]u8,
+                forker_id: [evt.event_id_size * 2]u8,
+                checks: *MergeCheckInputs(repo_opts),
+                first_parent: ?[1][hash.hexLen(repo_opts.hash)]u8,
+
+                pub fn run(ctx: @This(), cursor: *DB.Cursor(.read_write)) !void {
+                    var moment = try DB.HashMap(.read_write).init(cursor.*);
+                    const state = State(.read_write){ .core = ctx.core, .extra = .{ .moment = &moment } };
+
+                    // code that starts from the target finds the fork through this entry
+                    var config = try xit.config.Config(.xit, repo_opts).init(state.readOnly(), ctx.io, ctx.allocator);
+                    defer config.deinit();
+                    try config.add(state, ctx.io, .{ .name = &fork.forkerConfigName(&ctx.patch_id), .value = &ctx.forker_id });
+
+                    const parent = if (try rf.readRecur(.xit, repo_opts, state.readOnly(), ctx.io, .{ .ref = evt.events_ref }) == null) ctx.first_parent else null;
+                    try evt.commitEvents(.xit, repo_opts, state, ctx.io, ctx.allocator, evt.events_ref, ctx.events, parent);
+                    if (!try evt.consumeInTransaction(.repo, .xit, repo_opts, state, &ctx.core.db, &moment, ctx.io, ctx.allocator, evt.events_ref)) return error.CancelTransaction;
+                    _ = try ctx.checks.update(state, ctx.io, ctx.allocator);
+                    try xit.undo.write(repo_opts, state, std.Io.Timestamp.now(ctx.io, .real).toSeconds(), .{ .custom = .{ .action_kind = evt.undo_action } });
+                }
+            };
+
+            try target_repo.core.db_file.lock(io, .exclusive);
+            defer target_repo.core.db_file.unlock(io);
+
+            const history = try DB.ArrayList(.read_write).init(target_repo.core.db.rootCursor());
+            history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{
+                .core = &target_repo.core,
+                .io = io,
+                .allocator = allocator,
+                .events = &.{.{
+                    .id = input.id,
+                    .timestamp = input.timestamp,
+                    .author = input.author,
+                    .event = .{ .patch = patch },
+                }},
+                .patch_id = patch_id,
+                .forker_id = std.fmt.bytesToHex(input.user_id, .lower),
+                .checks = &checks,
+                .first_parent = first_parent,
+            }) catch |err| switch (err) {
+                error.CancelTransaction => {},
+                else => |e| return e,
+            };
+        }
 
         // remove the consumed draft from the fork
         try evt.consume(.server, .fork, .xit, repo_opts, io, allocator, &fork_repo, evt.events_ref, &.{.{
@@ -941,7 +1009,7 @@ pub fn publish(
     if (fork_record.event.stage == .draft) {
         var published = fork_record.event;
         published.stage = .publish;
-        try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, evt.events_ref, &.{.{
+        try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{
             .id = input.id,
             .timestamp = input.timestamp,
             .author = input.author,
@@ -954,9 +1022,8 @@ pub fn editDraft(
     comptime repo_opts: rp.RepoOpts(.xit),
     io: std.Io,
     allocator: std.mem.Allocator,
+    users_dir: []const u8,
     admin_repo: *rp.Repo(.xit, evt.admin_repo_opts),
-    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
-    fork_path: []const u8,
     input: EditDraftInput,
 ) !bool {
     // validate the submitted fields before opening repositories
@@ -968,8 +1035,10 @@ pub fn editDraft(
 
     // validate the draft ownership and editing identity
     {
+        var user_repo = (try evt.openUserRepo(io, allocator, users_dir, &input.user_id)) orelse return false;
+        defer user_repo.deinit(io, allocator);
         const admin_moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-        const user_moment = (try evt.userMoment(user_repo)) orelse return false;
+        const user_moment = (try evt.userMoment(&user_repo)) orelse return false;
         const fork_record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, user_moment, &arena, &patch_id)) orelse return false;
         if (fork_record.event.stage != .draft) return false;
         if (fork_record.removed or !std.mem.eql(u8, fork_record.event.repo_id, &input.repo_id)) return error.InvalidPatchDraft;
@@ -980,6 +1049,7 @@ pub fn editDraft(
     }
 
     // read the draft patch from its fork
+    const fork_path = try fork.forkPath(arena.allocator(), users_dir, &input.user_id, &patch_id);
     var fork_repo = rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = fork_path, .require_repo_root = true }) catch return error.PatchDataUnavailable;
     defer fork_repo.deinit(io, allocator);
     const fork_moment = evt.currentMoment(repo_opts, &fork_repo) catch return error.PatchDataUnavailable;
@@ -1009,7 +1079,7 @@ pub fn merge(
     comptime repo_opts: rp.RepoOpts(.xit),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     target_repo: *rp.Repo(.xit, repo_opts),
     input: MergeInput,
 ) !void {
@@ -1035,8 +1105,13 @@ pub fn merge(
     const target_ref = rf.Ref{ .kind = .head, .name = patch_record.event.target_branch };
 
     // open the fork
-    const fork_path = try fork.forkPath(arena.allocator(), repo_root_path, &input.id);
-    var fork_repo_maybe: ?rp.Repo(.xit, repo_opts) = if (patch_record.event.source_branch != null) null else rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = fork_path, .require_repo_root = true }) catch return error.PatchDataUnavailable;
+    var fork_repo_maybe: ?rp.Repo(.xit, repo_opts) = if (patch_record.event.source_branch != null) null else blk: {
+        var config = try target_repo.listConfig(io, allocator);
+        defer config.deinit();
+        const forker_id = (try fork.readForkerId(&config.sections, &patch_id)) orelse return error.PatchDataUnavailable;
+        const fork_path = try fork.forkPath(arena.allocator(), users_dir, &forker_id, &patch_id);
+        break :blk rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = fork_path, .require_repo_root = true }) catch return error.PatchDataUnavailable;
+    };
     defer if (fork_repo_maybe) |*repo| repo.deinit(io, allocator);
 
     // select the commit and merge identity
@@ -1167,23 +1242,25 @@ pub fn mergeAndRemoveFork(
     comptime repo_opts: rp.RepoOpts(.xit),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     target_repo: *rp.Repo(.xit, repo_opts),
     input: MergeInput,
 ) !void {
-    try merge(repo_opts, io, allocator, repo_root_path, target_repo, input);
+    try merge(repo_opts, io, allocator, users_dir, target_repo, input);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     // remove fork data only for patches backed by a fork
-    const record = (try evt.readFromRepo(evt.Patch, .xit, repo_opts, io, allocator, &arena, target_repo, &try evt.parseEventId(&input.id))) orelse return error.InvalidPatch;
+    const patch_id = try evt.parseEventId(&input.id);
+    const record = (try evt.readFromRepo(evt.Patch, .xit, repo_opts, io, allocator, &arena, target_repo, &patch_id)) orelse return error.InvalidPatch;
     if (record.event.source_branch != null) return;
-    // a fork already cleaned up has no repo left
-    const fork_path = try fork.forkPath(arena.allocator(), repo_root_path, &input.id);
-    const forker_id = (try fork.readForkerId(io, allocator, fork_path)) orelse return;
-    var user_repo = (try evt.openUserRepo(io, allocator, repo_root_path, &forker_id)) orelse return error.InvalidPatchDraft;
-    defer user_repo.deinit(io, allocator);
-    try fork.remove(io, allocator, repo_root_path, &user_repo, &input.id, input.author);
+    // a patch from another instance has no fork here
+    const forker_id = blk: {
+        var config = try target_repo.listConfig(io, allocator);
+        defer config.deinit();
+        break :blk (try fork.readForkerId(&config.sections, &patch_id)) orelse return;
+    };
+    try fork.remove(io, allocator, users_dir, &forker_id, &input.id, input.author);
 }
 
 fn commitAuthor(line: []const u8) !evt.CommitAuthor {
@@ -1202,7 +1279,7 @@ fn importMerged(
     moment: *evt.EventDB(repo_opts.hash).HashMap(.read_write),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     patch_id: *const [evt.event_id_size]u8,
     matched_oid: *const [hash.hexLen(repo_opts.hash)]u8,
     before_oid: *const [hash.hexLen(repo_opts.hash)]u8,
@@ -1212,15 +1289,19 @@ fn importMerged(
     defer arena.deinit();
 
     // identify which selected revision was merged by the client.
-    const patch_hex = std.fmt.bytesToHex(patch_id.*, .lower);
-    const fork_path = try fork.forkPath(arena.allocator(), repo_root_path, &patch_hex);
     const events = try evt.currentMomentFromRepoMoment(repo_opts.hash, moment.readOnly());
     const record = (try evt.Patch.readById(evt.EventDB(repo_opts.hash), repo_opts.hash, events, &arena, patch_id)) orelse return;
     const selected = record.event.revision orelse return;
     const revision: evt.Patch.MergeRevision = if (std.mem.eql(u8, matched_oid, selected.source_oid)) .source else if (std.mem.eql(u8, matched_oid, selected.squash_oid)) .squash else return;
 
     // open the fork when the revision is not stored in the target repository.
-    var fork_repo_maybe: ?rp.Repo(.xit, repo_opts) = if (record.event.source_branch != null) null else try rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = fork_path, .require_repo_root = true });
+    var fork_repo_maybe: ?rp.Repo(.xit, repo_opts) = if (record.event.source_branch != null) null else blk: {
+        var config = try xit.config.Config(.xit, repo_opts).init(state.readOnly(), io, allocator);
+        defer config.deinit();
+        const forker_id = (try fork.readForkerId(&config.sections, patch_id)) orelse return error.PatchDataUnavailable;
+        const fork_path = try fork.forkPath(arena.allocator(), users_dir, &forker_id, patch_id);
+        break :blk try rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = fork_path, .require_repo_root = true });
+    };
     defer if (fork_repo_maybe) |*repo| repo.deinit(io, allocator);
 
     // import the revision and record the client-side merge.
@@ -1334,7 +1415,7 @@ pub fn detectMerged(
     moment: *evt.EventDB(repo_opts.hash).HashMap(.read_write),
     io: std.Io,
     allocator: std.mem.Allocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     updates: []const xit.net_server_receive_pack.AppliedRefUpdate,
     error_writer: *std.Io.Writer,
 ) !void {
@@ -1410,7 +1491,7 @@ pub fn detectMerged(
 
                     // a fast-forward has no recorded merge boundary; use the old ref tip
                     const before_oid = if (std.mem.eql(u8, &commit.oid, &target.after_oid)) &old_oid else &target.before_oid;
-                    importMerged(repo_opts, state, db, moment, io, allocator, repo_root_path, &patch_id, &commit.oid, before_oid, &target.after_oid) catch |err| {
+                    importMerged(repo_opts, state, db, moment, io, allocator, users_dir, &patch_id, &commit.oid, before_oid, &target.after_oid) catch |err| {
                         serve_common.logError(io, error_writer, "failed to mark patch {s} as merged: {s}\n", .{ &patch_hex, @errorName(err) });
                         continue;
                     };

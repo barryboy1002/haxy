@@ -119,7 +119,7 @@ pub fn receivePackAndConsume(
     writer: *std.Io.Writer,
     options: xit.net_server_receive_pack.Options,
     author: ?evt.CommitAuthor,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     error_writer: *std.Io.Writer,
     sess: ?*ssh.SessionCtx,
 ) !void {
@@ -143,7 +143,7 @@ pub fn receivePackAndConsume(
         options: xit.net_server_receive_pack.Options,
         author: ?evt.CommitAuthor,
         response: *xit.net_server_receive_pack.Response,
-        repo_root_path: []const u8,
+        users_dir: []const u8,
         error_writer: *std.Io.Writer,
         sideband: *progress.Sideband,
 
@@ -163,7 +163,7 @@ pub fn receivePackAndConsume(
             // transaction and must commit regardless.
             if (null != try rf.readRecur(.xit, repo_opts, state.readOnly(), ctx.io, .{ .ref = evt.events_ref })) {
                 _ = try evt.consumeInTransaction(.repo, .xit, repo_opts, state, &ctx.core.db, &moment, ctx.io, ctx.allocator, evt.events_ref);
-                try pch.detectMerged(repo_opts, state, &ctx.core.db, &moment, ctx.io, ctx.allocator, ctx.repo_root_path, ctx.updates.items.items, ctx.error_writer);
+                try pch.detectMerged(repo_opts, state, &ctx.core.db, &moment, ctx.io, ctx.allocator, ctx.users_dir, ctx.updates.items.items, ctx.error_writer);
 
                 // the revisions the pushed branches cause belong to the push
                 _ = try pch.refreshBranchesInTransaction(.server, repo_opts, state, &moment, ctx.io, ctx.allocator, ctx.updates.items.items, null, ctx.sideband);
@@ -199,7 +199,7 @@ pub fn receivePackAndConsume(
                 .options = options,
                 .author = author,
                 .response = &response,
-                .repo_root_path = repo_root_path,
+                .users_dir = users_dir,
                 .error_writer = error_writer,
                 .sideband = &sideband,
             },

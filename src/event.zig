@@ -58,14 +58,19 @@ pub fn initUserRepo(io: std.Io, allocator: std.mem.Allocator, path: []const u8) 
     return try rp.Repo(.xit, user_repo_opts).init(io, allocator, .{ .bare = true, .path = path });
 }
 
-// a user repo's path, a sibling of the repos dir
-pub fn userRepoPath(allocator: std.mem.Allocator, repo_root_path: []const u8, user_id: *const [event_id_size]u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ std.fs.path.dirname(repo_root_path) orelse ".", "users", &std.fmt.bytesToHex(user_id.*, .lower) });
+// a user repo's path, inside the user's dir
+pub fn userRepoPath(allocator: std.mem.Allocator, users_dir: []const u8, user_id: *const [event_id_size]u8) ![]u8 {
+    return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(user_id.*, .lower), "user" });
+}
+
+// a repo's path, inside its owner's dir
+pub fn repoPath(allocator: std.mem.Allocator, users_dir: []const u8, owner_id: []const u8, repo_id: []const u8) ![]u8 {
+    return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(owner_id[0..event_id_size].*, .lower), "repos", &std.fmt.bytesToHex(repo_id[0..event_id_size].*, .lower) });
 }
 
 // open a user's repo, or null when it's missing
-pub fn openUserRepo(io: std.Io, allocator: std.mem.Allocator, repo_root_path: []const u8, user_id: *const [event_id_size]u8) !?rp.Repo(.xit, user_repo_opts) {
-    const path = try userRepoPath(allocator, repo_root_path, user_id);
+pub fn openUserRepo(io: std.Io, allocator: std.mem.Allocator, users_dir: []const u8, user_id: *const [event_id_size]u8) !?rp.Repo(.xit, user_repo_opts) {
+    const path = try userRepoPath(allocator, users_dir, user_id);
     defer allocator.free(path);
     return rp.Repo(.xit, user_repo_opts).open(io, allocator, .{ .path = path, .require_repo_root = true }) catch |err| switch (err) {
         error.RepoNotFound, error.FileNotFound => null,
@@ -87,12 +92,12 @@ pub fn readRepoByOwnerAndName(
     allocator: std.mem.Allocator,
     arena: *std.heap.ArenaAllocator,
     admin_moment: AdminDB.HashMap(.read_only),
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     owner_name: []const u8,
     repo_name: []const u8,
 ) !?Repo.RepoWithId {
     const owner_id = (try User.readIdByName(AdminDB, admin_repo_opts.hash, admin_moment, owner_name)) orelse return null;
-    var user_repo = (try openUserRepo(io, allocator, repo_root_path, &owner_id)) orelse return null;
+    var user_repo = (try openUserRepo(io, allocator, users_dir, &owner_id)) orelse return null;
     defer user_repo.deinit(io, allocator);
     const moment = (try userMoment(&user_repo)) orelse return null;
     return try Repo.readByName(UserDB, user_repo_opts.hash, moment, arena, repo_name);
@@ -103,11 +108,11 @@ pub fn readRepoById(
     io: std.Io,
     allocator: std.mem.Allocator,
     arena: *std.heap.ArenaAllocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     owner_id: *const [event_id_size]u8,
     repo_id: []const u8,
 ) !?Repo.Record {
-    var user_repo = (try openUserRepo(io, allocator, repo_root_path, owner_id)) orelse return null;
+    var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return null;
     defer user_repo.deinit(io, allocator);
     const moment = (try userMoment(&user_repo)) orelse return null;
     return try Repo.readById(UserDB, user_repo_opts.hash, moment, arena, repo_id);
@@ -118,30 +123,14 @@ pub fn readForkById(
     io: std.Io,
     allocator: std.mem.Allocator,
     arena: *std.heap.ArenaAllocator,
-    repo_root_path: []const u8,
+    users_dir: []const u8,
     forker_id: *const [event_id_size]u8,
     fork_id: *const [event_id_size]u8,
 ) !?Fork.Record {
-    var user_repo = (try openUserRepo(io, allocator, repo_root_path, forker_id)) orelse return null;
+    var user_repo = (try openUserRepo(io, allocator, users_dir, forker_id)) orelse return null;
     defer user_repo.deinit(io, allocator);
     const moment = (try userMoment(&user_repo)) orelse return null;
     return try Fork.readById(UserDB, user_repo_opts.hash, moment, arena, fork_id);
-}
-
-// the user who forked a published patch, found through the patch's author
-pub const Forker = struct {
-    id: [event_id_size]u8,
-    name: []const u8,
-};
-
-pub fn readForker(
-    arena: *std.heap.ArenaAllocator,
-    admin_moment: AdminDB.HashMap(.read_only),
-    author_email: ?[]const u8,
-) !?Forker {
-    const id = (try User.readIdByEmail(AdminDB, admin_repo_opts.hash, admin_moment, author_email orelse return null)) orelse return null;
-    const user = (try User.readById(AdminDB, admin_repo_opts.hash, admin_moment, arena, &id)) orelse return null;
-    return .{ .id = id, .name = user.event.name };
 }
 
 // the xitdb type events are stored in. it only depends on the hash kind, so
@@ -1730,16 +1719,22 @@ pub const CreateRepoOptions = struct {
     read_access: Repo.Access = .private,
 };
 
-// resolve a pushed `<owner>/<repo>` to the hex event id that names its on-disk
-// directory under the repos dir
+// the ids that locate a repo's on-disk directory
+pub const RepoLocation = struct {
+    owner_id: [event_id_size]u8,
+    repo_id: [event_id_size]u8,
+};
+
+// resolve a pushed `<owner>/<repo>` to the ids that locate its on-disk directory
 pub fn resolveOrCreateRepo(
     io: std.Io,
     allocator: std.mem.Allocator,
+    users_dir: []const u8,
     admin_repo_path: []const u8,
     owner_name: []const u8,
     repo_name: []const u8,
     create_options_maybe: ?CreateRepoOptions,
-) !?[event_id_size * 2]u8 {
+) !?RepoLocation {
     var admin_repo = rp.Repo(.xit, admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path }) catch |err| switch (err) {
         error.RepoNotFound => return null,
         else => |e| return e,
@@ -1753,16 +1748,14 @@ pub fn resolveOrCreateRepo(
 
     // an unknown owner can't own a repo, so the push is rejected
     const owner_user_id = (try User.readIdByName(AdminDB, admin_repo_opts.hash, admin_moment, owner_name)) orelse return null;
-    const repo_root_path = try std.fs.path.join(allocator, &.{ std.fs.path.dirname(admin_repo_path) orelse ".", "repos" });
-    defer allocator.free(repo_root_path);
-    var user_repo = (try openUserRepo(io, allocator, repo_root_path, &owner_user_id)) orelse return null;
+    var user_repo = (try openUserRepo(io, allocator, users_dir, &owner_user_id)) orelse return null;
     defer user_repo.deinit(io, allocator);
 
     // an already-registered repo reuses its event id, so a re-push (or a clone)
     // lands in the same repo
     if (try userMoment(&user_repo)) |moment| {
         if (try Repo.readByName(UserDB, user_repo_opts.hash, moment, &arena, repo_name)) |found| {
-            return std.fmt.bytesToHex(found.event_id, .lower);
+            return .{ .owner_id = owner_user_id, .repo_id = found.event_id };
         }
     }
 
@@ -1786,7 +1779,7 @@ pub fn resolveOrCreateRepo(
         } },
     }});
 
-    return event_id_hex;
+    return .{ .owner_id = owner_user_id, .repo_id = id_bytes };
 }
 
 //

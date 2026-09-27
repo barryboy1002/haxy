@@ -34,7 +34,7 @@ const Self = @This();
 
 pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.RoutablePage) !Self {
     const io = session.io orelse return error.NotFound;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
+    const users_dir = session.users_dir orelse return error.NotFound;
     const haxy_moment = session.haxy_moment orelse return error.NoMoment;
     const route_fork = route.forkRoute() orelse return error.UnexpectedRoute;
     // the route's identity names the forker and the target repo
@@ -42,14 +42,14 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     const id = evt.parseEventId(route_fork.id.slice()) catch return error.NotFound;
     const gpa = arena.child_allocator;
     const forker_id = (try evt.User.readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, identity.owner)) orelse return error.NotFound;
-    const fork_record = (try evt.readForkById(io, gpa, arena, repos_dir, &forker_id, &id)) orelse return error.NotFound;
+    const fork_record = (try evt.readForkById(io, gpa, arena, users_dir, &forker_id, &id)) orelse return error.NotFound;
     if (fork_record.removed) return error.NotFound;
     if (fork_record.event.repo_id.len != evt.event_id_size) return error.NotFound;
     var target_id: [evt.event_id_size]u8 = undefined;
     @memcpy(&target_id, fork_record.event.repo_id);
     const owner_id = fork_record.event.repo_user_id[0..evt.event_id_size];
 
-    const target_record = (try evt.readRepoById(io, gpa, arena, repos_dir, owner_id, fork_record.event.repo_id)) orelse return error.NotFound;
+    const target_record = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, fork_record.event.repo_id)) orelse return error.NotFound;
     // a draft is as readable as the repo it targets
     if (evt.Repo.roleOf(target_record, session.userId()) == .none) return error.NotFound;
     const owner = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, owner_id)) orelse return error.NotFound;
@@ -58,7 +58,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     const aa = arena.allocator();
     const target_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ owner.event.name, target_record.event.name });
     const id_hex = std.fmt.bytesToHex(id, .lower);
-    const fork_path = try fork.forkPath(aa, repos_dir, &id_hex);
+    const fork_path = try fork.forkPath(aa, users_dir, &forker_id, &id);
     var fork_repo = try rp.Repo(.xit, .{}).open(io, arena.child_allocator, .{ .path = fork_path, .require_repo_root = true });
     defer fork_repo.deinit(io, arena.child_allocator);
     const fork_moment = try evt.currentMoment(.{}, &fork_repo);
@@ -71,8 +71,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
         @memcpy(&commits_base_oid, revision.record.event.base_oid);
     }
 
-    const target_id_hex = std.fmt.bytesToHex(target_id, .lower);
-    const target_path = try std.fs.path.join(aa, &.{ repos_dir, &target_id_hex });
+    const target_path = try evt.repoPath(aa, users_dir, owner_id, &target_id);
     const target_source = ui.RepoSource{ .path = target_path, .repo_kind = .xit };
     var target_repo_maybe: ?rp.Repo(.xit, .{}) = if (!target_record.removed)
         rp.Repo(.xit, .{}).open(io, arena.child_allocator, target_source.localInitOpts()) catch null

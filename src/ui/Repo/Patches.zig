@@ -354,14 +354,12 @@ pub fn create(
         return id;
     }
     if (session.data.host_kind == .local) return error.InvalidSourceBranch;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
+    const users_dir = session.users_dir orelse return error.NotFound;
     const user_id = actor.user_id orelse return error.NotFound;
     const repo_id = data.repo_id orelse return error.NotFound;
     const repo_user_id = actor.repo_user_id orelse return error.NotFound;
     if (!evt.Patch.branchValid(target_branch) or !try repo_source.hasBranch(io, allocator, target_branch)) return error.InvalidTargetBranch;
-    var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
-    defer user_repo.deinit(io, allocator);
-    const fork_path = try fork.create(.{}, io, allocator, repos_dir, &user_repo, .{
+    const fork_path = try fork.create(.{}, io, allocator, users_dir, .{
         .id = id,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -379,7 +377,7 @@ pub fn create(
 
 pub fn publishDraft(data: *const Self, session: *ui.Session, allocator: std.mem.Allocator, author: evt.CommitAuthor, id: []const u8) !void {
     const io = session.io orelse return error.NotFound;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
+    const users_dir = session.users_dir orelse return error.NotFound;
     const admin_repo = session.admin_repo orelse return error.NotFound;
     const repo_source = data.repo_source orelse return error.NotFound;
     const repo_id = data.repo_id orelse return error.NotFound;
@@ -387,14 +385,9 @@ pub fn publishDraft(data: *const Self, session: *ui.Session, allocator: std.mem.
     const patch_id = evt.parseEventId(id) catch return error.NotFound;
 
     const id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    const fork_path = try fork.forkPath(allocator, repos_dir, &id_hex);
-    defer allocator.free(fork_path);
-
     var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, repo_source.localInitOpts());
     defer target_repo.deinit(io, allocator);
-    var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
-    defer user_repo.deinit(io, allocator);
-    try pch.publish(.{}, io, allocator, admin_repo, &user_repo, &target_repo, fork_path, .{
+    try pch.publish(.{}, io, allocator, users_dir, admin_repo, &target_repo, .{
         .id = id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -405,7 +398,7 @@ pub fn publishDraft(data: *const Self, session: *ui.Session, allocator: std.mem.
 
 pub fn mergePatch(data: *const Self, session: *ui.Session, allocator: std.mem.Allocator, author: evt.CommitAuthor, id: []const u8, revision: evt.Patch.MergeRevision) !void {
     const io = session.io orelse return error.NotFound;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
+    const users_dir = session.users_dir orelse return error.NotFound;
     const repo_source = data.repo_source orelse return error.NotFound;
     if (repo_source.repo_kind != .xit) return error.NotFound;
     const patch_id = evt.parseEventId(id) catch return error.NotFound;
@@ -413,7 +406,7 @@ pub fn mergePatch(data: *const Self, session: *ui.Session, allocator: std.mem.Al
     const id_hex = std.fmt.bytesToHex(patch_id, .lower);
     var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, repo_source.localInitOpts());
     defer target_repo.deinit(io, allocator);
-    try pch.mergeAndRemoveFork(.{}, io, allocator, repos_dir, &target_repo, .{
+    try pch.mergeAndRemoveFork(.{}, io, allocator, users_dir, &target_repo, .{
         .id = id_hex,
         .revision = revision,
         .author = author,
@@ -433,7 +426,7 @@ pub fn editDraft(
     target_branch: []const u8,
 ) !void {
     const io = session.io orelse return error.NotFound;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
+    const users_dir = session.users_dir orelse return error.NotFound;
     const admin_repo = session.admin_repo orelse return error.NotFound;
     const repo_id = data.repo_id orelse return error.NotFound;
     const repo_source = data.repo_source orelse return error.NotFound;
@@ -442,11 +435,7 @@ pub fn editDraft(
     if (!evt.Patch.branchValid(target_branch) or !try repo_source.hasBranch(io, allocator, target_branch)) return error.InvalidTargetBranch;
 
     const id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    const fork_path = try fork.forkPath(allocator, repos_dir, &id_hex);
-    defer allocator.free(fork_path);
-    var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
-    defer user_repo.deinit(io, allocator);
-    if (!try pch.editDraft(.{}, io, allocator, admin_repo, &user_repo, fork_path, .{
+    if (!try pch.editDraft(.{}, io, allocator, users_dir, admin_repo, .{
         .id = id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
@@ -461,13 +450,11 @@ pub fn editDraft(
 
 pub fn removeDraft(session: *ui.Session, allocator: std.mem.Allocator, author: evt.CommitAuthor, id: *const [evt.event_id_size]u8) !void {
     const io = session.io orelse return error.NotFound;
-    const repos_dir = session.repos_dir orelse return error.NotFound;
+    const users_dir = session.users_dir orelse return error.NotFound;
     const user_id = session.userId() orelse return error.NotFound;
 
     const id_hex = std.fmt.bytesToHex(id.*, .lower);
-    var user_repo = (try evt.openUserRepo(io, allocator, repos_dir, &user_id)) orelse return error.NotFound;
-    defer user_repo.deinit(io, allocator);
-    try fork.remove(io, allocator, repos_dir, &user_repo, &id_hex, author);
+    try fork.remove(io, allocator, users_dir, &user_id, &id_hex, author);
 }
 
 // `status`'s windowed listing.
@@ -585,7 +572,7 @@ pub fn init(
     const labeled = empty.label.len != 0;
     const drafts_window = if (admin_moment) |admin|
         if (repo_id_maybe) |repo_id|
-            if (session.data.user_id != null and session.repos_dir != null)
+            if (session.data.user_id != null and session.users_dir != null)
                 try loadDraftWindow(repo_kind, repo_opts, arena, session, admin, &repo_id, empty.selected_id, repo)
             else
                 Window.empty
@@ -720,10 +707,10 @@ pub fn init(
     var closed_window = try thread.loadWindow(Self, .patch, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_patch, closed_set, closed_root, conflict_set, empty.selected_id, thread_comments_start, empty.search);
     var merged_window = try thread.loadWindow(Self, .patch, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_patch, merged_set, merged_root, conflict_set, empty.selected_id, thread_comments_start, empty.search);
     var conflicts_window = try thread.loadWindow(Self, .patch, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_patch, conflict_set, conflicts_root, conflict_set, empty.selected_id, thread_comments_start, null);
-    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.repos_dir, haxy_moment, repo, &open_window);
-    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.repos_dir, haxy_moment, repo, &closed_window);
-    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.repos_dir, haxy_moment, repo, &merged_window);
-    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.repos_dir, haxy_moment, repo, &conflicts_window);
+    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.users_dir, haxy_moment, repo, &open_window);
+    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.users_dir, haxy_moment, repo, &closed_window);
+    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.users_dir, haxy_moment, repo, &merged_window);
+    try setPatchDetails(repo_kind, repo_opts, io, arena, admin_moment, session.users_dir, haxy_moment, repo, &conflicts_window);
     if (view == .conflicts and conflicts_window.count > 0) resolved_view = .conflicts;
 
     const comment_page = if (empty.comment_id.len == 0)
@@ -761,21 +748,23 @@ fn setPatchDetails(
     io: std.Io,
     arena: *std.heap.ArenaAllocator,
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
-    repos_dir: ?[]const u8,
+    users_dir: ?[]const u8,
     haxy_moment: evt.EventDB(repo_opts.hash).HashMap(.read_only),
     repo: *rp.Repo(repo_kind, repo_opts),
     target: *Window,
 ) !void {
     if (target.items.len == 0) return;
+    var config = try repo.listConfig(io, arena.child_allocator);
+    defer config.deinit();
     const items = try arena.allocator().dupe(PatchWithId, target.items);
     for (items) |*item| {
         const id = try evt.parseEventId(item.id);
         const status = item.record.event.status.kind();
         // a fork-backed patch's fork lives in its forker's user repo
-        if (admin_moment) |moment| if (repos_dir) |dir| if (item.record.event.source_branch == null) {
-            if (try evt.readForker(arena, moment, item.record.author_email)) |forker| {
-                item.forker = forker.name;
-                const record = try evt.readForkById(io, arena.child_allocator, arena, dir, &forker.id, &id);
+        if (admin_moment) |moment| if (users_dir) |dir| if (item.record.event.source_branch == null) {
+            if (try fork.readForkerId(&config.sections, &id)) |forker_id| {
+                if (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, &forker_id)) |forker| item.forker = forker.event.name;
+                const record = try evt.readForkById(io, arena.child_allocator, arena, dir, &forker_id, &id);
                 item.fork_exists = if (record) |value| !value.removed else false;
             }
         };
@@ -823,11 +812,11 @@ fn loadDraftWindow(
 ) !Window {
     const user_id = session.userId() orelse return .empty;
     const user_name = session.data.user_name orelse return .empty;
-    const repos_dir = session.repos_dir orelse return .empty;
+    const users_dir = session.users_dir orelse return .empty;
     const io = session.io orelse return .empty;
 
     // the viewer's drafts live in their user repo
-    var user_repo = (try evt.openUserRepo(io, arena.child_allocator, repos_dir, &user_id)) orelse return .empty;
+    var user_repo = (try evt.openUserRepo(io, arena.child_allocator, users_dir, &user_id)) orelse return .empty;
     defer user_repo.deinit(io, arena.child_allocator);
     const user_moment = (try evt.userMoment(&user_repo)) orelse return .empty;
     const drafts_cursor = try user_moment.getCursor(hash.hashInt(evt.user_repo_opts.hash, evt.Fork.repo_to_draft_id_set_key)) orelse return .empty;
@@ -872,7 +861,7 @@ fn loadDraftWindow(
             next_id = try aa.dupe(u8, &id_hex);
             break;
         }
-        const path = try fork.forkPath(aa, repos_dir, &id_hex);
+        const path = try fork.forkPath(aa, users_dir, &user_id, &id);
         var fork_repo = rp.Repo(.xit, .{}).open(io, arena.child_allocator, .{ .path = path, .require_repo_root = true }) catch continue;
         defer fork_repo.deinit(io, arena.child_allocator);
         const entry = (try loadDraftEntry(repo_kind, repo_opts, arena, io, admin_moment, &fork_repo, target_repo, id, user_name)) orelse continue;
