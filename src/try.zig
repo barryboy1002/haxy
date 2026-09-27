@@ -265,6 +265,11 @@ pub fn main(init: std.process.Init) !void {
             if (owned.items.len > 0) try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, owned.items);
         }
 
+        // the creation timestamps order the repos tabs
+        for (repo_data, &repo_event_ids, repo_events) |r, *id_bytes, event| {
+            try evt.bumpRepoActivity(io, allocator, users_dir, &user_ids[r.user_index], id_bytes, event.timestamp);
+        }
+
         // every repo gets the same generated history, so build it once into a
         // template repo and copy that to each repo's location below rather than
         // redoing the expensive commit work for every repo.

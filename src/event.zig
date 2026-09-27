@@ -68,6 +68,89 @@ pub fn repoPath(allocator: std.mem.Allocator, users_dir: []const u8, owner_id: [
     return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(owner_id[0..event_id_size].*, .lower), "repos", &std.fmt.bytesToHex(repo_id[0..event_id_size].*, .lower) });
 }
 
+// the ids a repo path names, or null for a path `repoPath` didn't build
+pub fn parseRepoPath(users_dir: []const u8, path: []const u8) ?RepoLocation {
+    const repos_dir = std.fs.path.dirname(path) orelse return null;
+    if (!std.mem.eql(u8, std.fs.path.basename(repos_dir), "repos")) return null;
+    const owner_dir = std.fs.path.dirname(repos_dir) orelse return null;
+    if (!std.mem.eql(u8, std.fs.path.dirname(owner_dir) orelse return null, users_dir)) return null;
+    return .{
+        .owner_id = parseEventId(std.fs.path.basename(owner_dir)) catch return null,
+        .repo_id = parseEventId(std.fs.path.basename(path)) catch return null,
+    };
+}
+
+// the owner's repos newest activity first, as order keys
+pub const recent_repo_id_set_key = "haxy/recent-repo-id-set";
+// each repo's activity time in that set
+const repo_activity_time_key = "haxy/repo-id->activity-time";
+
+// a repo's activity time is rewritten at most once per window
+pub const repo_activity_window_secs = 5 * 60;
+
+// move a repo to `timestamp` in its owner's activity index, unless it moved within the window
+pub fn bumpRepoActivity(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    owner_id: *const [event_id_size]u8,
+    repo_id: *const [event_id_size]u8,
+    timestamp: u64,
+) !void {
+    const hash_kind = user_repo_opts.hash;
+    var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return;
+    defer user_repo.deinit(io, allocator);
+
+    // a recent bump skips the transaction
+    if (try readActivityTime(try user_repo.core.latestMoment(), repo_id)) |time| {
+        if (timestamp -| time < repo_activity_window_secs) return;
+    }
+
+    const Ctx = struct {
+        repo_id: *const [event_id_size]u8,
+        timestamp: u64,
+
+        pub fn run(ctx: @This(), cursor: *UserDB.Cursor(.read_write)) !void {
+            const moment = try UserDB.HashMap(.read_write).init(cursor.*);
+            // reread so a concurrent bump can't leave its key behind
+            const old_time = try readActivityTime(moment.readOnly(), ctx.repo_id);
+            if (old_time) |time| {
+                if (ctx.timestamp -| time < repo_activity_window_secs) return error.CancelTransaction;
+            }
+            const recent = try UserDB.SortedSet(.read_write).init(try moment.putCursor(hash.hashInt(hash_kind, recent_repo_id_set_key)));
+            if (old_time) |time| _ = try recent.remove(&orderKeyDesc(time, ctx.repo_id));
+            try recent.put(&orderKeyDesc(ctx.timestamp, ctx.repo_id));
+            const times = try UserDB.HashMap(.read_write).init(try moment.putCursor(hash.hashInt(hash_kind, repo_activity_time_key)));
+            try times.put(hash.hashInt(hash_kind, ctx.repo_id), .{ .uint = ctx.timestamp });
+        }
+    };
+
+    try user_repo.core.db_file.lock(io, .exclusive);
+    defer user_repo.core.db_file.unlock(io);
+
+    const history = try UserDB.ArrayList(.read_write).init(user_repo.core.db.rootCursor());
+    history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .repo_id = repo_id, .timestamp = timestamp }) catch |err| switch (err) {
+        error.CancelTransaction => {},
+        else => |e| return e,
+    };
+}
+
+// bump the repo at `repo_path` to now, logging rather than returning a failure
+pub fn bumpRepoActivityAt(io: std.Io, allocator: std.mem.Allocator, users_dir: []const u8, repo_path: []const u8) void {
+    const location = parseRepoPath(users_dir, repo_path) orelse return;
+    const now: u64 = @intCast(std.Io.Timestamp.now(io, .real).toSeconds());
+    bumpRepoActivity(io, allocator, users_dir, &location.owner_id, &location.repo_id, now) catch |err| {
+        std.log.warn("failed to record repo activity: {s}", .{@errorName(err)});
+    };
+}
+
+fn readActivityTime(moment: UserDB.HashMap(.read_only), repo_id: *const [event_id_size]u8) !?u64 {
+    const times_cursor = try moment.getCursor(hash.hashInt(user_repo_opts.hash, repo_activity_time_key)) orelse return null;
+    const times = try UserDB.HashMap(.read_only).init(times_cursor);
+    const time_cursor = try times.getCursor(hash.hashInt(user_repo_opts.hash, repo_id)) orelse return null;
+    return try time_cursor.readUint();
+}
+
 // open a user's repo, or null when it's missing
 pub fn openUserRepo(io: std.Io, allocator: std.mem.Allocator, users_dir: []const u8, user_id: *const [event_id_size]u8) !?rp.Repo(.xit, user_repo_opts) {
     const path = try userRepoPath(allocator, users_dir, user_id);
@@ -544,6 +627,10 @@ pub fn consume(
     // explicit patch writes already saved their checks in the event transaction
     if (role == .repo and repo_kind == .xit and host == .server and events.len == 0) {
         pch.refreshOpenMergeability(repo_opts, io, allocator, repo, host.server.users_dir, null, null);
+    }
+
+    if (role == .repo and host == .server and events.len > 0) {
+        bumpRepoActivityAt(io, allocator, host.server.users_dir, repo.core.work_path);
     }
 }
 
@@ -1777,9 +1864,10 @@ pub fn resolveOrCreateRepo(
     io.random(&id_bytes);
     const event_id_hex = std.fmt.bytesToHex(id_bytes, .lower);
 
+    const timestamp: u64 = @intCast(std.Io.Timestamp.now(io, .real).toSeconds());
     try consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
         .id = event_id_hex,
-        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        .timestamp = timestamp,
         .author = .{ .name = owner.event.name, .email = owner.event.email },
         .event = .{ .repo = .{
             .user_id = &owner_user_id,
@@ -1788,6 +1876,9 @@ pub fn resolveOrCreateRepo(
             .read_access = create_options.read_access,
         } },
     }});
+    bumpRepoActivity(io, allocator, users_dir, &owner_user_id, &id_bytes, timestamp) catch |err| {
+        std.log.warn("failed to record repo activity: {s}", .{@errorName(err)});
+    };
 
     return .{ .owner_id = owner_user_id, .repo_id = id_bytes };
 }

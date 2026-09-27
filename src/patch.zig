@@ -94,6 +94,7 @@ pub fn writeBranchPatch(
             const history = try DB.ArrayList(.read_write).init(repo.core.db.rootCursor());
             try history.appendContext(.{ .slot = try history.getSlot(-1) }, Ctx{ .repo = repo, .io = io, .arena = &arena, .id = id, .patch = patch, .expected_patch = expected_patch, .author = author, .checks = &checks, .first_parent = first_parent });
         }
+        if (host == .server) evt.bumpRepoActivityAt(io, allocator, host.server.users_dir, repo.core.work_path);
     }
 }
 
@@ -997,6 +998,7 @@ pub fn publish(
                 else => |e| return e,
             };
         }
+        evt.bumpRepoActivityAt(io, allocator, users_dir, target_repo.core.work_path);
 
         // remove the consumed draft from the fork
         try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .fork, .xit, repo_opts, io, allocator, &fork_repo, evt.events_ref, &.{.{
@@ -1234,6 +1236,7 @@ pub fn merge(
             .timestamp = input.timestamp,
         });
     }
+    evt.bumpRepoActivityAt(io, allocator, users_dir, target_repo.core.work_path);
 
     // refresh other patches affected by the updated target branch.
     refreshOpenMergeability(repo_opts, io, allocator, target_repo, users_dir, null, null);

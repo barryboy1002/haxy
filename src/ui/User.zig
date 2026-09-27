@@ -70,33 +70,52 @@ pub fn init(
     const user_moment = if (user_repo_maybe) |*user_repo| try evt.userMoment(user_repo) else null;
 
     const search: ?[]const u8 = if (repos_search.len == 0) null else std.Uri.percentDecodeInPlace(try arena.allocator().dupe(u8, repos_search));
-    const prefix = search orelse "";
 
     var repos: std.ArrayList(evt.Repo.Record) = .empty;
     var repos_next_start: ?usize = null;
     if (user_moment) |moment| {
-        if (try moment.getCursor(hash.hashInt(hash_kind, evt.Repo.name_index_key))) |index_cursor| {
-            const index = try DB.SortedMap(.read_only).init(index_cursor);
+        if (search) |prefix| {
+            if (try moment.getCursor(hash.hashInt(hash_kind, evt.Repo.name_index_key))) |index_cursor| {
+                const index = try DB.SortedMap(.read_only).init(index_cursor);
 
-            // the names with the prefix are contiguous from its rank, so the
-            // window is one seek then a walk that stops at the first name without it
-            var taken: usize = 0;
-            var repos_iter = try index.iteratorFromIndex(try index.rank(prefix) +| repos_start);
-            while (try repos_iter.next()) |cursor| {
-                const pair = try cursor.readKeyValuePair();
-                const repo_name = try pair.key_cursor.readBytesAlloc(arena.allocator(), null);
-                if (!std.mem.startsWith(u8, repo_name, prefix)) break;
-                if (taken == page_size) {
-                    repos_next_start = repos_start + page_size;
-                    break;
+                // the names with the prefix are contiguous from its rank, so the
+                // window is one seek then a walk that stops at the first name without it
+                var taken: usize = 0;
+                var repos_iter = try index.iteratorFromIndex(try index.rank(prefix) +| repos_start);
+                while (try repos_iter.next()) |cursor| {
+                    const pair = try cursor.readKeyValuePair();
+                    const repo_name = try pair.key_cursor.readBytesAlloc(arena.allocator(), null);
+                    if (!std.mem.startsWith(u8, repo_name, prefix)) break;
+                    if (taken == page_size) {
+                        repos_next_start = repos_start + page_size;
+                        break;
+                    }
+                    taken += 1;
+                    var event_id: [evt.event_id_size]u8 = undefined;
+                    _ = try pair.value_cursor.readBytes(&event_id);
+                    const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &event_id)) orelse continue;
+                    // unreadable repos leave their window short rather than shifting the others
+                    if (evt.Repo.roleOf(repo_event, session.userId()) == .none) continue;
+                    try repos.append(arena.allocator(), repo_event);
                 }
-                taken += 1;
-                var event_id: [evt.event_id_size]u8 = undefined;
-                _ = try pair.value_cursor.readBytes(&event_id);
-                const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &event_id)) orelse continue;
-                // unreadable repos leave their window short rather than shifting the others
-                if (evt.Repo.roleOf(repo_event, session.userId()) == .none) continue;
-                try repos.append(arena.allocator(), repo_event);
+            }
+        } else {
+            // unsearched, the newest activity comes first. its index sits beside the events.
+            const user_repo = if (user_repo_maybe) |*user_repo| user_repo else unreachable;
+            if (try (try user_repo.core.latestMoment()).getCursor(hash.hashInt(hash_kind, evt.recent_repo_id_set_key))) |recent_cursor| {
+                const recent = try DB.SortedSet(.read_only).init(recent_cursor);
+                const count = try recent.count();
+                const end = @min(repos_start +| page_size, count);
+                var iter = try recent.iteratorFromIndex(repos_start);
+                var i = repos_start;
+                while (i < end) : (i += 1) {
+                    const kv_cursor = (try iter.next()) orelse break;
+                    const repo_id = try evt.readOrderKeyId(DB, kv_cursor);
+                    const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &repo_id)) orelse continue;
+                    if (evt.Repo.roleOf(repo_event, session.userId()) == .none) continue;
+                    try repos.append(arena.allocator(), repo_event);
+                }
+                repos_next_start = if (end < count) end else null;
             }
         }
     }

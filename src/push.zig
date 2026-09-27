@@ -210,6 +210,7 @@ pub fn receivePackAndConsume(
         if (err == error.CancelTransaction) return;
         return err;
     };
+    evt.bumpRepoActivityAt(io, allocator, users_dir, repo.core.work_path);
 
     pch.refreshBranches(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, repo, updates.items.items, &sideband) catch |err| {
         serve_common.logError(io, error_writer, "failed to refresh branch patches: {s}\n", .{@errorName(err)});
