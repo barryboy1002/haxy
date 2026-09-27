@@ -62,7 +62,7 @@ pub const CreateInput = struct {
 };
 
 pub fn create(
-    comptime repo_opts: rp.RepoOpts(.xit),
+    comptime any_opts: rp.AnyRepoOpts(.xit),
     io: std.Io,
     allocator: std.mem.Allocator,
     users_dir: []const u8,
@@ -87,11 +87,28 @@ pub fn create(
         null;
     if (existing != null) return error.InvalidPatchDraft;
 
-    // get the target repo
+    // the fork copies the target's db, so it takes the target's hash kind
     const target_path = try evt.repoPath(allocator, users_dir, &input.repo_user_id, &input.repo_id);
     defer allocator.free(target_path);
-    var target_repo = try rp.Repo(.xit, repo_opts).open(io, allocator, .{ .path = target_path, .require_repo_root = true });
-    defer target_repo.deinit(io, allocator);
+    var any_target = try rp.AnyRepo(.xit, any_opts).open(io, allocator, .{ .path = target_path, .require_repo_root = true });
+    defer any_target.deinit(io, allocator);
+    switch (any_target) {
+        inline else => |*target_repo| try copyTarget(target_repo.self_repo_opts, io, allocator, users_dir, target_repo, &user_repo, fork_path, input),
+    }
+    return fork_path;
+}
+
+// copy the target into a new fork at `fork_path` and record its patch and fork events
+fn copyTarget(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    target_repo: *rp.Repo(.xit, repo_opts),
+    user_repo: *rp.Repo(.xit, evt.user_repo_opts),
+    fork_path: []const u8,
+    input: CreateInput,
+) !void {
     if ((try target_repo.readRef(io, .{ .kind = .head, .name = input.target_branch })) == null) return error.TargetNotFound;
 
     // create the fork repo dir
@@ -217,7 +234,7 @@ pub fn create(
     }});
 
     // create the fork event
-    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, user_repo, evt.events_ref, &.{.{
         .id = input.id,
         .timestamp = input.timestamp,
         .author = input.author,
@@ -226,8 +243,6 @@ pub fn create(
             .repo_user_id = &input.repo_user_id,
         } },
     }});
-
-    return fork_path;
 }
 
 // tombstone first so a missing fork never remains visible

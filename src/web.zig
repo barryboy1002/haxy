@@ -140,7 +140,7 @@ fn handleRequest(
     if (method == .POST) {
         switch (host) {
             .server => |server| {
-                const PostRoute = enum { login, logout, ansi, new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
+                const PostRoute = enum { login, logout, ansi, @"new-repo", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
                 inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
                     const suffix = "/" ++ field.name;
                     if (std.mem.endsWith(u8, path, suffix)) {
@@ -149,6 +149,7 @@ fn handleRequest(
                             .login => handleLogin(io, request, allocator, base, server.admin_repo_path, server.session_store),
                             .logout => handleLogout(request, base, server.session_store),
                             .ansi => handleAnsi(io, request, allocator, base, server.admin_repo_path, server.users_dir, server.session_store),
+                            .@"new-repo" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
                             .new => handleNew(io, request, allocator, base, host),
                             .edit => handleEdit(io, request, allocator, base, host),
                             .remove => handleRemove(io, request, allocator, base, host),
@@ -633,6 +634,59 @@ fn handleNew(
     });
 }
 
+// create a repo for the logged-in user and redirect to it. a failure goes
+// back to the new-repo page that posted the form.
+fn handleRepoNew(
+    io: std.Io,
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    form_location: []const u8,
+    admin_repo_path: []const u8,
+    users_dir: []const u8,
+    session_store: SessionStore,
+) !void {
+    const user_id = requestUserId(request, session_store) orelse return respondLoginRequired(request);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const user = blk: {
+        var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path });
+        defer admin_repo.deinit(io, allocator);
+        const moment = try evt.currentMoment(evt.admin_repo_opts, &admin_repo);
+        break :blk (try ui.activeUser(moment, &arena, user_id)) orelse return respondLoginRequired(request);
+    };
+
+    const body = try readFormBody(request, allocator);
+    defer allocator.free(body);
+    const name = (try parseFormField(allocator, body, "name")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(name);
+    const description = (try parseFormField(allocator, body, "description")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(description);
+    const hash_value = (try parseFormField(allocator, body, "hash")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(hash_value);
+    const access_value = (try parseFormField(allocator, body, "access")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(access_value);
+    const bad_request: std.http.Server.Request.RespondOptions = .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }} };
+    const hash_kind = std.meta.stringToEnum(hash.HashKind, hash_value) orelse return request.respond("invalid hash", bad_request);
+    const access = std.meta.stringToEnum(evt.Repo.Access, access_value) orelse return request.respond("invalid access", bad_request);
+
+    _ = evt.createRepo(io, allocator, users_dir, &user_id, .{ .name = user.event.name, .email = user.event.email }, name, description, access, hash_kind) catch |err| {
+        const failure = ui.Session.FormFeedback.RepoFailure.fromError(err) orelse return err;
+        return respondFormFailure(request, allocator, session_store, form_location, .{ .repo = .{ .failure = failure, .fields = .{
+            .name = name,
+            .description = description,
+            .hash = hash_kind,
+            .access = access,
+        } } });
+    };
+
+    const location = try std.fmt.allocPrint(allocator, "/repo/{s}/{s}", .{ user.event.name, name });
+    defer allocator.free(location);
+    try request.respond("", .{
+        .status = .see_other,
+        .extra_headers = &.{.{ .name = "location", .value = location }},
+    });
+}
+
 // create a thread in the repo the form's page names and redirect to it.
 fn handleThreadNew(
     io: std.Io,
@@ -818,18 +872,20 @@ fn handlePatchPublish(
     const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondRemoveNotFound(request);
     defer request_repo.deinit(allocator);
     const repo_id = evt.parseEventId(std.fs.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
-    var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, request_repo.source.localInitOpts());
+    var target_repo = try rp.AnyRepo(.xit, .{}).open(io, allocator, request_repo.source.localInitOpts());
     defer target_repo.deinit(io, allocator);
     var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
     defer admin_repo.deinit(io, allocator);
     const id = std.fmt.bytesToHex(parts.thread_id, .lower);
-    try pch.publish(.{}, io, allocator, server.users_dir, &admin_repo, &target_repo, .{
-        .id = id,
-        .user_id = user_id,
-        .repo_id = repo_id,
-        .author = author,
-        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
-    });
+    switch (target_repo) {
+        inline else => |*repo| try pch.publish(repo.self_repo_opts, io, allocator, server.users_dir, &admin_repo, repo, .{
+            .id = id,
+            .user_id = user_id,
+            .repo_id = repo_id,
+            .author = author,
+            .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        }),
+    }
     try request.respond("", .{
         .status = .see_other,
         .extra_headers = &.{.{ .name = "location", .value = base }},
@@ -856,16 +912,19 @@ fn handlePatchMerge(
 
     const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondRemoveNotFound(request);
     defer request_repo.deinit(allocator);
-    var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, request_repo.source.localInitOpts());
+    var target_repo = try rp.AnyRepo(.xit, .{}).open(io, allocator, request_repo.source.localInitOpts());
     defer target_repo.deinit(io, allocator);
 
     const id = std.fmt.bytesToHex(parts.thread_id, .lower);
-    pch.mergeAndRemoveFork(.{}, io, allocator, server.users_dir, &target_repo, .{
-        .id = id,
-        .revision = revision,
-        .author = author,
-        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
-    }) catch |err| switch (err) {
+    const merged = switch (target_repo) {
+        inline else => |*repo| pch.mergeAndRemoveFork(repo.self_repo_opts, io, allocator, server.users_dir, repo, .{
+            .id = id,
+            .revision = revision,
+            .author = author,
+            .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        }),
+    };
+    merged catch |err| switch (err) {
         error.MergeConflict => return request.respond("merge conflict", .{
             .status = .conflict,
             .keep_alive = false,

@@ -78,8 +78,14 @@ pub const View = struct {
                 try stack.children.put(allocator, users_view.getFocus().id, .{ .home_users = users_view });
             }
 
-            // the header has no settings tab without a login, so keep the
-            // stack's children 1:1 with the tabs by skipping the view too
+            // the header has no new repo or settings tab without a login, so keep the
+            // stack's children 1:1 with the tabs by skipping those views too
+            if (session.data.user_id != null) {
+                var new_repo_view = try ui.NewRepo.View.init(allocator, session, .home_new_repo);
+                errdefer new_repo_view.deinit(allocator);
+                try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
+            }
+
             if (session.data.user_id != null) {
                 var settings_view = try Settings.View.init(allocator, session);
                 errdefer settings_view.deinit(allocator);

@@ -15,6 +15,7 @@ const patch_tab_label = "patch";
 const diff_tab_label = "diff";
 const files_tab_label = "files";
 const settings_tab_label = "settings";
+const new_repo_tab_label = "new repo";
 
 pub const AuthTab = @import("../AuthTab.zig");
 
@@ -121,7 +122,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes settings + auth to the right.
+        // spacer pushes settings, new repo and auth to the right.
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -130,8 +131,21 @@ pub const View = struct {
 
         const settings_route = ui.RoutablePage.forkSettingsRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const settings_link = try ui.inPageTabLink(session, settings_route, current_tag == .fork_settings);
+        const new_repo_route = ui.RoutablePage.forkNewRepoRoute(fork_identity, data.id) orelse return error.RouteTooLong;
+        const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .fork_new_repo);
         const auth_route = ui.RoutablePage.forkAuthRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const auth_link = try ui.inPageTabLink(session, auth_route, current_tag == .fork_auth);
+
+        // repos are created for the logged-in user.
+        if (session.data.user_id != null) {
+            var new_repo = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer new_repo.deinit(allocator);
+            new_repo.getFocus().mode = .all;
+            new_repo.getFocus().kind = .{ .custom = new_repo_link };
+            try tab_ids.put(allocator, new_repo.getFocus().id, {});
+            if (current_tag == .fork_new_repo) selected_tab = new_repo.getFocus().id;
+            try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = new_repo_tab_label.len + 2, .height = null } });
+        }
 
         // settings are account preferences, so they require a login.
         if (session.data.user_id != null) {

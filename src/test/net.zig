@@ -548,7 +548,7 @@ fn testPushFork(
         @memcpy(&user_id, target.repo.event.user_id);
         var user_repo = (try evt.openUserRepo(io, allocator, users_dir, &user_id)) orelse return error.NotFound;
         defer user_repo.deinit(io, allocator);
-        break :blk try fork.create(repo_opts, io, allocator, users_dir, .{
+        break :blk try fork.create(.{}, io, allocator, users_dir, .{
             .id = fork_id_hex,
             .user_id = user_id,
             .repo_id = repo_id,

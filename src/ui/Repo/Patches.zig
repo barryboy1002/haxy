@@ -385,15 +385,17 @@ pub fn publishDraft(data: *const Self, session: *ui.Session, allocator: std.mem.
     const patch_id = evt.parseEventId(id) catch return error.NotFound;
 
     const id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, repo_source.localInitOpts());
+    var target_repo = try rp.AnyRepo(.xit, .{}).open(io, allocator, repo_source.localInitOpts());
     defer target_repo.deinit(io, allocator);
-    try pch.publish(.{}, io, allocator, users_dir, admin_repo, &target_repo, .{
-        .id = id_hex,
-        .user_id = user_id,
-        .repo_id = repo_id,
-        .author = author,
-        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
-    });
+    switch (target_repo) {
+        inline else => |*repo| try pch.publish(repo.self_repo_opts, io, allocator, users_dir, admin_repo, repo, .{
+            .id = id_hex,
+            .user_id = user_id,
+            .repo_id = repo_id,
+            .author = author,
+            .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        }),
+    }
 }
 
 pub fn mergePatch(data: *const Self, session: *ui.Session, allocator: std.mem.Allocator, author: evt.CommitAuthor, id: []const u8, revision: evt.Patch.MergeRevision) !void {
@@ -404,14 +406,16 @@ pub fn mergePatch(data: *const Self, session: *ui.Session, allocator: std.mem.Al
     const patch_id = evt.parseEventId(id) catch return error.NotFound;
 
     const id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    var target_repo = try rp.Repo(.xit, .{}).open(io, allocator, repo_source.localInitOpts());
+    var target_repo = try rp.AnyRepo(.xit, .{}).open(io, allocator, repo_source.localInitOpts());
     defer target_repo.deinit(io, allocator);
-    try pch.mergeAndRemoveFork(.{}, io, allocator, users_dir, &target_repo, .{
-        .id = id_hex,
-        .revision = revision,
-        .author = author,
-        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
-    });
+    switch (target_repo) {
+        inline else => |*repo| try pch.mergeAndRemoveFork(repo.self_repo_opts, io, allocator, users_dir, repo, .{
+            .id = id_hex,
+            .revision = revision,
+            .author = author,
+            .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        }),
+    }
 }
 
 pub fn editDraft(
@@ -862,7 +866,8 @@ fn loadDraftWindow(
             break;
         }
         const path = try fork.forkPath(aa, users_dir, &user_id, &id);
-        var fork_repo = rp.Repo(.xit, .{}).open(io, arena.child_allocator, .{ .path = path, .require_repo_root = true }) catch continue;
+        // a fork shares its target's hash kind
+        var fork_repo = rp.Repo(.xit, .{ .hash = repo_opts.hash }).open(io, arena.child_allocator, .{ .path = path, .require_repo_root = true }) catch continue;
         defer fork_repo.deinit(io, arena.child_allocator);
         const entry = (try loadDraftEntry(repo_kind, repo_opts, arena, io, admin_moment, &fork_repo, target_repo, id, user_name)) orelse continue;
         try items.append(aa, entry);
@@ -881,7 +886,7 @@ pub fn loadDraftEntry(
     arena: *std.heap.ArenaAllocator,
     io: std.Io,
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
-    fork_repo: *rp.Repo(.xit, .{}),
+    fork_repo: *rp.Repo(.xit, .{ .hash = repo_opts.hash }),
     target_repo: *rp.Repo(repo_kind, repo_opts),
     id: [evt.event_id_size]u8,
     forker: []const u8,
@@ -889,12 +894,12 @@ pub fn loadDraftEntry(
     const aa = arena.allocator();
     const id_hex = std.fmt.bytesToHex(id, .lower);
     const fork_oid = (try fork_repo.readRef(io, fork.ref)) orelse return null;
-    const moment = evt.currentMoment(.{}, fork_repo) catch return null;
-    const patch = (try evt.Patch.readById(evt.EventDB(.sha1), .sha1, moment, arena, &id)) orelse return null;
+    const moment = evt.currentMoment(.{ .hash = repo_opts.hash }, fork_repo) catch return null;
+    const patch = (try evt.Patch.readById(evt.EventDB(repo_opts.hash), repo_opts.hash, moment, arena, &id)) orelse return null;
     const target_branch = patch.event.target_branch;
     const target_oid = try target_repo.readRef(io, .{ .kind = .head, .name = target_branch });
     const commit_count: ?u64 = blk: {
-        const newest = evt.PatchRev.readNewest(evt.EventDB(.sha1), .sha1, moment, arena) catch break :blk null;
+        const newest = evt.PatchRev.readNewest(evt.EventDB(repo_opts.hash), repo_opts.hash, moment, arena) catch break :blk null;
         break :blk if (newest) |revision| revision.record.commit_count else 0;
     };
     return .{

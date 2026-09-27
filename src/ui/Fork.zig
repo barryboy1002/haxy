@@ -59,110 +59,116 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     const target_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ owner.event.name, target_record.event.name });
     const id_hex = std.fmt.bytesToHex(id, .lower);
     const fork_path = try fork.forkPath(aa, users_dir, &forker_id, &id);
-    var fork_repo = try rp.Repo(.xit, .{}).open(io, arena.child_allocator, .{ .path = fork_path, .require_repo_root = true });
-    defer fork_repo.deinit(io, arena.child_allocator);
-    const fork_moment = try evt.currentMoment(.{}, &fork_repo);
-    const retained_patch = (try evt.Patch.readById(evt.EventDB(.sha1), .sha1, fork_moment, arena, &id)) orelse return error.NotFound;
-    const fork_oid = (try fork_repo.readRef(io, fork.ref)) orelse return error.NotFound;
-    const newest_revision = try evt.PatchRev.readNewest(evt.EventDB(.sha1), .sha1, fork_moment, arena);
-    var commits_base_oid = fork_oid;
-    if (newest_revision) |revision| {
-        if (revision.record.event.base_oid.len != commits_base_oid.len) return error.NotFound;
-        @memcpy(&commits_base_oid, revision.record.event.base_oid);
-    }
+    // a fork shares its target's hash kind
+    var any_fork = try rp.AnyRepo(.xit, .{}).open(io, arena.child_allocator, .{ .path = fork_path, .require_repo_root = true });
+    defer any_fork.deinit(io, arena.child_allocator);
+    switch (any_fork) {
+        inline else => |*fork_repo| {
+            const repo_opts = fork_repo.self_repo_opts;
+            const fork_moment = try evt.currentMoment(repo_opts, fork_repo);
+            const retained_patch = (try evt.Patch.readById(evt.EventDB(repo_opts.hash), repo_opts.hash, fork_moment, arena, &id)) orelse return error.NotFound;
+            const fork_oid = (try fork_repo.readRef(io, fork.ref)) orelse return error.NotFound;
+            const newest_revision = try evt.PatchRev.readNewest(evt.EventDB(repo_opts.hash), repo_opts.hash, fork_moment, arena);
+            var commits_base_oid = fork_oid;
+            if (newest_revision) |revision| {
+                if (revision.record.event.base_oid.len != commits_base_oid.len) return error.NotFound;
+                @memcpy(&commits_base_oid, revision.record.event.base_oid);
+            }
 
-    const target_path = try evt.repoPath(aa, users_dir, owner_id, &target_id);
-    const target_source = ui.RepoSource{ .path = target_path, .repo_kind = .xit };
-    var target_repo_maybe: ?rp.Repo(.xit, .{}) = if (!target_record.removed)
-        rp.Repo(.xit, .{}).open(io, arena.child_allocator, target_source.localInitOpts()) catch null
-    else
-        null;
-    defer if (target_repo_maybe) |*target_repo| target_repo.deinit(io, arena.child_allocator);
+            const target_path = try evt.repoPath(aa, users_dir, owner_id, &target_id);
+            const target_source = ui.RepoSource{ .path = target_path, .repo_kind = .xit };
+            var target_repo_maybe: ?rp.Repo(.xit, repo_opts) = if (!target_record.removed)
+                rp.Repo(.xit, repo_opts).open(io, arena.child_allocator, target_source.localInitOpts()) catch null
+            else
+                null;
+            defer if (target_repo_maybe) |*target_repo| target_repo.deinit(io, arena.child_allocator);
 
-    const target_branch = retained_patch.event.target_branch;
+            const target_branch = retained_patch.event.target_branch;
 
-    const retained_entry = Patches.PatchWithId{
-        .id = try aa.dupe(u8, &id_hex),
-        .record = retained_patch,
-        .author = try ui.Author.initFromEmail(haxy_moment, arena, retained_patch.author_email),
-        .draft = fork_record.event.stage == .draft,
-        .revision_oid = try aa.dupe(u8, &fork_oid),
-        .fork_exists = true,
-        .forker = identity.owner,
-    };
-    var patch_data = try Patches.detailResult(aa, target_identity, retained_entry);
-
-    if (target_repo_maybe) |*target_repo| switch (fork_record.event.stage) {
-        .draft => if (try Patches.loadDraftEntry(.xit, .{}, arena, io, haxy_moment, &fork_repo, target_repo, id, identity.owner)) |entry| {
-            patch_data = try Patches.detailResult(aa, target_identity, entry);
-            patch_data.repo_source = target_source;
-        },
-        .publish => {
-            patch_data = Patches.init(.xit, .{}, arena, target_repo, io, haxy_moment, session, target_id, target_identity, target_branch, "", "", &id_hex, "", 0, "", .open) catch |err| switch (err) {
-                error.NotFound => patch_data,
-                else => |other| return other,
+            const retained_entry = Patches.PatchWithId{
+                .id = try aa.dupe(u8, &id_hex),
+                .record = retained_patch,
+                .author = try ui.Author.initFromEmail(haxy_moment, arena, retained_patch.author_email),
+                .draft = fork_record.event.stage == .draft,
+                .revision_oid = try aa.dupe(u8, &fork_oid),
+                .fork_exists = true,
+                .forker = identity.owner,
             };
-            if (patch_data.selectedThread() != null) patch_data.repo_source = target_source;
-        },
-    };
-    patch_data.repo_id = target_id;
+            var patch_data = try Patches.detailResult(aa, target_identity, retained_entry);
 
-    const requested_ref: ?ui.RoutablePage.RefOrOid = switch (route) {
-        .fork_files => |f| if (f.oid.len == 0) null else .object,
-        .fork_commits => |c| if (c.oid.len == 0) null else .object,
-        else => null,
-    };
-    const requested_value: []const u8 = switch (route) {
-        .fork_files => |*f| f.oid.slice(),
-        .fork_commits => |*c| c.oid.slice(),
-        else => "",
-    };
-    const files_path: []const u8 = switch (route) {
-        .fork_files => |*f| f.path.slice(),
-        else => "",
-    };
-    const files_line: usize = switch (route) {
-        .fork_files => |f| f.line,
-        else => 0,
-    };
-    const files_find: []const u8 = switch (route) {
-        .fork_files => |*f| f.find.slice(),
-        else => "",
-    };
-    const commits_content: ui.RoutablePage.RepoCommitsRoute.Content = switch (route) {
-        .fork_commits => |c| c.content,
-        else => .{ .diff = .{} },
-    };
-    const location = ui.RoutablePage.RepoLocation{ .fork = .{
-        .identity = identity.identity,
-        .id = &id_hex,
-    } };
-    const files = try Files.init(.xit, .{}, arena, &fork_repo, io, arena.child_allocator, location, requested_ref, requested_value, files_path, files_line, files_find);
-    var commits = try Commits.init(.xit, .{}, arena, &fork_repo, io, arena.child_allocator, haxy_moment, location, requested_ref, requested_value, commits_content, &commits_base_oid, "", "");
-    commits.commit_count = if (newest_revision) |revision| revision.record.commit_count else 0;
-    const diff_start: usize = switch (route) {
-        .fork_diff => |d| d.start,
-        else => 0,
-    };
-    const diff_path = switch (route) {
-        .fork_diff => |*d| try aa.dupe(u8, d.path.slice()),
-        else => "",
-    };
+            if (target_repo_maybe) |*target_repo| switch (fork_record.event.stage) {
+                .draft => if (try Patches.loadDraftEntry(.xit, repo_opts, arena, io, haxy_moment, fork_repo, target_repo, id, identity.owner)) |entry| {
+                    patch_data = try Patches.detailResult(aa, target_identity, entry);
+                    patch_data.repo_source = target_source;
+                },
+                .publish => {
+                    patch_data = Patches.init(.xit, repo_opts, arena, target_repo, io, haxy_moment, session, target_id, target_identity, target_branch, "", "", &id_hex, "", 0, "", .open) catch |err| switch (err) {
+                        error.NotFound => patch_data,
+                        else => |other| return other,
+                    };
+                    if (patch_data.selectedThread() != null) patch_data.repo_source = target_source;
+                },
+            };
+            patch_data.repo_id = target_id;
 
-    return .{
-        .header = try Header.init(arena, target_record.event.name, identity.owner, &id_hex, requested_value),
-        .files = files,
-        .commits = commits,
-        .patch = patch_data,
-        .diff = .{
-            .route = .{ .fork = .{ .identity = try aa.dupe(u8, identity.identity), .id = try aa.dupe(u8, &id_hex) } },
-            .path = diff_path,
-            .window = try Diff.render(.xit, .{}, io, arena.child_allocator, aa, &fork_repo, &commits_base_oid, fork_oid, diff_start, diff_path),
+            const requested_ref: ?ui.RoutablePage.RefOrOid = switch (route) {
+                .fork_files => |f| if (f.oid.len == 0) null else .object,
+                .fork_commits => |c| if (c.oid.len == 0) null else .object,
+                else => null,
+            };
+            const requested_value: []const u8 = switch (route) {
+                .fork_files => |*f| f.oid.slice(),
+                .fork_commits => |*c| c.oid.slice(),
+                else => "",
+            };
+            const files_path: []const u8 = switch (route) {
+                .fork_files => |*f| f.path.slice(),
+                else => "",
+            };
+            const files_line: usize = switch (route) {
+                .fork_files => |f| f.line,
+                else => 0,
+            };
+            const files_find: []const u8 = switch (route) {
+                .fork_files => |*f| f.find.slice(),
+                else => "",
+            };
+            const commits_content: ui.RoutablePage.RepoCommitsRoute.Content = switch (route) {
+                .fork_commits => |c| c.content,
+                else => .{ .diff = .{} },
+            };
+            const location = ui.RoutablePage.RepoLocation{ .fork = .{
+                .identity = identity.identity,
+                .id = &id_hex,
+            } };
+            const files = try Files.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, location, requested_ref, requested_value, files_path, files_line, files_find);
+            var commits = try Commits.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, haxy_moment, location, requested_ref, requested_value, commits_content, &commits_base_oid, "", "");
+            commits.commit_count = if (newest_revision) |revision| revision.record.commit_count else 0;
+            const diff_start: usize = switch (route) {
+                .fork_diff => |d| d.start,
+                else => 0,
+            };
+            const diff_path = switch (route) {
+                .fork_diff => |*d| try aa.dupe(u8, d.path.slice()),
+                else => "",
+            };
+
+            return .{
+                .header = try Header.init(arena, target_record.event.name, identity.owner, &id_hex, requested_value),
+                .files = files,
+                .commits = commits,
+                .patch = patch_data,
+                .diff = .{
+                    .route = .{ .fork = .{ .identity = try aa.dupe(u8, identity.identity), .id = try aa.dupe(u8, &id_hex) } },
+                    .path = diff_path,
+                    .window = try Diff.render(.xit, repo_opts, io, arena.child_allocator, aa, fork_repo, &commits_base_oid, fork_oid, diff_start, diff_path),
+                },
+                .settings = Settings.init(),
+                .auth = Auth.init(),
+                .quit = Quit.init(),
+            };
         },
-        .settings = Settings.init(),
-        .auth = Auth.init(),
-        .quit = Quit.init(),
-    };
+    }
 }
 
 pub const View = struct {
@@ -200,6 +206,13 @@ pub const View = struct {
                 var commits = try Commits.View.init(allocator, &data.commits, session);
                 errdefer commits.deinit(allocator);
                 try stack.children.put(allocator, commits.getFocus().id, .{ .repo_commits = commits });
+            }
+            if (session.data.user_id != null) {
+                const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.forker_name, data.header.name });
+                const route = ui.RoutablePage.forkNewRepoRoute(identity, data.header.id) orelse return error.RouteTooLong;
+                var new_repo = try ui.NewRepo.View.init(allocator, session, route);
+                errdefer new_repo.deinit(allocator);
+                try stack.children.put(allocator, new_repo.getFocus().id, .{ .new_repo = new_repo });
             }
             if (session.data.user_id != null) {
                 var settings = try Settings.View.init(allocator, session);

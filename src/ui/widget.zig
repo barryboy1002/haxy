@@ -69,6 +69,7 @@ pub const Widget = union(enum) {
     home_users: ui.Home.Users.View,
     auth_tab: ui.Home.Header.AuthTab.View,
     home_settings: ui.Home.Settings.View,
+    new_repo: ui.NewRepo.View,
     home_auth: ui.Home.Auth.View,
     auth_login: ui.Home.Auth.Login.View,
     auth_logout: ui.Home.Auth.Logout.View,
@@ -113,7 +114,7 @@ pub const Widget = union(enum) {
     // whether moving up should return to the page header
     pub fn atTop(self: *Widget, root_focus: *Focus) bool {
         return switch (self.*) {
-            inline .home_about, .home_users, .user_repos, .flow_box_scroll, .home_settings, .auth_login, .auth_logout, .quit, .repo_files, .repo_commits, .diff_view, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo => |*view| view.atTop(),
+            inline .home_about, .home_users, .user_repos, .flow_box_scroll, .home_settings, .new_repo, .auth_login, .auth_logout, .quit, .repo_files, .repo_commits, .diff_view, .repo_refs, .repo_issues, .repo_patches, .repo_discussions, .repo_events, .repo_undo => |*view| view.atTop(),
             inline .home_auth, .repo_patch_detail => |*view| view.atTop(root_focus),
             else => false,
         };
@@ -947,6 +948,7 @@ pub const SearchBox = struct {
 // focused option, so a click selects on the web too.
 pub const Radio = struct {
     box: wgt.Box(Widget),
+    name: []const u8,
     values: []const []const u8,
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, name: []const u8, values: []const []const u8, initial: []const u8) !Radio {
@@ -960,7 +962,7 @@ pub const Radio = struct {
             if (std.mem.eql(u8, value, initial)) box.getFocus().child_id = option.getFocus().id;
             try box.children.put(allocator, option.getFocus().id, .{ .widget = .{ .text_box = option }, .rect = null, .min_size = .{ .width = try xitui.width.displayWidth(value) + 2, .height = 3 } });
         }
-        return .{ .box = box, .values = values };
+        return .{ .box = box, .name = name, .values = values };
     }
 
     pub fn deinit(self: *Radio, allocator: std.mem.Allocator) void {

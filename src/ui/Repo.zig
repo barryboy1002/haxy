@@ -452,9 +452,17 @@ pub const View = struct {
                 try stack.children.put(allocator, undo_view.getFocus().id, .{ .repo_undo = undo_view });
             }
 
-            // the header only shows the settings tab with a login and the auth
-            // tab outside local mode, so keep the stack's children 1:1 with
+            // the header only shows the new repo and settings tabs with a login
+            // and the auth tab outside local mode, so keep the stack's children 1:1 with
             // the tabs by skipping the same views.
+            if (session.data.user_id != null) {
+                const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.owner_name, data.header.name });
+                const route = ui.RoutablePage{ .repo_new_repo = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(identity) orelse return error.RouteTooLong };
+                var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);
+                errdefer new_repo_view.deinit(allocator);
+                try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
+            }
+
             if (session.data.user_id != null) {
                 var settings_view = try Settings.View.init(allocator, session);
                 errdefer settings_view.deinit(allocator);

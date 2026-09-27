@@ -365,7 +365,7 @@ test "fork query and removal lifecycle" {
     try target.add(io, allocator, &.{"README"});
     _ = try target.commit(io, allocator, .{ .message = "initial" });
 
-    const draft_path = try fork.create(fork_repo_opts, io, allocator, users_dir, .{
+    const draft_path = try fork.create(.{ .is_test = true }, io, allocator, users_dir, .{
         .target_branch = "master",
         .id = fork_id_hex,
         .user_id = user_id,

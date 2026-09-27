@@ -19,6 +19,7 @@ const patches_tab_label = "patches";
 const discuss_tab_label = "discuss";
 const events_tab_label = "events";
 const settings_tab_label = "settings";
+const new_repo_tab_label = "new repo";
 
 pub const AuthTab = @import("./../AuthTab.zig");
 
@@ -168,6 +169,8 @@ pub const View = struct {
         const events_link = try ui.inPageTabLink(session, events_route, current_tag == .repo_events);
         const settings_route = ui.RoutablePage{ .repo_settings = Array.from(identity) orelse return error.RouteTooLong };
         const settings_link = try ui.inPageTabLink(session, settings_route, current_tag == .repo_settings);
+        const new_repo_route = ui.RoutablePage{ .repo_new_repo = Array.from(identity) orelse return error.RouteTooLong };
+        const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .repo_new_repo);
         const auth_route = ui.RoutablePage{ .repo_auth = Array.from(identity) orelse return error.RouteTooLong };
         const auth_link = try ui.inPageTabLink(session, auth_route, current_tag == .repo_auth);
 
@@ -295,7 +298,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes settings + auth to the right
+        // spacer pushes settings, new repo and auth to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -304,6 +307,21 @@ pub const View = struct {
                 .rect = null,
                 .min_size = null,
                 .flex = .grow,
+            });
+        }
+
+        // new repo tab. repos are created for the logged-in user.
+        if (session.data.user_id != null) {
+            var text_box = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = new_repo_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (current_tag == .repo_new_repo) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = new_repo_tab_label.len + 2, .height = null },
             });
         }
 

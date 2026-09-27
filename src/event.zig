@@ -1862,25 +1862,78 @@ pub fn resolveOrCreateRepo(
 
     var id_bytes: [event_id_size]u8 = undefined;
     io.random(&id_bytes);
-    const event_id_hex = std.fmt.bytesToHex(id_bytes, .lower);
+    try writeRepoEvent(io, allocator, users_dir, &user_repo, &owner_user_id, .{ .name = owner.event.name, .email = owner.event.email }, &id_bytes, repo_name, "", create_options.read_access);
+    return .{ .owner_id = owner_user_id, .repo_id = id_bytes };
+}
 
+// create a bare repo with `hash_kind` and register it in its owner's user repo
+pub fn createRepo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    owner_id: *const [event_id_size]u8,
+    owner: CommitAuthor,
+    name: []const u8,
+    description: []const u8,
+    read_access: Repo.Access,
+    hash_kind: hash.HashKind,
+) !RepoLocation {
+    try Repo.validateName(name);
+    var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return error.NotFound;
+    defer user_repo.deinit(io, allocator);
+    if (try userMoment(&user_repo)) |moment| {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        if (try Repo.readByName(UserDB, user_repo_opts.hash, moment, &arena, name) != null) return error.NameTaken;
+    }
+
+    var id_bytes: [event_id_size]u8 = undefined;
+    io.random(&id_bytes);
+
+    // the directory comes first so a listed repo always has one
+    {
+        const path = try repoPath(allocator, users_dir, owner_id, &id_bytes);
+        defer allocator.free(path);
+        switch (hash_kind) {
+            inline else => |kind| {
+                var repo = try rp.Repo(.xit, .{ .hash = kind }).init(io, allocator, .{ .path = path, .bare = true });
+                defer repo.deinit(io, allocator);
+            },
+        }
+    }
+
+    try writeRepoEvent(io, allocator, users_dir, &user_repo, owner_id, owner, &id_bytes, name, description, read_access);
+    return .{ .owner_id = owner_id.*, .repo_id = id_bytes };
+}
+
+// consume a new repo's event into its owner's user repo and mark it active
+fn writeRepoEvent(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    user_repo: *rp.Repo(.xit, user_repo_opts),
+    owner_id: *const [event_id_size]u8,
+    owner: CommitAuthor,
+    id_bytes: *const [event_id_size]u8,
+    name: []const u8,
+    description: []const u8,
+    read_access: Repo.Access,
+) !void {
     const timestamp: u64 = @intCast(std.Io.Timestamp.now(io, .real).toSeconds());
-    try consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
-        .id = event_id_hex,
+    try consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, user_repo_opts, io, allocator, user_repo, events_ref, &[_]EventWithId{.{
+        .id = std.fmt.bytesToHex(id_bytes.*, .lower),
         .timestamp = timestamp,
-        .author = .{ .name = owner.event.name, .email = owner.event.email },
+        .author = owner,
         .event = .{ .repo = .{
-            .user_id = &owner_user_id,
-            .name = repo_name,
-            .description = "",
-            .read_access = create_options.read_access,
+            .user_id = owner_id,
+            .name = name,
+            .description = description,
+            .read_access = read_access,
         } },
     }});
-    bumpRepoActivity(io, allocator, users_dir, &owner_user_id, &id_bytes, timestamp) catch |err| {
+    bumpRepoActivity(io, allocator, users_dir, owner_id, id_bytes, timestamp) catch |err| {
         std.log.warn("failed to record repo activity: {s}", .{@errorName(err)});
     };
-
-    return .{ .owner_id = owner_user_id, .repo_id = id_bytes };
 }
 
 //

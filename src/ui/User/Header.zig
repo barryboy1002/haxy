@@ -12,6 +12,7 @@ const Focus = xitui.focus.Focus;
 const repos_tab_label = "repos";
 const forks_tab_label = "forks";
 const settings_tab_label = "settings";
+const new_repo_tab_label = "new repo";
 
 pub const AuthTab = @import("./../AuthTab.zig");
 
@@ -103,12 +104,14 @@ pub const View = struct {
         const repos_link = if (current_tag == .user_repos) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}", .{data.name});
         const forks_link = if (current_tag == .user_forks) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/forks", .{data.name});
         const settings_link = if (current_tag == .user_settings) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/settings", .{data.name});
+        const new_repo_link = if (current_tag == .user_new_repo) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/new-repo", .{data.name});
         const auth_link = if (current_tag == .user_auth) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/auth", .{data.name});
 
         // the tab matching the current page is focused initially; matching by
         // link (rather than position) keeps this robust to tab changes.
         const selected_link: []const u8 = switch (current_page) {
             .user_settings => settings_link,
+            .user_new_repo => new_repo_link,
             .user_auth => auth_link,
             .user_forks => forks_link,
             else => repos_link,
@@ -145,7 +148,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes settings + auth to the right
+        // spacer pushes settings, new repo and auth to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -154,6 +157,21 @@ pub const View = struct {
                 .rect = null,
                 .min_size = null,
                 .flex = .grow,
+            });
+        }
+
+        // new repo tab. repos are created for the logged-in user.
+        if (session.data.user_id != null) {
+            var text_box = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = new_repo_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (std.mem.eql(u8, new_repo_link, selected_link)) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = new_repo_tab_label.len + 2, .height = null },
             });
         }
 

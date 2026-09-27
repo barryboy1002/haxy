@@ -142,12 +142,15 @@ pub fn init(
 
                 var title: []const u8 = "(unavailable)";
                 const path = try fork.forkPath(arena.allocator(), users_dir, &user_id, &fork_id);
-                if (rp.Repo(.xit, .{}).open(io, gpa, .{ .path = path, .require_repo_root = true })) |opened| {
-                    var fork_repo = opened;
-                    defer fork_repo.deinit(io, gpa);
-                    if (evt.currentMoment(.{}, &fork_repo)) |fork_moment| {
-                        if (try evt.Patch.readById(evt.EventDB(.sha1), .sha1, fork_moment, arena, &fork_id)) |patch| title = patch.event.title;
-                    } else |_| {}
+                if (rp.AnyRepo(.xit, .{}).open(io, gpa, .{ .path = path, .require_repo_root = true })) |opened| {
+                    var any_fork = opened;
+                    defer any_fork.deinit(io, gpa);
+                    switch (any_fork) {
+                        inline else => |*fork_repo| if (evt.currentMoment(fork_repo.self_repo_opts, fork_repo)) |fork_moment| {
+                            const kind = fork_repo.self_repo_opts.hash;
+                            if (try evt.Patch.readById(evt.EventDB(kind), kind, fork_moment, arena, &fork_id)) |patch| title = patch.event.title;
+                        } else |_| {},
+                    }
                 } else |_| {}
                 try forks.append(arena.allocator(), .{
                     .id = try arena.allocator().dupe(u8, &fork_id_hex),
@@ -230,8 +233,15 @@ pub const View = struct {
                 try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
             }
 
-            // the header has no settings tab without a login, so keep the
-            // stack's children 1:1 with the tabs by skipping the view too
+            // the header has no new repo or settings tab without a login, so keep the
+            // stack's children 1:1 with the tabs by skipping those views too
+            if (session.data.user_id != null) {
+                const route = ui.RoutablePage{ .user_new_repo = ui.RoutablePage.Array(evt.User.name_max_len).from(data.user.name) orelse return error.RouteTooLong };
+                var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);
+                errdefer new_repo_view.deinit(allocator);
+                try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
+            }
+
             if (session.data.user_id != null) {
                 var settings_view = try Settings.View.init(allocator, session);
                 errdefer settings_view.deinit(allocator);

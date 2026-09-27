@@ -882,7 +882,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     const patch_id = evt.EventWithId.randomId(prng.random());
     const patch_id_hex = std.fmt.bytesToHex(patch_id, .lower);
-    const draft_path = try fork.create(repo_opts, io, allocator, users_dir, .{
+    const draft_path = try fork.create(.{ .is_test = true }, io, allocator, users_dir, .{
         .target_branch = "master",
         .id = patch_id_hex,
         .user_id = user_id,
@@ -968,7 +968,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     const unpushed_id = evt.EventWithId.randomId(prng.random());
     const unpushed_id_hex = std.fmt.bytesToHex(unpushed_id, .lower);
-    const unpushed_path = try fork.create(repo_opts, io, allocator, users_dir, .{
+    const unpushed_path = try fork.create(.{ .is_test = true }, io, allocator, users_dir, .{
         .id = unpushed_id_hex,
         .user_id = user_id,
         .repo_id = repo_id,
