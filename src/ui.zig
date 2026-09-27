@@ -2291,6 +2291,14 @@ pub const Session = struct {
         };
     }
 
+    // where this session's event writes go. a server session always has a users dir
+    pub fn eventHost(self: *const Self) evt.Host {
+        return switch (self.data.host_kind) {
+            .local => .local,
+            .server => .{ .server = .{ .users_dir = self.users_dir orelse unreachable } },
+        };
+    }
+
     // queue an action for the host to drain this frame.
     pub fn push(self: *Self, action: Action) !void {
         try self.pending.append(self.arena.allocator(), action);
@@ -2323,7 +2331,7 @@ pub const Session = struct {
             self.apply(action);
             switch (action) {
                 .toggle_ansi => if (self.data.user_id) |user_id| {
-                    try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, repo, user_id);
+                    try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, repo, self.users_dir orelse unreachable, user_id);
                 },
             }
         }

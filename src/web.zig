@@ -47,6 +47,14 @@ pub const Host = union(evt.HostKind) {
         git_ssh_port: ?u16,
         git_ssh_prefix: []const u8,
     },
+
+    // where this host's event writes go
+    pub fn event(self: Host) evt.Host {
+        return switch (self) {
+            .local => .local,
+            .server => |server| .{ .server = .{ .users_dir = server.users_dir } },
+        };
+    }
 };
 
 // an on-disk repo resolved from a request url. server paths are owned.
@@ -140,7 +148,7 @@ fn handleRequest(
                         return switch (@field(PostRoute, field.name)) {
                             .login => handleLogin(io, request, allocator, base, server.admin_repo_path, server.session_store),
                             .logout => handleLogout(request, base, server.session_store),
-                            .ansi => handleAnsi(io, request, allocator, base, server.admin_repo_path, server.session_store),
+                            .ansi => handleAnsi(io, request, allocator, base, server.admin_repo_path, server.users_dir, server.session_store),
                             .new => handleNew(io, request, allocator, base, host),
                             .edit => handleEdit(io, request, allocator, base, host),
                             .remove => handleRemove(io, request, allocator, base, host),
@@ -468,6 +476,7 @@ fn handleAnsi(
     allocator: std.mem.Allocator,
     base: []const u8,
     admin_repo_path: []const u8,
+    users_dir: []const u8,
     session_store: SessionStore,
 ) !void {
     // the toggle re-emits the user's own event, so it takes a logged-in user
@@ -480,7 +489,7 @@ fn handleAnsi(
         var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
         defer repo.deinit(io, allocator);
 
-        try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, &repo, &user_id);
+        try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, &repo, users_dir, &user_id);
     }
 
     // return to the settings tab the toggle came from so the change is visible.
@@ -741,9 +750,9 @@ fn handleThreadNew(
                 switch (any_repo) {
                     inline else => |*repo| {
                         const result = if (kind == .patch)
-                            pch.writeBranchPatch(std.meta.activeTag(host), repo_kind, repo.self_repo_opts, io, allocator, repo, event_id_hex, event.event.patch orelse unreachable, null, author)
+                            pch.writeBranchPatch(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, event_id_hex, event.event.patch orelse unreachable, null, author)
                         else
-                            evt.consume(std.meta.activeTag(host), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, evt.events_ref, &.{event});
+                            evt.consume(host.event(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, evt.events_ref, &.{event});
                         result catch |err| {
                             if (kind != .patch) return err;
                             const failure = ui.Session.FormFeedback.PatchFailure.fromError(err) orelse return err;
@@ -931,7 +940,7 @@ fn handleCommentNew(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| event_id_hex = try evt.Comment.create(std.meta.activeTag(host), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id_hex, &parent_id_hex, body, author),
+                inline else => |*repo| event_id_hex = try evt.Comment.create(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id_hex, &parent_id_hex, body, author),
             }
         },
     }
@@ -1128,7 +1137,7 @@ fn handleAttach(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| _ = evt.Attachment.create(std.meta.activeTag(host), repo_kind, repo.self_repo_opts, io, allocator, repo, &parent_id_hex, blob, author) catch |err| switch (err) {
+                inline else => |*repo| _ = evt.Attachment.create(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, &parent_id_hex, blob, author) catch |err| switch (err) {
                     error.ParentNotFound => return respondAttachmentParentNotFound(request),
                     else => return err,
                 },
@@ -1180,7 +1189,7 @@ fn updateComment(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| try evt.Comment.update(std.meta.activeTag(host), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &comment_id, body, author),
+                inline else => |*repo| try evt.Comment.update(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &comment_id, body, author),
             }
         },
     }
@@ -1274,7 +1283,7 @@ fn updateThread(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| try Event.update(std.meta.activeTag(host), repo_kind, repo.self_repo_opts, io, allocator, repo, id, update, author),
+                inline else => |*repo| try Event.update(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, id, update, author),
             }
         },
     }
@@ -1356,7 +1365,7 @@ fn handleRemove(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| evt.remove(std.meta.activeTag(host), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &parts.id, parts.kind, author) catch |err| switch (err) {
+                inline else => |*repo| evt.remove(host.event(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &parts.id, parts.kind, author) catch |err| switch (err) {
                     error.EventNotFound => return respondRemoveNotFound(request),
                     else => |e| return e,
                 },
@@ -1400,7 +1409,7 @@ fn updateDiscussion(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| try evt.Discussion.update(std.meta.activeTag(host), repo_kind, repo.self_repo_opts, io, allocator, repo, id, title, labels, description, author),
+                inline else => |*repo| try evt.Discussion.update(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, id, title, labels, description, author),
             }
         },
     }

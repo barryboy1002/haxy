@@ -229,7 +229,8 @@ pub fn main(init: std.process.Init) !void {
             };
         }
         // commit the seed events and consume them into the database
-        try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
+        const users_dir = try std.fs.path.join(arena.allocator(), &.{ server_path, "users" });
+        try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
         // admin co-owns every repo, so it has full privileges everywhere
         // (including undo) while the other users only own their own
@@ -253,7 +254,6 @@ pub fn main(init: std.process.Init) !void {
         }
 
         // each user's repo holds the repos they own
-        const users_dir = try std.fs.path.join(arena.allocator(), &.{ server_path, "users" });
         for (user_ids, 0..) |user_id, user_index| {
             const user_repo_path = try evt.userRepoPath(arena.allocator(), users_dir, &user_id);
             var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
@@ -262,7 +262,7 @@ pub fn main(init: std.process.Init) !void {
             for (repo_data, repo_events) |r, event| {
                 if (r.user_index == user_index) try owned.append(arena.allocator(), event);
             }
-            if (owned.items.len > 0) try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, owned.items);
+            if (owned.items.len > 0) try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, owned.items);
         }
 
         // every repo gets the same generated history, so build it once into a
@@ -1115,7 +1115,7 @@ fn seedPatchRevision(
         .{ .tree = .{ .name = "base", .oid = &base_tree_oid } },
         .{ .tree = .{ .name = "head", .oid = &head_tree_oid } },
     };
-    try evt.consume(.server, .fork, .xit, .{}, io, allocator, &fork_repo, evt.events_ref, &.{.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .fork, .xit, .{}, io, allocator, &fork_repo, evt.events_ref, &.{.{
         .id = std.fmt.bytesToHex(revision_id, .lower),
         .timestamp = revision_timestamp,
         .author = author,
@@ -1130,7 +1130,7 @@ fn seedPatchRevision(
     const patch_record = (try evt.Patch.readById(evt.EventDB(.sha1), .sha1, moment, &arena, patch_id)) orelse return error.NotFound;
     var patch = patch_record.event;
     patch.revision = evt.Patch.Revision.fromRecord(revision_id, revision_record);
-    try evt.consume(.server, .fork, .xit, .{}, io, allocator, &fork_repo, evt.events_ref, &.{.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .fork, .xit, .{}, io, allocator, &fork_repo, evt.events_ref, &.{.{
         .id = patch_hex,
         .timestamp = revision_timestamp + 1,
         .author = author,
@@ -1272,7 +1272,7 @@ fn seedPatches(
                 .timestamp = timestamp + 7,
             });
         } else if (status != .open) {
-            try evt.Patch.update(.server, .xit, .{}, io, allocator, target_repo, &patch_ids[i], .{ .status = status }, patch_author);
+            try evt.Patch.update(.{ .server = .{ .users_dir = users_dir } }, .xit, .{}, io, allocator, target_repo, &patch_ids[i], .{ .status = status }, patch_author);
         }
     }
 
@@ -1304,7 +1304,7 @@ fn seedPatches(
             } },
         };
     }
-    try evt.consume(.server, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &comments);
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &comments);
 
     // create divergent metadata edits on the next three patches
     var patch_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1364,7 +1364,7 @@ fn seedPatches(
     theirs[2].author = .{ .name = "bob", .email = "bob@example.test" };
     theirs[2].event.patch = theirs_values[2];
 
-    try evt.consume(.server, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &ours);
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &ours);
     try commitEventsAtRef(io, allocator, target_repo, other_ref, &theirs, seed_tip);
     {
         var merge = try target_repo.mergeAtRef(io, allocator, .{ .kind = .full, .action = .{ .new = .{ .source = &.{.{ .ref = other_ref }} } } }, evt.events_ref, null);
@@ -1372,8 +1372,8 @@ fn seedPatches(
         if (merge.result != .success) return error.MergeFailed;
     }
     try target_repo.removeBranch(io, .{ .name = other_ref.name });
-    try evt.consume(.server, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &.{});
-    try pch.writeBranchPatch(.server, .xit, .{}, io, allocator, target_repo, std.fmt.bytesToHex(evt.EventWithId.randomId(random), .lower), .{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &.{});
+    try pch.writeBranchPatch(.{ .server = .{ .users_dir = users_dir } }, .xit, .{}, io, allocator, target_repo, std.fmt.bytesToHex(evt.EventWithId.randomId(random), .lower), .{
         .title = "Merge the existing feature branch",
         .description = "This patch tracks the feature branch in this repo without creating a fork.",
         .labels = "feature",
@@ -1383,20 +1383,21 @@ fn seedPatches(
 
     // a push onto the branch that patch tracks, so the undo tab shows the
     // action and the patch refresh it sets off
-    try seedPush(io, allocator, target_repo, patch_author);
-    try pch.refreshBranches(.server, .xit, .{}, io, allocator, target_repo, null, null);
+    try seedPush(io, allocator, target_repo, users_dir, patch_author);
+    try pch.refreshBranches(.{ .server = .{ .users_dir = users_dir } }, .xit, .{}, io, allocator, target_repo, null, null);
 }
 
 // stand in for a client push, which the fixture has no server to receive: one
 // transaction moves the branch, refreshes the patches tracking it and records
 // the action, the way receive-pack does
-fn seedPush(io: std.Io, allocator: std.mem.Allocator, repo: *rp.Repo(.xit, .{}), author: evt.CommitAuthor) !void {
+fn seedPush(io: std.Io, allocator: std.mem.Allocator, repo: *rp.Repo(.xit, .{}), users_dir: []const u8, author: evt.CommitAuthor) !void {
     const Repo = rp.Repo(.xit, .{});
     const DB = Repo.DB;
     const Ctx = struct {
         core: *Repo.Core,
         io: std.Io,
         allocator: std.mem.Allocator,
+        users_dir: []const u8,
         author: evt.CommitAuthor,
 
         pub fn run(ctx: @This(), cursor: *DB.Cursor(.read_write)) !void {
@@ -1434,12 +1435,12 @@ fn seedPush(io: std.Io, allocator: std.mem.Allocator, repo: *rp.Repo(.xit, .{}),
                 },
             };
 
-            _ = try pch.refreshBranchesInTransaction(.server, opts, state, &moment, ctx.io, ctx.allocator, &updates, null, null);
+            _ = try pch.refreshBranchesInTransaction(.{ .server = .{ .users_dir = ctx.users_dir } }, opts, state, &moment, ctx.io, ctx.allocator, &updates, null, null);
             try push.writeUndo(opts, state, ctx.io, ctx.allocator, ctx.author, &updates);
         }
     };
 
-    try transaction(io, repo, Ctx{ .core = &repo.core, .io = io, .allocator = allocator, .author = author });
+    try transaction(io, repo, Ctx{ .core = &repo.core, .io = io, .allocator = allocator, .users_dir = users_dir, .author = author });
 }
 
 // commit `events` onto `ref`, rooted at `parent`, as one transaction.

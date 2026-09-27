@@ -341,7 +341,7 @@ pub fn create(
                 var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, repo_source.localInitOpts());
                 defer any_repo.deinit(io, allocator);
                 switch (any_repo) {
-                    inline else => |*repo| try pch.writeBranchPatch(session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, id, .{
+                    inline else => |*repo| try pch.writeBranchPatch(session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, id, .{
                         .title = title,
                         .labels = labels,
                         .description = description,

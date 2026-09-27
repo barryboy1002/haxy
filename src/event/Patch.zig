@@ -302,7 +302,7 @@ pub fn resolveMerge(
 }
 
 pub fn update(
-    host_kind: evt.HostKind,
+    host: evt.Host,
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     io: std.Io,
@@ -344,8 +344,8 @@ pub fn update(
     }
     if (!fieldsValid(updated.title, updated.labels)) return error.InvalidFields;
 
-    if (updated.source_branch != null and updated.revision == null) return @import("../patch.zig").writeBranchPatch(host_kind, repo_kind, repo_opts, io, allocator, repo, std.fmt.bytesToHex(id.*, .lower), updated, record.event, author);
-    try evt.consume(host_kind, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{.{
+    if (updated.source_branch != null and updated.revision == null) return @import("../patch.zig").writeBranchPatch(host, repo_kind, repo_opts, io, allocator, repo, std.fmt.bytesToHex(id.*, .lower), updated, record.event, author);
+    try evt.consume(host, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{.{
         .id = std.fmt.bytesToHex(id.*, .lower),
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = author,

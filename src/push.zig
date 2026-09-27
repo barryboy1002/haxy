@@ -166,7 +166,7 @@ pub fn receivePackAndConsume(
                 try pch.detectMerged(repo_opts, state, &ctx.core.db, &moment, ctx.io, ctx.allocator, ctx.users_dir, ctx.updates.items.items, ctx.error_writer);
 
                 // the revisions the pushed branches cause belong to the push
-                _ = try pch.refreshBranchesInTransaction(.server, repo_opts, state, &moment, ctx.io, ctx.allocator, ctx.updates.items.items, null, ctx.sideband);
+                _ = try pch.refreshBranchesInTransaction(.{ .server = .{ .users_dir = ctx.users_dir } }, repo_opts, state, &moment, ctx.io, ctx.allocator, ctx.updates.items.items, null, ctx.sideband);
             }
 
             if (ctx.sideband.gone) return error.ClientGone;
@@ -211,9 +211,9 @@ pub fn receivePackAndConsume(
         return err;
     };
 
-    pch.refreshBranches(.server, .xit, repo_opts, io, allocator, repo, updates.items.items, &sideband) catch |err| {
+    pch.refreshBranches(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, repo, updates.items.items, &sideband) catch |err| {
         serve_common.logError(io, error_writer, "failed to refresh branch patches: {s}\n", .{@errorName(err)});
-        pch.refreshOpenMergeability(repo_opts, io, allocator, repo, null, &sideband);
+        pch.refreshOpenMergeability(repo_opts, io, allocator, repo, users_dir, null, &sideband);
     };
     try response.finish(writer, null);
 }
@@ -224,6 +224,7 @@ pub fn receiveFork(
     allocator: std.mem.Allocator,
     fork_repo: *rp.Repo(.xit, repo_opts),
     target_repo: *rp.Repo(.xit, repo_opts),
+    users_dir: []const u8,
     id: *const [evt.event_id_size * 2]u8,
     author: evt.CommitAuthor,
     timestamp: u64,
@@ -415,7 +416,7 @@ pub fn receiveFork(
         }
         var patch = published_patch.event;
         patch.revision = selected;
-        evt.consume(.server, .repo, .xit, repo_opts, io, allocator, target_repo, evt.events_ref, &.{.{
+        evt.consume(.{ .server = .{ .users_dir = users_dir } }, .repo, .xit, repo_opts, io, allocator, target_repo, evt.events_ref, &.{.{
             .id = id.*,
             .timestamp = timestamp,
             .author = author,
@@ -428,7 +429,7 @@ pub fn receiveFork(
         refreshed = true;
     }
 
-    if (!refreshed) pch.refreshMergeability(repo_opts, io, allocator, target_repo, patch_id);
+    if (!refreshed) pch.refreshMergeability(repo_opts, io, allocator, target_repo, users_dir, patch_id);
     sideband.run(io, .{ .complete_one = .writing_patch }) catch {};
     sideband.run(io, .{ .end = .writing_patch }) catch {};
 

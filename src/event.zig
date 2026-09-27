@@ -236,6 +236,16 @@ pub const HostKind = enum {
     server,
 };
 
+// where events are written, with the context only a server has
+pub const Host = union(HostKind) {
+    local,
+    server: Server,
+
+    pub const Server = struct {
+        users_dir: []const u8,
+    };
+};
+
 // who a commit is attributed to
 pub const CommitAuthor = struct {
     name: []const u8,
@@ -350,7 +360,7 @@ pub const EventWithId = struct {
 
 // remove an event by emitting a null payload
 pub fn remove(
-    host_kind: HostKind,
+    host: Host,
     comptime role: RepoRole,
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
@@ -388,7 +398,7 @@ pub fn remove(
         .patchrev => .{ .patchrev = null },
         .patch => .{ .patch = null },
     };
-    try consume(host_kind, role, repo_kind, repo_opts, io, allocator, repo, events_ref, &.{.{
+    try consume(host, role, repo_kind, repo_opts, io, allocator, repo, events_ref, &.{.{
         .id = std.fmt.bytesToHex(id.*, .lower),
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = author,
@@ -431,7 +441,7 @@ pub fn momentEventIds(
 // commits and the consume run in one transaction, which also saves the
 // mergeability of the patches the events touched.
 pub fn consume(
-    host_kind: HostKind,
+    host: Host,
     comptime role: RepoRole,
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
@@ -485,8 +495,8 @@ pub fn consume(
             const State = rp.Repo(.xit, repo_opts).State;
             var checks: pch.MergeCheckInputs(repo_opts) = .{};
             defer checks.deinit(io, allocator);
-            if (role == .repo and host_kind == .server) {
-                checks.prepare(io, allocator, repo, events) catch |err| {
+            if (role == .repo and host == .server) {
+                checks.prepare(io, allocator, repo, host.server.users_dir, events) catch |err| {
                     std.log.warn("failed to prepare mergeability: {s}", .{@errorName(err)});
                 };
             }
@@ -532,8 +542,8 @@ pub fn consume(
 
     // consuming an existing ref does not provide the set of changed patches
     // explicit patch writes already saved their checks in the event transaction
-    if (role == .repo and repo_kind == .xit and host_kind == .server and events.len == 0) {
-        pch.refreshOpenMergeability(repo_opts, io, allocator, repo, null, null);
+    if (role == .repo and repo_kind == .xit and host == .server and events.len == 0) {
+        pch.refreshOpenMergeability(repo_opts, io, allocator, repo, host.server.users_dir, null, null);
     }
 }
 
@@ -1767,7 +1777,7 @@ pub fn resolveOrCreateRepo(
     io.random(&id_bytes);
     const event_id_hex = std.fmt.bytesToHex(id_bytes, .lower);
 
-    try consume(.server, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
+    try consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
         .id = event_id_hex,
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = .{ .name = owner.event.name, .email = owner.event.email },

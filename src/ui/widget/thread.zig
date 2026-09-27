@@ -1364,7 +1364,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                     var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
-                        inline else => |*repo| try evt.remove(self.session.data.host_kind, .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, event_kind, author),
+                        inline else => |*repo| try evt.remove(self.session.eventHost(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, event_kind, author),
                     }
                 },
             }
@@ -1390,7 +1390,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                     var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
-                        inline else => |*repo| try Event.update(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, .{ .status = status }, author),
+                        inline else => |*repo| try Event.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &id, .{ .status = status }, author),
                     }
                 },
             }
@@ -2626,7 +2626,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                             };
                             if (comptime @hasField(Event.Resolve, "theirs")) resolution.theirs = self.data.theirs_picks;
                             const change = Event.Update{ .resolve = resolution };
-                            Event.update(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, change, author) catch |err| switch (err) {
+                            Event.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, change, author) catch |err| switch (err) {
                                 // leave the form up for correction
                                 error.InvalidFields => return,
                                 else => |e| return e,
@@ -2674,10 +2674,10 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     switch (any_repo) {
                         inline else => |*repo| if (editing) {
                             const comment_id = evt.parseEventId(self.data.comment_id) catch return;
-                            try evt.Comment.update(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &comment_id, body, author);
+                            try evt.Comment.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &comment_id, body, author);
                             event_id_hex = std.fmt.bytesToHex(comment_id, .lower);
                         } else {
-                            event_id_hex = try evt.Comment.create(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &parent_id, body, author);
+                            event_id_hex = try evt.Comment.create(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &parent_id, body, author);
                         },
                     }
                 },
@@ -2766,7 +2766,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, src.localInitOpts());
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
-                        inline else => |*repo| try evt.consume(self.session.data.host_kind, .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, evt.events_ref, &.{event}),
+                        inline else => |*repo| try evt.consume(self.session.eventHost(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, evt.events_ref, &.{event}),
                     }
                 },
             }
@@ -2832,7 +2832,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
                         inline else => |*repo| if (supports_drafts) {
-                            Event.update(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, .{ .fields = .{
+                            Event.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, .{ .fields = .{
                                 .title = title,
                                 .labels = labels,
                                 .description = description,
@@ -2843,13 +2843,13 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                                 return;
                             };
                         } else if (has_status)
-                            try Event.update(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, .{ .fields = .{
+                            try Event.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, .{ .fields = .{
                                 .title = title,
                                 .labels = labels,
                                 .description = description,
                             } }, author)
                         else
-                            try Event.update(self.session.data.host_kind, repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, title, labels, description, author),
+                            try Event.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &id_bytes, title, labels, description, author),
                     }
                 },
             }
@@ -2945,7 +2945,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, src.localInitOpts());
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
-                        inline else => |*repo| try evt.remove(self.session.data.host_kind, .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, event_kind, author),
+                        inline else => |*repo| try evt.remove(self.session.eventHost(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, event_kind, author),
                     }
                 },
             }

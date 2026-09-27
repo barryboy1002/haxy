@@ -463,7 +463,7 @@ fn runForkSession(
                 var target_repo = rp.Repo(.xit, repo.self_repo_opts).open(io, allocator, .{ .path = target_path }) catch
                     return writeError(sess, "repo not found or has the wrong hash");
                 defer target_repo.deinit(io, allocator);
-                try push.receiveFork(repo.self_repo_opts, io, allocator, repo, &target_repo, &route.id, author, timestamp, reader, writer, handler.err, sess);
+                try push.receiveFork(repo.self_repo_opts, io, allocator, repo, &target_repo, handler.users_dir, &route.id, author, timestamp, reader, writer, handler.err, sess);
             },
         }
     }

@@ -185,7 +185,7 @@ fn testBranchMerge(selection: evt.Patch.MergeRevision) !void {
     const id = [_]u8{9} ** evt.event_id_size;
     const id_hex = std.fmt.bytesToHex(id, .lower);
     const before_new = try repo.core.db.rootCursor().count();
-    try pch.writeBranchPatch(.server, .xit, opts, io, allocator, &repo, id_hex, .{
+    try pch.writeBranchPatch(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, id_hex, .{
         .title = "merge branch",
         .description = "",
         .labels = "",
@@ -203,22 +203,22 @@ fn testBranchMerge(selection: evt.Patch.MergeRevision) !void {
     defer output.deinit();
     var sideband = progress.Sideband{ .response = &response, .writer = &output.writer };
     const before_refresh = try repo.core.db.rootCursor().count();
-    try pch.refreshBranches(.server, .xit, opts, io, allocator, &repo, null, &sideband);
+    try pch.refreshBranches(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, null, &sideband);
     try std.testing.expectEqual(before_refresh + 1, try repo.core.db.rootCursor().count());
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "Checking mergeability: 100% (1/1)\n") != null);
 
     // closed patches skip source updates and contribute no progress
-    try evt.Patch.update(.server, .xit, opts, io, allocator, &repo, &id, .{ .status = .closed }, author);
+    try evt.Patch.update(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, &id, .{ .status = .closed }, author);
     const next = try repo.commitAtRef(io, allocator, .{ .message = "revise while closed" }, null, .{ .kind = .head, .name = "feature" });
     const closed_tip = (try repo.readRef(io, evt.events_ref)) orelse return error.NotFound;
     const closed_progress_len = output.written().len;
-    try pch.refreshBranches(.server, .xit, opts, io, allocator, &repo, null, &sideband);
+    try pch.refreshBranches(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, null, &sideband);
     try std.testing.expectEqualStrings(&closed_tip, &(try repo.readRef(io, evt.events_ref) orelse return error.NotFound));
     try std.testing.expectEqual(closed_progress_len, output.written().len);
 
     // reopening captures the latest source and checks both merge styles
     const before_reopen = try repo.core.db.rootCursor().count();
-    try evt.Patch.update(.server, .xit, opts, io, allocator, &repo, &id, .{ .status = .open }, author);
+    try evt.Patch.update(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, &id, .{ .status = .open }, author);
     try std.testing.expectEqual(before_reopen + 1, try repo.core.db.rootCursor().count());
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -239,7 +239,7 @@ fn testBranchMerge(selection: evt.Patch.MergeRevision) !void {
     }
     try repo.add(io, allocator, &.{"target.txt"});
     const target_oid = try repo.commit(io, allocator, .{ .message = "advance target" });
-    pch.refreshMergeability(opts, io, allocator, &repo, id);
+    pch.refreshMergeability(opts, io, allocator, &repo, path, id);
 
     // both merge styles use the stored revision, without fork data
     try pch.merge(opts, io, allocator, path, &repo, .{ .id = id_hex, .revision = selection, .author = author, .timestamp = 100 });
@@ -271,7 +271,7 @@ fn testBranchMerge(selection: evt.Patch.MergeRevision) !void {
     _ = try repo.commitAtRef(io, allocator, .{ .message = "later" }, null, .{ .kind = .head, .name = "feature" });
     const tip = (try repo.readRef(io, evt.events_ref)) orelse return error.NotFound;
     const progress_len = output.written().len;
-    try pch.refreshBranches(.server, .xit, opts, io, allocator, &repo, null, &sideband);
+    try pch.refreshBranches(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, null, &sideband);
     try std.testing.expectEqual(progress_len, output.written().len);
     try std.testing.expectEqualStrings(&tip, &(try repo.readRef(io, evt.events_ref) orelse return error.NotFound));
 
@@ -831,7 +831,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     var admin = try rp.Repo(.xit, evt.admin_repo_opts).init(io, allocator, .{ .path = admin_path });
     defer admin.deinit(io, allocator);
-    try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &.{
         .{
             .id = std.fmt.bytesToHex(user_id, .lower),
             .timestamp = 1,
@@ -847,7 +847,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     defer allocator.free(user_repo_path);
     var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
     defer user_repo.deinit(io, allocator);
-    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
         .{
             .id = repo_id_hex,
             .timestamp = 1,
@@ -959,7 +959,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
 
     // draft mergeability checks leave the target repo untouched
     const before_draft_check = (try target.core.latestMoment()).cursor.slot();
-    pch.refreshMergeability(repo_opts, io, allocator, &target, patch_id);
+    pch.refreshMergeability(repo_opts, io, allocator, &target, users_dir, patch_id);
     try std.testing.expectEqualDeep(before_draft_check, (try target.core.latestMoment()).cursor.slot());
 
     //
@@ -1082,14 +1082,14 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     // merge the selected revision into the target
     //
 
-    try evt.Patch.update(.server, .xit, repo_opts, io, allocator, &target, &patch_id, .{ .status = .closed }, author);
+    try evt.Patch.update(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, &target, &patch_id, .{ .status = .closed }, author);
     try std.testing.expectError(error.PatchClosed, pch.merge(repo_opts, io, allocator, users_dir, &target, .{
         .id = patch_id_hex,
         .revision = merge_revision,
         .author = author,
         .timestamp = 5,
     }));
-    try evt.Patch.update(.server, .xit, repo_opts, io, allocator, &target, &patch_id, .{ .status = .open }, author);
+    try evt.Patch.update(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, &target, &patch_id, .{ .status = .open }, author);
 
     // run the cache scenario once; both lifecycle runs still perform a merge
     if (merge_revision == .source) {
@@ -1200,7 +1200,7 @@ fn testMergeability(
     try std.testing.expectEqualDeep(clean, try readMergeability(target, io, allocator, id, patch));
     try expectMergeabilityShortBytes(try target.core.latestMoment(), id);
     const before = (try target.core.latestMoment()).cursor.slot();
-    pch.refreshMergeability(repo_opts, io, allocator, target, id.*);
+    pch.refreshMergeability(repo_opts, io, allocator, target, users_dir, id.*);
     try std.testing.expectEqualDeep(before, (try target.core.latestMoment()).cursor.slot());
     {
         var moment = try target.core.latestMoment();
@@ -1232,13 +1232,13 @@ fn testMergeability(
     } };
     try evt.Patch.update(.local, .xit, repo_opts, io, allocator, target, id, edit, author);
     try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
-    _ = try evt.Comment.create(.server, .xit, repo_opts, io, allocator, target, &input.id, &input.id, "reviewing the answer", author);
+    _ = try evt.Comment.create(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, target, &input.id, &input.id, "reviewing the answer", author);
     try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
 
     // a server patch edit refreshes its mergeability
     edit.fields.title = patch.title;
     const before_edit = try target.core.db.rootCursor().count();
-    try evt.Patch.update(.server, .xit, repo_opts, io, allocator, target, id, edit, author);
+    try evt.Patch.update(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, target, id, edit, author);
     try std.testing.expectEqual(before_edit + 1, try target.core.db.rootCursor().count());
     const events_before = try target.readRef(io, evt.events_ref);
     try std.testing.expectEqualDeep(pch.Mergeability{ .source = .conflict, .squash = .conflict }, try readMergeability(target, io, allocator, id, patch));
@@ -1255,7 +1255,7 @@ fn testMergeability(
         defer detached.deinit();
     }
     try target.removeBranch(io, .{ .name = "master" });
-    pch.refreshOpenMergeability(repo_opts, io, allocator, target, null, null);
+    pch.refreshOpenMergeability(repo_opts, io, allocator, target, users_dir, null, null);
     try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
     try expectMergeabilityShortBytes(try target.core.latestMoment(), id);
     try target.addBranch(io, .{ .name = "master" });
@@ -1263,7 +1263,7 @@ fn testMergeability(
         var restored = try target.switchDir(io, allocator, .{ .target = .{ .ref = .{ .kind = .head, .name = "master" } } });
         defer restored.deinit();
     }
-    pch.refreshOpenMergeability(repo_opts, io, allocator, target, null, null);
+    pch.refreshOpenMergeability(repo_opts, io, allocator, target, users_dir, null, null);
     try std.testing.expectEqualDeep(clean, try readMergeability(target, io, allocator, id, patch));
 
     // a missing fork disables merging without changing the accepted events
@@ -1283,7 +1283,7 @@ fn testMergeability(
         try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
         try std.testing.expectEqual(events_before, try target.readRef(io, evt.events_ref));
     }
-    pch.refreshMergeability(repo_opts, io, allocator, target, id.*);
+    pch.refreshMergeability(repo_opts, io, allocator, target, users_dir, id.*);
     try std.testing.expectEqualDeep(clean, try readMergeability(target, io, allocator, id, patch));
 
     // a changed revision is unknown even if its target has not moved

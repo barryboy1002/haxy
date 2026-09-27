@@ -99,7 +99,7 @@ pub fn consume(
 
 // create a comment and return its event id. `repo` must be writable.
 pub fn create(
-    host_kind: evt.HostKind,
+    host: evt.Host,
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     io: std.Io,
@@ -115,7 +115,7 @@ pub fn create(
     var id_bytes: [evt.event_id_size]u8 = undefined;
     io.random(&id_bytes);
     const event_id = std.fmt.bytesToHex(id_bytes, .lower);
-    try evt.consume(host_kind, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{.{
+    try evt.consume(host, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{.{
         .id = event_id,
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = author,
@@ -131,7 +131,7 @@ pub fn create(
 // replace a comment's body while preserving its thread and parent. `repo` must
 // be writable.
 pub fn update(
-    host_kind: evt.HostKind,
+    host: evt.Host,
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     io: std.Io,
@@ -164,7 +164,7 @@ pub fn update(
 
     var updated = comment.event;
     updated.body = body;
-    try evt.consume(host_kind, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{.{
+    try evt.consume(host, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{.{
         .id = std.fmt.bytesToHex(comment_id.*, .lower),
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = author,

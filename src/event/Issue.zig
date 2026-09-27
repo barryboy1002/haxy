@@ -192,7 +192,7 @@ pub const Update = union(enum) {
 // error.InvalidFields when a resolve composes invalid fields. `repo` must be
 // writable.
 pub fn update(
-    host_kind: evt.HostKind,
+    host: evt.Host,
     comptime repo_kind: rp.RepoKind,
     comptime repo_opts: rp.RepoOpts(repo_kind),
     io: std.Io,
@@ -225,7 +225,7 @@ pub fn update(
         },
     }
 
-    try evt.consume(host_kind, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &[_]evt.EventWithId{.{
+    try evt.consume(host, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &[_]evt.EventWithId{.{
         .id = std.fmt.bytesToHex(id_bytes.*, .lower),
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
         .author = author,

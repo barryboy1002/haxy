@@ -85,8 +85,8 @@ test "user and repo" {
 
     // commit and consume the seed events. users go in the admin repo, repos in
     // their owner's user repo.
-    try evt.consume(.server, .admin, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
-    try evt.consume(.server, .user, .xit, repo_opts, io, allocator, &user_repo, evt.events_ref, &.{repo_event});
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .admin, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .user, .xit, repo_opts, io, allocator, &user_repo, evt.events_ref, &.{repo_event});
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
@@ -137,7 +137,7 @@ test "user and repo" {
     };
 
     // commit and consume the removal
-    try evt.consume(.server, .user, .xit, repo_opts, io, allocator, &user_repo, evt.events_ref, &events_to_consume2);
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .user, .xit, repo_opts, io, allocator, &user_repo, evt.events_ref, &events_to_consume2);
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &user_repo);
@@ -156,7 +156,7 @@ test "user and repo" {
     }
 
     // a non-null payload restores the repo and its indexes
-    try evt.consume(.server, .user, .xit, repo_opts, io, allocator, &user_repo, evt.events_ref, &.{repo_event});
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .user, .xit, repo_opts, io, allocator, &user_repo, evt.events_ref, &.{repo_event});
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &user_repo);
@@ -183,7 +183,7 @@ test "user and repo" {
     };
 
     // commit and consume the removal
-    try evt.consume(.server, .admin, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume3);
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .admin, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume3);
 
     {
         const haxy_moment = try evt.currentMoment(repo_opts, &repo);
@@ -253,7 +253,7 @@ test "repos and users paginate newest first" {
 
     // one user in the admin repo, then four repos in creation order with
     // deliberately skewed timestamps in the user's repo
-    try evt.consume(.server, .admin, .xit, repo_opts, io, allocator, &admin, evt.events_ref, &.{
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .admin, .xit, repo_opts, io, allocator, &admin, evt.events_ref, &.{
         .{ .id = std.fmt.bytesToHex(user_id, .lower), .author = author, .timestamp = 100, .event = .{ .user = .{ .name = "alice", .email = "alice@example.test", .password_hash = pw } } },
     });
     const events = [_]evt.EventWithId{
@@ -262,7 +262,7 @@ test "repos and users paginate newest first" {
         .{ .id = std.fmt.bytesToHex(repo_ids[2], .lower), .author = author, .timestamp = 5_000, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo2", .description = "d2" } } },
         .{ .id = std.fmt.bytesToHex(repo_ids[3], .lower), .author = author, .timestamp = 20, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo3", .description = "d3" } } },
     };
-    try evt.consume(.server, .user, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &events);
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .user, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &events);
 
     {
         const moment = try evt.currentMoment(repo_opts, &repo);
@@ -276,7 +276,7 @@ test "repos and users paginate newest first" {
     }
 
     // removing repo1 retains its place in the canonical order
-    try evt.consume(.server, .user, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .user, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{
         .{ .id = std.fmt.bytesToHex(repo_ids[1], .lower), .author = author, .timestamp = 200, .event = .{ .repo = null } },
     });
     {
@@ -285,7 +285,7 @@ test "repos and users paginate newest first" {
     }
 
     // update repo0 at a later timestamp -> keeps its original place
-    try evt.consume(.server, .user, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{
+    try evt.consume(.{ .server = .{ .users_dir = temp_path } }, .user, .xit, repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{
         .{ .id = std.fmt.bytesToHex(repo_ids[0], .lower), .author = author, .timestamp = 300, .event = .{ .repo = .{ .user_id = &user_id, .name = "repo0", .description = "updated" } } },
     });
     {
@@ -324,7 +324,7 @@ test "fork query and removal lifecycle" {
 
     var admin = try rp.Repo(.xit, evt.admin_repo_opts).init(io, allocator, .{ .path = admin_path });
     defer admin.deinit(io, allocator);
-    try evt.consume(.server, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &.{
         .{
             .id = std.fmt.bytesToHex(user_id, .lower),
             .timestamp = 1,
@@ -340,7 +340,7 @@ test "fork query and removal lifecycle" {
     defer allocator.free(user_repo_path);
     var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
     defer user_repo.deinit(io, allocator);
-    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
         .{
             .id = std.fmt.bytesToHex(repo_id, .lower),
             .timestamp = 1,

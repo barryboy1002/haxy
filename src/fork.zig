@@ -204,7 +204,7 @@ pub fn create(
     }
 
     // create the patch event
-    try evt.consume(.server, .fork, .xit, repo_opts, io, allocator, &fork_repo, evt.events_ref, &.{.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .fork, .xit, repo_opts, io, allocator, &fork_repo, evt.events_ref, &.{.{
         .id = input.id,
         .timestamp = input.timestamp,
         .author = input.author,
@@ -217,7 +217,7 @@ pub fn create(
     }});
 
     // create the fork event
-    try evt.consume(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{
         .id = input.id,
         .timestamp = input.timestamp,
         .author = input.author,
@@ -246,7 +246,7 @@ pub fn remove(
     defer arena.deinit();
     const moment = (try evt.userMoment(&user_repo)) orelse return error.InvalidPatchDraft;
     const record = (try evt.Fork.readById(evt.UserDB, evt.user_repo_opts.hash, moment, &arena, &fork_id)) orelse return error.InvalidPatchDraft;
-    if (!record.removed) try evt.remove(.server, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, &fork_id, .fork, author);
+    if (!record.removed) try evt.remove(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, &fork_id, .fork, author);
 
     const path = try forkPath(allocator, users_dir, forker_id, &fork_id);
     defer allocator.free(path);
