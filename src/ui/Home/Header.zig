@@ -11,7 +11,8 @@ const Focus = xitui.focus.Focus;
 
 const about_tab_label = "about";
 const users_tab_label = "users";
-const new_repo_tab_label = "new repo";
+const new_repo_tab_label = "new";
+const new_repo_tab_bottom_label = "repo";
 
 pub const AuthTab = @import("./../AuthTab.zig");
 
@@ -145,7 +146,7 @@ pub const View = struct {
 
         // new repo tab. repos are created for the logged-in user.
         if (session.data.user_id != null) {
-            var text_box = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_repo_link };
@@ -154,7 +155,7 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = new_repo_tab_label.len + 2, .height = null },
+                .min_size = .{ .width = @max(new_repo_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
             });
         }
 

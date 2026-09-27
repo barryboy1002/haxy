@@ -14,7 +14,8 @@ const commits_tab_label = "commits";
 const patch_tab_label = "patch";
 const diff_tab_label = "diff";
 const files_tab_label = "files";
-const new_repo_tab_label = "new repo";
+const new_repo_tab_label = "new";
+const new_repo_tab_bottom_label = "repo";
 
 pub const AuthTab = @import("../AuthTab.zig");
 
@@ -135,13 +136,13 @@ pub const View = struct {
 
         // repos are created for the logged-in user.
         if (session.data.user_id != null) {
-            var new_repo = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var new_repo = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
             errdefer new_repo.deinit(allocator);
             new_repo.getFocus().mode = .all;
             new_repo.getFocus().kind = .{ .custom = new_repo_link };
             try tab_ids.put(allocator, new_repo.getFocus().id, {});
             if (current_tag == .fork_new_repo) selected_tab = new_repo.getFocus().id;
-            try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = new_repo_tab_label.len + 2, .height = null } });
+            try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = @max(new_repo_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null } });
         }
 
         // keep authentication within the fork page.
