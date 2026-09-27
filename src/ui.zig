@@ -2702,12 +2702,14 @@ pub const Nav = struct {
     // widgets build). owned here, swapped on each navigation. session.page_arena
     // tracks whichever of these is current so widgets allocate into it.
     arena: *std.heap.ArenaAllocator,
+    // the login the current root was built for
+    user_id: ?[evt.event_id_size]u8,
     history: std.ArrayList(Entry),
 
     // each retained page keeps its own arena, freed when the page leaves the
     // stack (popped on back, evicted at cap, or on deinit). this is what keeps a
     // long-lived session from accumulating every page it ever visited.
-    const Entry = struct { root: Widget, route: RoutablePage, arena: *std.heap.ArenaAllocator };
+    const Entry = struct { root: Widget, route: RoutablePage, arena: *std.heap.ArenaAllocator, user_id: ?[evt.event_id_size]u8 };
 
     // cap on retained back-history so the chain can't grow memory without bound
     const max_history: usize = 16;
@@ -2729,6 +2731,7 @@ pub const Nav = struct {
         return .{
             .root = try initRoot(allocator, page, session),
             .arena = arena,
+            .user_id = session.userId(),
             .history = .empty,
         };
     }
@@ -2773,6 +2776,7 @@ pub const Nav = struct {
                 freeArena(allocator, self.arena);
                 self.root = new_root;
                 self.arena = arena;
+                self.user_id = session.userId();
             }
             return;
         }
@@ -2784,8 +2788,14 @@ pub const Nav = struct {
                 freeArena(allocator, self.arena);
                 self.root = entry.root;
                 self.arena = entry.arena;
+                self.user_id = entry.user_id;
                 session.page_arena = entry.arena;
                 session.data.current_page = entry.route;
+                // a page built under another login is rebuilt rather than restored
+                if (!std.meta.eql(entry.user_id, session.userId())) {
+                    session.refresh_requested = true;
+                    return self.sync(allocator, session);
+                }
                 chooseAnsiArtForNavigation(session);
                 return;
             }
@@ -2835,7 +2845,7 @@ pub const Nav = struct {
             page.* = try Page.init(arena, session, route);
             const new_root = try initRoot(allocator, page, session);
 
-            try self.history.append(allocator, .{ .root = self.root, .route = previous_route, .arena = self.arena });
+            try self.history.append(allocator, .{ .root = self.root, .route = previous_route, .arena = self.arena, .user_id = self.user_id });
             // drop the oldest entry (freeing its widget tree and arena) once over cap
             if (self.history.items.len > max_history) {
                 var oldest = self.history.orderedRemove(0);
@@ -2844,6 +2854,7 @@ pub const Nav = struct {
             }
             self.root = new_root;
             self.arena = arena;
+            self.user_id = session.userId();
         }
     }
 };
