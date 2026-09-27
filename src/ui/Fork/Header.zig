@@ -19,7 +19,6 @@ const settings_tab_label = "settings";
 pub const AuthTab = @import("../AuthTab.zig");
 
 name: []const u8,
-owner_name: []const u8,
 forker_name: []const u8,
 title: ui.Title,
 id: []const u8,
@@ -27,10 +26,9 @@ oid: []const u8,
 
 const Self = @This();
 
-pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, forker_name: []const u8, id: []const u8, oid: []const u8) !Self {
+pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, forker_name: []const u8, id: []const u8, oid: []const u8) !Self {
     return .{
         .name = name,
-        .owner_name = owner_name,
         .forker_name = forker_name,
         .title = try ui.Title.init(arena, name, .scanlines),
         .id = try arena.allocator().dupe(u8, id),
@@ -62,7 +60,6 @@ pub const View = struct {
         errdefer tab_ids.deinit(allocator);
 
         const aa = session.page_arena.allocator();
-        const identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.owner_name, data.name });
         const fork_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.forker_name, data.name });
         const commits_label = if (commit_count) |count| try std.fmt.allocPrint(aa, commits_tab_label ++ " ({d})", .{count}) else commits_tab_label;
         var first_group_width = try data.title.width();
@@ -81,9 +78,9 @@ pub const View = struct {
             try title_box.children.put(allocator, forker.getFocus().id, .{ .widget = .{ .text_box = forker }, .rect = null, .min_size = null });
         }
 
-        // the title links to the target repository.
+        // the title links to the fork's default tab.
         {
-            const route = ui.RoutablePage.repoFilesRoute(identity, null, "", "", 0) orelse return error.RouteTooLong;
+            const route = ui.RoutablePage.forkPatchRoute(fork_identity, data.id) orelse return error.RouteTooLong;
             var title = try ui.Title.View.init(allocator, &data.title);
             errdefer title.deinit(allocator);
             title.getFocus().mode = .all;

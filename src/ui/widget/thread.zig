@@ -727,7 +727,11 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 const row = self.toolRow();
                 const pa = self.session.page_arena.allocator();
 
-                if (supports_forks and self.session.data.current_page.parent() != .fork) {
+                if (supports_forks and self.session.data.current_page.parent() == .fork) {
+                    // the fork page's own tabs show the diff and commits
+                    const route = ui.RoutablePage.repoPatchesRoute(self.data.identity, .open, "", entry.id) orelse return error.RouteTooLong;
+                    try addToolButton(allocator, row, "view on target repo", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                } else if (supports_forks) {
                     if (try Data.diffRoute(self.data.identity, entry)) |route| {
                         try addToolButton(allocator, row, "view diff", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     }

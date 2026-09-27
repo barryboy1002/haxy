@@ -150,7 +150,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     };
 
     return .{
-        .header = try Header.init(arena, target_record.event.name, owner.event.name, identity.owner, &id_hex, requested_value),
+        .header = try Header.init(arena, target_record.event.name, identity.owner, &id_hex, requested_value),
         .files = files,
         .commits = commits,
         .patch = patch_data,
