@@ -48,6 +48,8 @@ selected_id: []const u8,
 comment_id: []const u8,
 comments_start: usize,
 comment_page: ?Comment.Permalink = null,
+// whether the viewer may reply to comments
+can_reply: bool = false,
 recent: Window,
 view: ui.RoutablePage.DiscussionsView,
 description_page: bool = false,
@@ -116,6 +118,7 @@ pub fn init(
     comment_id: []const u8,
     comments_start: usize,
     view: ui.RoutablePage.DiscussionsView,
+    viewer: ?Comment.Viewer,
 ) !Self {
     const empty = try emptyResult(arena.allocator(), identity, label, search, selected_id, comment_id, comments_start, view);
     const aa = arena.allocator();
@@ -168,11 +171,11 @@ pub fn init(
     }
 
     const discussion_comments_start = if (empty.comment_id.len == 0) comments_start else 0;
-    const loaded_window = try thread.loadWindow(Self, .discuss, repo_opts.hash, arena, admin_moment, haxy_moment, records, set_maybe, root_key, null, empty.selected_id, discussion_comments_start, empty.search);
+    const loaded_window = try thread.loadWindow(Self, .discuss, repo_opts.hash, arena, admin_moment, haxy_moment, records, set_maybe, root_key, null, empty.selected_id, discussion_comments_start, empty.search, viewer);
     const comment_page = if (empty.comment_id.len == 0)
         null
     else
-        try Comment.init(repo_opts.hash, arena, admin_moment, haxy_moment, empty.selected_id, empty.comment_id, comments_start);
+        try Comment.init(repo_opts.hash, arena, admin_moment, haxy_moment, empty.selected_id, empty.comment_id, comments_start, viewer);
 
     var label_names: std.ArrayList([]const u8) = .empty;
     if (try haxy_moment.getCursor(hash.hashInt(repo_opts.hash, evt.Discussion.label_to_id_set_key))) |labels_cursor| {
@@ -194,6 +197,7 @@ pub fn init(
         .comment_id = empty.comment_id,
         .comments_start = comments_start,
         .comment_page = comment_page,
+        .can_reply = viewer != null,
         .recent = loaded_window,
         .view = empty.view,
         .description_page = empty.description_page,

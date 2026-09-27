@@ -236,8 +236,9 @@ pub fn loadWindow(
     comments_start: usize,
     // the search the set is narrowed to, or null to list it whole
     query: ?[]const u8,
+    viewer: ?Comment.Viewer,
 ) !Data.Window {
-    if (query) |text| return loadSearchWindow(Data, kind, hash_kind, arena, admin_moment, haxy_moment, records, set_maybe, root_key, conflict_set, selected_id, comments_start, text);
+    if (query) |text| return loadSearchWindow(Data, kind, hash_kind, arena, admin_moment, haxy_moment, records, set_maybe, root_key, conflict_set, selected_id, comments_start, text, viewer);
     const set = set_maybe orelse return .empty;
     const aa = arena.allocator();
 
@@ -266,7 +267,7 @@ pub fn loadWindow(
             next_id = try aa.dupe(u8, &keyIdHex(&order_key));
             break;
         }
-        const entry = (try loadEntry(Data, hash_kind, arena, admin_moment, haxy_moment, records, &order_key, conflict_set, selected_id, comments_start)) orelse continue;
+        const entry = (try loadEntry(Data, hash_kind, arena, admin_moment, haxy_moment, records, &order_key, conflict_set, selected_id, comments_start, viewer)) orelse continue;
         try items.append(aa, entry);
     }
 
@@ -298,6 +299,7 @@ fn loadSearchWindow(
     selected_id: []const u8,
     comments_start: usize,
     query_text: []const u8,
+    viewer: ?Comment.Viewer,
 ) !Data.Window {
     const set = set_maybe orelse return .empty;
     const DB = evt.EventDB(hash_kind);
@@ -342,7 +344,7 @@ fn loadSearchWindow(
     var items: std.ArrayList(Data.Entry) = .empty;
     const last = @min(first + Data.page_size, keys.items.len);
     for (keys.items[first..last]) |*order_key| {
-        const entry = (try loadEntry(Data, hash_kind, arena, admin_moment, haxy_moment, records, order_key, conflict_set, selected_id, comments_start)) orelse continue;
+        const entry = (try loadEntry(Data, hash_kind, arena, admin_moment, haxy_moment, records, order_key, conflict_set, selected_id, comments_start, viewer)) orelse continue;
         try items.append(aa, entry);
     }
 
@@ -376,6 +378,7 @@ fn loadEntry(
     conflict_set: ?evt.EventDB(hash_kind).SortedSet(.read_only),
     selected_id: []const u8,
     comments_start: usize,
+    viewer: ?Comment.Viewer,
 ) !?Data.Entry {
     const DB = evt.EventDB(hash_kind);
     const aa = arena.allocator();
@@ -394,6 +397,7 @@ fn loadEntry(
             evt.Comment.thread_id_to_comment_id_set_key,
             &id_hex,
             if (std.mem.eql(u8, &id_hex, selected_id)) comments_start else 0,
+            viewer,
         ),
         .attachments = try Attachment.load(hash_kind, arena, haxy_moment, &id_hex),
     };
@@ -802,9 +806,9 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 errdefer back.deinit(allocator);
                 try inner_box.children.put(allocator, back.getFocus().id, .{ .widget = .{ .text_box = back }, .rect = null, .min_size = null });
 
-                try Comment.appendComment(allocator, inner_box, self.session, self.data.identity, kind, comment_view.selected);
+                try Comment.appendComment(allocator, inner_box, self.session, self.data.identity, kind, self.data.can_reply, comment_view.selected);
                 try Comment.appendCount(allocator, inner_box, comment_view.replies.count, "reply", "replies");
-                for (comment_view.replies.comments) |comment| try Comment.appendComment(allocator, inner_box, self.session, self.data.identity, kind, comment);
+                for (comment_view.replies.comments) |comment| try Comment.appendComment(allocator, inner_box, self.session, self.data.identity, kind, self.data.can_reply, comment);
                 try Comment.appendWindowNav(allocator, inner_box, self.session, self.data.identity, kind, &comment_view.selected.comment.event.thread_id, &comment_view.selected.id, comment_view.replies);
 
                 var spacer = try Spacer.init(allocator);
@@ -881,12 +885,14 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 try Attachment.appendRows(allocator, inner_box, self.session, self.data.identity, try parent_route.toUrl(self.session.page_arena), entry.attachments);
 
                 if (!description_page) {
-                    var reply = try Comment.linkBox(allocator, self.session, "new comment", ui.RoutablePage.repoThreadCommentNewRoute(kind, self.data.identity, entry.id, "") orelse return error.RouteTooLong);
-                    errdefer reply.deinit(allocator);
-                    try inner_box.children.put(allocator, reply.getFocus().id, .{ .widget = .{ .text_box = reply }, .rect = null, .min_size = null });
+                    if (self.data.can_reply) {
+                        var reply = try Comment.linkBox(allocator, self.session, "new comment", ui.RoutablePage.repoThreadCommentNewRoute(kind, self.data.identity, entry.id, "") orelse return error.RouteTooLong);
+                        errdefer reply.deinit(allocator);
+                        try inner_box.children.put(allocator, reply.getFocus().id, .{ .widget = .{ .text_box = reply }, .rect = null, .min_size = null });
+                    }
 
                     try Comment.appendCount(allocator, inner_box, entry.comments.count, "comment", "comments");
-                    for (entry.comments.comments) |comment| try Comment.appendComment(allocator, inner_box, self.session, self.data.identity, kind, comment);
+                    for (entry.comments.comments) |comment| try Comment.appendComment(allocator, inner_box, self.session, self.data.identity, kind, self.data.can_reply, comment);
                     try Comment.appendWindowNav(allocator, inner_box, self.session, self.data.identity, kind, entry.id, null, entry.comments);
                 }
             }

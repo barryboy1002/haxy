@@ -17,6 +17,23 @@ pub const CommentWithId = struct {
     comment: evt.Comment.Record,
     author: ui.Author = .unknown,
     parent_author: ?ui.Author = null,
+    // whether the viewer may edit or remove the comment
+    can_modify: bool = false,
+};
+
+// who a thread page is built for, which picks the comment buttons it shows
+pub const Viewer = struct {
+    role: evt.Repo.Role,
+    email: []const u8,
+
+    // the session's viewer of `repo`, or null when logged out. local mode owns everything.
+    pub fn init(session: *ui.Session, arena: *std.heap.ArenaAllocator, repo: evt.Repo.Record) !?Viewer {
+        if (session.data.host_kind == .local) return .{ .role = .owner, .email = "" };
+        const user_id = session.userId() orelse return null;
+        const moment = session.haxy_moment orelse unreachable;
+        const user = (try ui.activeUser(moment, arena, user_id)) orelse return null;
+        return .{ .role = evt.Repo.roleOf(repo, user_id), .email = user.event.email };
+    }
 };
 
 pub const Window = struct {
@@ -41,13 +58,14 @@ pub fn init(
     thread_id: []const u8,
     selected_id: []const u8,
     start: usize,
+    viewer: ?Viewer,
 ) !Permalink {
-    const selected = (try readOne(hash_kind, arena, admin_moment, haxy_moment, selected_id)) orelse return error.NotFound;
+    const selected = (try readOne(hash_kind, arena, admin_moment, haxy_moment, selected_id, viewer)) orelse return error.NotFound;
     if (!std.mem.eql(u8, &selected.comment.event.thread_id, thread_id)) return error.NotFound;
 
     return .{
         .selected = selected,
-        .replies = try loadWindow(hash_kind, arena, admin_moment, haxy_moment, evt.Comment.parent_id_to_comment_id_set_key, selected_id, start),
+        .replies = try loadWindow(hash_kind, arena, admin_moment, haxy_moment, evt.Comment.parent_id_to_comment_id_set_key, selected_id, start, viewer),
     };
 }
 
@@ -60,6 +78,7 @@ pub fn loadWindow(
     index_key: []const u8,
     owner_id: []const u8,
     start: usize,
+    viewer: ?Viewer,
 ) !Window {
     const DB = evt.EventDB(hash_kind);
     const index_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, index_key)) orelse return .{
@@ -85,7 +104,7 @@ pub fn loadWindow(
         var order_key: [@sizeOf(u64) + evt.event_id_size]u8 = undefined;
         _ = try kv.key_cursor.readBytes(&order_key);
         const id_bytes = order_key[@sizeOf(u64)..].*;
-        const entry = (try readOneBytes(hash_kind, arena, admin_moment, haxy_moment, &id_bytes)) orelse continue;
+        const entry = (try readOneBytes(hash_kind, arena, admin_moment, haxy_moment, &id_bytes, viewer)) orelse continue;
         try comments.append(arena.allocator(), entry);
     }
     return .{
@@ -101,9 +120,10 @@ fn readOne(
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
     haxy_moment: evt.EventDB(hash_kind).HashMap(.read_only),
     id: []const u8,
+    viewer: ?Viewer,
 ) !?CommentWithId {
     const bytes = idBytes(id) orelse return null;
-    return readOneBytes(hash_kind, arena, admin_moment, haxy_moment, &bytes);
+    return readOneBytes(hash_kind, arena, admin_moment, haxy_moment, &bytes, viewer);
 }
 
 fn readOneBytes(
@@ -112,6 +132,7 @@ fn readOneBytes(
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
     haxy_moment: evt.EventDB(hash_kind).HashMap(.read_only),
     id_bytes: *const [evt.event_id_size]u8,
+    viewer: ?Viewer,
 ) !?CommentWithId {
     const DB = evt.EventDB(hash_kind);
     const comment = (try evt.Comment.readById(DB, hash_kind, haxy_moment, arena, id_bytes)) orelse return null;
@@ -125,6 +146,7 @@ fn readOneBytes(
         .comment = comment,
         .author = try ui.Author.initFromEmail(admin_moment, arena, comment.author_email),
         .parent_author = parent_author,
+        .can_modify = if (viewer) |v| v.role.canModify(v.email, comment.author_email) else false,
     };
 }
 
@@ -143,7 +165,7 @@ pub const Item = struct {
     const body_index: usize = 1;
     const gap_index: usize = 2;
 
-    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, identity: []const u8, thread_kind: evt.EventKind, entry: CommentWithId) !Item {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, identity: []const u8, thread_kind: evt.EventKind, can_reply: bool, entry: CommentWithId) !Item {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer box.deinit(allocator);
 
@@ -160,19 +182,17 @@ pub const Item = struct {
             errdefer spacer.deinit(allocator);
             try bar.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null });
 
-            var reply = try linkBox(allocator, session, "new reply", commentNewRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id) orelse return error.RouteTooLong);
-            errdefer reply.deinit(allocator);
-            try bar.children.put(allocator, reply.getFocus().id, .{ .widget = .{ .text_box = reply }, .rect = null, .min_size = .{ .width = "new reply".len + 2, .height = null } });
+            if (can_reply) {
+                var reply = try linkBox(allocator, session, "new reply", commentNewRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id) orelse return error.RouteTooLong);
+                errdefer reply.deinit(allocator);
+                try bar.children.put(allocator, reply.getFocus().id, .{ .widget = .{ .text_box = reply }, .rect = null, .min_size = .{ .width = "new reply".len + 2, .height = null } });
+            }
 
-            if (!entry.comment.removed) {
+            if (entry.can_modify and !entry.comment.removed) {
                 var edit = try linkBox(allocator, session, "edit comment", commentEditRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id) orelse return error.RouteTooLong);
                 errdefer edit.deinit(allocator);
                 try bar.children.put(allocator, edit.getFocus().id, .{ .widget = .{ .text_box = edit }, .rect = null, .min_size = .{ .width = "edit comment".len + 2, .height = null } });
             }
-
-            var permalink = try linkBox(allocator, session, "permalink", commentsRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id, 0) orelse return error.RouteTooLong);
-            errdefer permalink.deinit(allocator);
-            try bar.children.put(allocator, permalink.getFocus().id, .{ .widget = .{ .text_box = permalink }, .rect = null, .min_size = .{ .width = "permalink".len + 2, .height = null } });
 
             if (!std.mem.eql(u8, &entry.comment.event.parent_id, &entry.comment.event.thread_id)) {
                 const parent_text = if (entry.parent_author) |parent_author| switch (parent_author) {
@@ -192,7 +212,11 @@ pub const Item = struct {
                 try bar.children.put(allocator, parent.getFocus().id, .{ .widget = .{ .text_box = parent }, .rect = null, .min_size = .{ .width = @max(parent_text.len, " replying to ".len) + 2, .height = null } });
             }
 
-            if (!entry.comment.removed) {
+            var permalink = try linkBox(allocator, session, "permalink", commentsRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id, 0) orelse return error.RouteTooLong);
+            errdefer permalink.deinit(allocator);
+            try bar.children.put(allocator, permalink.getFocus().id, .{ .widget = .{ .text_box = permalink }, .rect = null, .min_size = .{ .width = "permalink".len + 2, .height = null } });
+
+            if (entry.can_modify and !entry.comment.removed) {
                 var remove = try linkBox(allocator, session, "✕", removeRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id) orelse return error.RouteTooLong);
                 errdefer remove.deinit(allocator);
                 try bar.children.put(allocator, remove.getFocus().id, .{ .widget = .{ .text_box = remove }, .rect = null, .min_size = .{ .width = 3, .height = null } });
@@ -286,8 +310,8 @@ pub const Item = struct {
 };
 
 // append one comment's metadata bar and body.
-pub fn appendComment(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), session: *ui.Session, identity: []const u8, thread_kind: evt.EventKind, entry: CommentWithId) !void {
-    var item = try Item.init(allocator, session, identity, thread_kind, entry);
+pub fn appendComment(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), session: *ui.Session, identity: []const u8, thread_kind: evt.EventKind, can_reply: bool, entry: CommentWithId) !void {
+    var item = try Item.init(allocator, session, identity, thread_kind, can_reply, entry);
     errdefer item.deinit(allocator);
     try box.children.put(allocator, item.getFocus().id, .{ .widget = .{ .repo_comment = item }, .rect = null, .min_size = null });
 }

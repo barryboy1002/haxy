@@ -88,6 +88,8 @@ comment_id: []const u8,
 comments_start: usize,
 // the selected comment and its immediate replies.
 comment_page: ?Comment.Permalink = null,
+// whether the viewer may reply to comments
+can_reply: bool = false,
 open: Window,
 closed: Window,
 // the conflicted issues' listing; its count also gates the conflicts tab.
@@ -208,6 +210,7 @@ pub fn init(
     comments_start: usize,
     theirs_picks: []const u8,
     view: ui.RoutablePage.IssuesView,
+    viewer: ?Comment.Viewer,
 ) !Self {
     const empty = try emptyResult(arena.allocator(), identity, label, search, selected_id, comment_id, comments_start, theirs_picks, view);
 
@@ -323,15 +326,15 @@ pub fn init(
     }
 
     const thread_comments_start = if (empty.comment_id.len == 0) comments_start else 0;
-    const open_window = try thread.loadWindow(Self, .issue, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_issue, open_set, open_root, conflict_set, empty.selected_id, thread_comments_start, empty.search);
-    const closed_window = try thread.loadWindow(Self, .issue, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_issue, closed_set, closed_root, conflict_set, empty.selected_id, thread_comments_start, empty.search);
-    const conflicts_window = try thread.loadWindow(Self, .issue, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_issue, conflict_set, conflicts_root, conflict_set, empty.selected_id, thread_comments_start, null);
+    const open_window = try thread.loadWindow(Self, .issue, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_issue, open_set, open_root, conflict_set, empty.selected_id, thread_comments_start, empty.search, viewer);
+    const closed_window = try thread.loadWindow(Self, .issue, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_issue, closed_set, closed_root, conflict_set, empty.selected_id, thread_comments_start, empty.search, viewer);
+    const conflicts_window = try thread.loadWindow(Self, .issue, repo_opts.hash, arena, admin_moment, haxy_moment, event_id_to_issue, conflict_set, conflicts_root, conflict_set, empty.selected_id, thread_comments_start, null, viewer);
     if (view == .conflicts and conflicts_window.count > 0) resolved_view = .conflicts;
 
     const comment_page = if (empty.comment_id.len == 0)
         null
     else
-        try Comment.init(repo_opts.hash, arena, admin_moment, haxy_moment, empty.selected_id, empty.comment_id, comments_start);
+        try Comment.init(repo_opts.hash, arena, admin_moment, haxy_moment, empty.selected_id, empty.comment_id, comments_start, viewer);
 
     const labels = try thread.loadLabels(Self, repo_opts.hash, arena, haxy_moment);
 
@@ -343,6 +346,7 @@ pub fn init(
         .comment_id = empty.comment_id,
         .comments_start = comments_start,
         .comment_page = comment_page,
+        .can_reply = viewer != null,
         .open = open_window,
         .closed = closed_window,
         .conflicts = conflicts_window,
