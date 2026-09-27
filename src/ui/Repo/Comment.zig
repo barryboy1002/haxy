@@ -142,7 +142,6 @@ pub const Item = struct {
     const metadata_index: usize = 0;
     const body_index: usize = 1;
     const gap_index: usize = 2;
-    const metadata_first_link_index: usize = 1;
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, identity: []const u8, thread_kind: evt.EventKind, entry: CommentWithId) !Item {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
@@ -152,13 +151,14 @@ pub const Item = struct {
             var bar = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
             errdefer bar.deinit(allocator);
 
-            var spacer = try ui.widget.Spacer.init(allocator);
-            errdefer spacer.deinit(allocator);
-            try bar.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null });
-
+            // the author sits on the left and the buttons on the right
             var author = try ui.authorBox(allocator, session.page_arena, entry.author);
             errdefer author.deinit(allocator);
             try bar.children.put(allocator, author.getFocus().id, .{ .widget = .{ .text_box = author }, .rect = null, .min_size = null, .flex = .shrink });
+
+            var spacer = try ui.widget.Spacer.init(allocator);
+            errdefer spacer.deinit(allocator);
+            try bar.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null });
 
             var reply = try linkBox(allocator, session, "new reply", commentNewRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.id) orelse return error.RouteTooLong);
             errdefer reply.deinit(allocator);
@@ -198,7 +198,7 @@ pub const Item = struct {
                 try bar.children.put(allocator, remove.getFocus().id, .{ .widget = .{ .text_box = remove }, .rect = null, .min_size = .{ .width = 3, .height = null } });
             }
 
-            bar.getFocus().child_id = bar.children.keys()[metadata_first_link_index];
+            bar.getFocus().child_id = bar.children.keys()[0];
             try box.children.put(allocator, bar.getFocus().id, .{ .widget = .{ .box = bar }, .rect = null, .min_size = null });
         }
 
@@ -231,7 +231,7 @@ pub const Item = struct {
 
     pub fn focusMetadata(self: *Item, root_focus: *Focus) void {
         const bar = self.metadata();
-        root_focus.setFocus(bar.getFocus().child_id orelse bar.children.keys()[metadata_first_link_index]);
+        root_focus.setFocus(bar.getFocus().child_id orelse bar.children.keys()[0]);
     }
 
     pub fn focusBody(self: *Item, root_focus: *Focus) void {
@@ -242,9 +242,13 @@ pub const Item = struct {
         if (self.bodyFocused()) return false;
         const bar = self.metadata();
         const selected = bar.getFocus().child_id orelse return false;
-        const selected_index = bar.children.getIndex(selected) orelse return false;
-        const target = if (right) selected_index + 1 else selected_index -| 1;
-        if (target < metadata_first_link_index or target >= bar.children.count()) return false;
+        var target = bar.children.getIndex(selected) orelse return false;
+        // step past the spacer between the author and the buttons
+        while (true) {
+            if (right) target += 1 else target = std.math.sub(usize, target, 1) catch return false;
+            if (target >= bar.children.count()) return false;
+            if (bar.children.values()[target].widget != .spacer) break;
+        }
         root_focus.setFocus(bar.children.keys()[target]);
         return true;
     }
