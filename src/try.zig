@@ -127,25 +127,25 @@ pub fn main(init: std.process.Init) !void {
         }{
             .{ .name = "admin", .email = "admin@example.test" },
             .{ .name = "alice", .email = "alice@example.test" },
-            .{ .name = "bob", .email = "bob@example.test" },
+            .{ .name = "bobby", .email = "bobby@example.test" },
             .{ .name = "carol", .email = "carol@example.test" },
-            .{ .name = "dave", .email = "dave@example.test" },
-            .{ .name = "eve", .email = "eve@example.test" },
+            .{ .name = "david", .email = "david@example.test" },
+            .{ .name = "evelyn", .email = "evelyn@example.test" },
             .{ .name = "frank", .email = "frank@example.test" },
             .{ .name = "grace", .email = "grace@example.test" },
             .{ .name = "henry", .email = "henry@example.test" },
-            .{ .name = "ivy", .email = "ivy@example.test" },
-            .{ .name = "jack", .email = "jack@example.test" },
-            .{ .name = "kate", .email = "kate@example.test" },
-            .{ .name = "liam", .email = "liam@example.test" },
-            .{ .name = "mona", .email = "mona@example.test" },
-            .{ .name = "noah", .email = "noah@example.test" },
+            .{ .name = "irene", .email = "irene@example.test" },
+            .{ .name = "jacob", .email = "jacob@example.test" },
+            .{ .name = "katie", .email = "katie@example.test" },
+            .{ .name = "logan", .email = "logan@example.test" },
+            .{ .name = "molly", .email = "molly@example.test" },
+            .{ .name = "nolan", .email = "nolan@example.test" },
             .{ .name = "olivia", .email = "olivia@example.test" },
             .{ .name = "peter", .email = "peter@example.test" },
             .{ .name = "quinn", .email = "quinn@example.test" },
             .{ .name = "rachel", .email = "rachel@example.test" },
-            .{ .name = "sam", .email = "sam@example.test" },
-            .{ .name = "tina", .email = "tina@example.test" },
+            .{ .name = "simon", .email = "simon@example.test" },
+            .{ .name = "tessa", .email = "tessa@example.test" },
         };
 
         const repo_data = [_]struct {
@@ -165,7 +165,7 @@ pub fn main(init: std.process.Init) !void {
             .{ .user_index = 9, .name = "cpython", .description = "The Python programming language" },
             .{ .user_index = 10, .name = "docker", .description = "Container platform for developing, shipping, and running applications" },
             .{ .user_index = 1, .name = "vim", .description = "The ubiquitous text editor" },
-            // private, so only bob and admin can see it
+            // private, so only bobby and admin can see it
             .{ .user_index = 2, .name = "neovim", .description = "Hyperextensible Vim-based text editor", .read_access = .private },
             .{ .user_index = 3, .name = "emacs", .description = "GNU Emacs source code mirror" },
             .{ .user_index = 4, .name = "tmux", .description = "Terminal multiplexer" },
@@ -1296,7 +1296,7 @@ fn seedPatches(
         comment.* = .{
             .id = std.fmt.bytesToHex(comment_ids[i], .lower),
             .timestamp = @intCast(700 + i),
-            .author = .{ .name = if (i % 2 == 0) "alice" else "bob", .email = if (i % 2 == 0) "alice@example.test" else "bob@example.test" },
+            .author = .{ .name = if (i % 2 == 0) "alice" else "bobby", .email = if (i % 2 == 0) "alice@example.test" else "bobby@example.test" },
             .event = .{ .comment = .{
                 .thread_id = std.fmt.bytesToHex(patch_ids[patch_ids.len - 1], .lower),
                 .parent_id = switch (i) {
@@ -1360,13 +1360,13 @@ fn seedPatches(
 
     var theirs = ours;
     theirs[0].timestamp = 810;
-    theirs[0].author = .{ .name = "bob", .email = "bob@example.test" };
+    theirs[0].author = .{ .name = "bobby", .email = "bobby@example.test" };
     theirs[0].event.patch = theirs_values[0];
     theirs[1].timestamp = 811;
-    theirs[1].author = .{ .name = "bob", .email = "bob@example.test" };
+    theirs[1].author = .{ .name = "bobby", .email = "bobby@example.test" };
     theirs[1].event.patch = theirs_values[1];
     theirs[2].timestamp = 812;
-    theirs[2].author = .{ .name = "bob", .email = "bob@example.test" };
+    theirs[2].author = .{ .name = "bobby", .email = "bobby@example.test" };
     theirs[2].event.patch = theirs_values[2];
 
     try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &ours);

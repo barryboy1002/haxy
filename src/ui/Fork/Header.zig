@@ -14,8 +14,9 @@ const commits_tab_label = "commits";
 const patch_tab_label = "patch";
 const diff_tab_label = "diff";
 const files_tab_label = "files";
-const new_repo_tab_label = "new";
+const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
+const new_user_tab_bottom_label = "user";
 
 pub const AuthTab = @import("../AuthTab.zig");
 
@@ -122,7 +123,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes new repo and auth to the right.
+        // spacer pushes new repo, new user, and auth to the right.
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -131,18 +132,28 @@ pub const View = struct {
 
         const new_repo_route = ui.RoutablePage.forkNewRepoRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .fork_new_repo);
+        const new_user_route = ui.RoutablePage.forkNewUserRoute(fork_identity, data.id) orelse return error.RouteTooLong;
+        const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .fork_new_user);
         const auth_route = ui.RoutablePage.forkAuthRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const auth_link = try ui.inPageTabLink(session, auth_route, current_tag == .fork_auth);
 
-        // repos are created for the logged-in user.
+        // new repo tab with a login, new user tab without one outside local mode
         if (session.data.user_id != null) {
-            var new_repo = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
+            var new_repo = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
             errdefer new_repo.deinit(allocator);
             new_repo.getFocus().mode = .all;
             new_repo.getFocus().kind = .{ .custom = new_repo_link };
             try tab_ids.put(allocator, new_repo.getFocus().id, {});
             if (current_tag == .fork_new_repo) selected_tab = new_repo.getFocus().id;
-            try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = @max(new_repo_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null } });
+            try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null } });
+        } else if (session.data.host_kind == .server) {
+            var new_user = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
+            errdefer new_user.deinit(allocator);
+            new_user.getFocus().mode = .all;
+            new_user.getFocus().kind = .{ .custom = new_user_link };
+            try tab_ids.put(allocator, new_user.getFocus().id, {});
+            if (current_tag == .fork_new_user) selected_tab = new_user.getFocus().id;
+            try tabs_box.children.put(allocator, new_user.getFocus().id, .{ .widget = .{ .text_box = new_user }, .rect = null, .min_size = .{ .width = @max(new_tab_label.len, new_user_tab_bottom_label.len) + 2, .height = null } });
         }
 
         // keep authentication within the fork page.

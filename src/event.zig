@@ -1906,6 +1906,55 @@ pub fn createRepo(
     return .{ .owner_id = owner_id.*, .repo_id = id_bytes };
 }
 
+// create a user and their user repo, returning the new user's id
+pub fn createUser(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    admin_repo: *rp.Repo(.xit, admin_repo_opts),
+    name: []const u8,
+    email: []const u8,
+    password: []const u8,
+    password_again: []const u8,
+) ![event_id_size]u8 {
+    try User.validateName(name);
+    if (email.len == 0) return error.EmailEmpty;
+    if (password.len == 0) return error.PasswordEmpty;
+    if (!std.mem.eql(u8, password, password_again)) return error.PasswordMismatch;
+    // a fresh admin repo has no moment until its first event
+    if (currentMoment(admin_repo_opts, admin_repo)) |moment| {
+        if (try User.readIdByName(AdminDB, admin_repo_opts.hash, moment, name) != null) return error.NameTaken;
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        if (try User.readByEmail(AdminDB, admin_repo_opts.hash, moment, &arena, email) != null) return error.EmailTaken;
+    } else |err| switch (err) {
+        error.NotFound => {},
+        else => |e| return e,
+    }
+
+    var password_hash_buf: [User.password_hash_max_len]u8 = undefined;
+    const password_hash = try User.hashPassword(password, &password_hash_buf, io);
+
+    var id_bytes: [event_id_size]u8 = undefined;
+    io.random(&id_bytes);
+
+    // the user repo comes first so a listed user can always create repos
+    {
+        const path = try userRepoPath(allocator, users_dir, &id_bytes);
+        defer allocator.free(path);
+        var user_repo = try initUserRepo(io, allocator, path);
+        defer user_repo.deinit(io, allocator);
+    }
+
+    try consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, admin_repo_opts, io, allocator, admin_repo, events_ref, &[_]EventWithId{.{
+        .id = std.fmt.bytesToHex(id_bytes, .lower),
+        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        .author = .{ .name = name, .email = email },
+        .event = .{ .user = .{ .name = name, .email = email, .password_hash = password_hash } },
+    }});
+    return id_bytes;
+}
+
 // consume a new repo's event into its owner's user repo and mark it active
 fn writeRepoEvent(
     io: std.Io,

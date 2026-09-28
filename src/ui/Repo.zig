@@ -450,15 +450,20 @@ pub const View = struct {
                 try stack.children.put(allocator, undo_view.getFocus().id, .{ .repo_undo = undo_view });
             }
 
-            // the header only shows the new repo tab with a login
-            // and the auth tab outside local mode, so keep the stack's children 1:1 with
-            // the tabs by skipping the same views.
+            // the header shows new repo with a login, and new user without one
+            // and auth only outside local mode, so keep the stack's children
+            // 1:1 with the tabs by skipping the same views.
+            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.owner_name, data.header.name });
             if (session.data.user_id != null) {
-                const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.owner_name, data.header.name });
                 const route = ui.RoutablePage{ .repo_new_repo = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(identity) orelse return error.RouteTooLong };
                 var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);
                 errdefer new_repo_view.deinit(allocator);
                 try stack.children.put(allocator, new_repo_view.getFocus().id, .{ .new_repo = new_repo_view });
+            } else if (session.data.host_kind == .server) {
+                const route = ui.RoutablePage{ .repo_new_user = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(identity) orelse return error.RouteTooLong };
+                var new_user_view = try ui.NewUser.View.init(allocator, session, route);
+                errdefer new_user_view.deinit(allocator);
+                try stack.children.put(allocator, new_user_view.getFocus().id, .{ .new_user = new_user_view });
             }
 
             if (session.data.host_kind == .server) {

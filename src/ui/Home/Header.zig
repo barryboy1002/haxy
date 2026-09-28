@@ -11,8 +11,9 @@ const Focus = xitui.focus.Focus;
 
 const about_tab_label = "about";
 const users_tab_label = "users";
-const new_repo_tab_label = "new";
+const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
+const new_user_tab_bottom_label = "user";
 
 pub const AuthTab = @import("./../AuthTab.zig");
 
@@ -93,10 +94,12 @@ pub const View = struct {
         const about_link = try ui.inPageTabLink(session, .home_about, current_tag == .home_about);
         const users_link = try ui.inPageTabLink(session, .{ .home_users = .{} }, current_tag == .home_users);
         const new_repo_link = try ui.inPageTabLink(session, .home_new_repo, current_tag == .home_new_repo);
+        const new_user_link = try ui.inPageTabLink(session, .home_new_user, current_tag == .home_new_user);
         const auth_link = try ui.inPageTabLink(session, .home_auth, current_tag == .home_auth);
         const current_link: []const u8 = switch (current_tag) {
             .home_users => users_link,
             .home_new_repo => new_repo_link,
+            .home_new_user => new_user_link,
             .home_auth => auth_link,
             else => about_link,
         };
@@ -132,7 +135,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes new repo and auth to the right
+        // spacer pushes new repo, new user, and auth to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -144,9 +147,9 @@ pub const View = struct {
             });
         }
 
-        // new repo tab. repos are created for the logged-in user.
+        // new repo tab with a login, new user tab without one
         if (session.data.user_id != null) {
-            var text_box = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
+            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_repo_link };
@@ -155,7 +158,19 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = @max(new_repo_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
+                .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
+            });
+        } else {
+            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = new_user_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (std.mem.eql(u8, new_user_link, current_link)) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = @max(new_tab_label.len, new_user_tab_bottom_label.len) + 2, .height = null },
             });
         }
 

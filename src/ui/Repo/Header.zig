@@ -18,8 +18,9 @@ const issues_tab_label = "issues";
 const patches_tab_label = "patches";
 const discuss_tab_label = "discuss";
 const events_tab_label = "events";
-const new_repo_tab_label = "new";
+const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
+const new_user_tab_bottom_label = "user";
 
 pub const AuthTab = @import("./../AuthTab.zig");
 
@@ -169,6 +170,8 @@ pub const View = struct {
         const events_link = try ui.inPageTabLink(session, events_route, current_tag == .repo_events);
         const new_repo_route = ui.RoutablePage{ .repo_new_repo = Array.from(identity) orelse return error.RouteTooLong };
         const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .repo_new_repo);
+        const new_user_route = ui.RoutablePage{ .repo_new_user = Array.from(identity) orelse return error.RouteTooLong };
+        const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .repo_new_user);
         const auth_route = ui.RoutablePage{ .repo_auth = Array.from(identity) orelse return error.RouteTooLong };
         const auth_link = try ui.inPageTabLink(session, auth_route, current_tag == .repo_auth);
 
@@ -296,7 +299,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes new repo and auth to the right
+        // spacer pushes new repo, new user, and auth to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -308,9 +311,9 @@ pub const View = struct {
             });
         }
 
-        // new repo tab. repos are created for the logged-in user.
+        // new repo tab with a login, new user tab without one outside local mode
         if (session.data.user_id != null) {
-            var text_box = try wgt.TextBox.init(allocator, new_repo_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
+            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_repo_link };
@@ -319,7 +322,19 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = @max(new_repo_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
+                .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
+            });
+        } else if (session.data.host_kind == .server) {
+            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = new_user_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (current_tag == .repo_new_user) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = @max(new_tab_label.len, new_user_tab_bottom_label.len) + 2, .height = null },
             });
         }
 

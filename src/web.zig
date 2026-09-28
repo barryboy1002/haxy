@@ -142,7 +142,9 @@ fn handleRequest(
             .server => |server| {
                 // the home page's new repo form, which the "/new" suffix below would claim
                 if (std.mem.eql(u8, path, "/repo/new")) return handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
-                const PostRoute = enum { login, logout, ansi, @"new-repo", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
+                // likewise the home page's new user form
+                if (std.mem.eql(u8, path, "/user/new")) return handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
+                const PostRoute = enum { login, logout, ansi, @"new-repo", @"new-user", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
                 inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
                     const suffix = "/" ++ field.name;
                     if (std.mem.endsWith(u8, path, suffix)) {
@@ -152,6 +154,7 @@ fn handleRequest(
                             .logout => handleLogout(request, base, server.session_store),
                             .ansi => handleAnsi(io, request, allocator, base, server.admin_repo_path, server.users_dir, server.session_store),
                             .@"new-repo" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
+                            .@"new-user" => handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
                             .new => handleNew(io, request, allocator, base, host),
                             .edit => handleEdit(io, request, allocator, base, host),
                             .remove => handleRemove(io, request, allocator, base, host),
@@ -683,6 +686,59 @@ fn handleRepoNew(
     try request.respond("", .{
         .status = .see_other,
         .extra_headers = &.{.{ .name = "location", .value = location }},
+    });
+}
+
+// create a user, log them in, and redirect to their page. a failure goes
+// back to the new-user page that posted the form.
+fn handleUserNew(
+    io: std.Io,
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    form_location: []const u8,
+    admin_repo_path: []const u8,
+    users_dir: []const u8,
+    session_store: SessionStore,
+) !void {
+    if (requestUserId(request, session_store) != null) {
+        return request.respond("log out to create a user", .{
+            .status = .forbidden,
+            .keep_alive = false,
+            .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
+        });
+    }
+
+    const body = try readFormBody(request, allocator);
+    defer allocator.free(body);
+    const name = (try parseFormField(allocator, body, "name")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(name);
+    const email = (try parseFormField(allocator, body, "email")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(email);
+    const password = (try parseFormField(allocator, body, "password")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(password);
+    const password_again = (try parseFormField(allocator, body, "password_again")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(password_again);
+
+    const user_id = blk: {
+        var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = admin_repo_path });
+        defer admin_repo.deinit(io, allocator);
+        break :blk evt.createUser(io, allocator, users_dir, &admin_repo, name, email, password, password_again) catch |err| {
+            const failure = ui.Session.FormFeedback.UserFailure.fromError(err) orelse return err;
+            return respondFormFailure(request, allocator, session_store, form_location, .{ .user = .{ .failure = failure, .fields = .{ .name = name, .email = email } } });
+        };
+    };
+
+    const token = try session_store.create(&user_id);
+    var cookie_buf: [256]u8 = undefined;
+    const cookie = try std.fmt.bufPrint(&cookie_buf, session_cookie_fmt, .{token});
+    const location = try std.fmt.allocPrint(allocator, "/user/{s}", .{name});
+    defer allocator.free(location);
+    try request.respond("", .{
+        .status = .see_other,
+        .extra_headers = &.{
+            .{ .name = "location", .value = location },
+            .{ .name = "set-cookie", .value = cookie },
+        },
     });
 }
 

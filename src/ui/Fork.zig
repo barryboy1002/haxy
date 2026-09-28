@@ -205,12 +205,17 @@ pub const View = struct {
                 errdefer commits.deinit(allocator);
                 try stack.children.put(allocator, commits.getFocus().id, .{ .repo_commits = commits });
             }
+            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.forker_name, data.header.name });
             if (session.data.user_id != null) {
-                const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.forker_name, data.header.name });
                 const route = ui.RoutablePage.forkNewRepoRoute(identity, data.header.id) orelse return error.RouteTooLong;
                 var new_repo = try ui.NewRepo.View.init(allocator, session, route);
                 errdefer new_repo.deinit(allocator);
                 try stack.children.put(allocator, new_repo.getFocus().id, .{ .new_repo = new_repo });
+            } else if (session.data.host_kind == .server) {
+                const route = ui.RoutablePage.forkNewUserRoute(identity, data.header.id) orelse return error.RouteTooLong;
+                var new_user = try ui.NewUser.View.init(allocator, session, route);
+                errdefer new_user.deinit(allocator);
+                try stack.children.put(allocator, new_user.getFocus().id, .{ .new_user = new_user });
             }
             if (session.data.host_kind == .server) {
                 var auth = try Auth.View.init(allocator, &data.auth, session);

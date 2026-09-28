@@ -6,7 +6,7 @@ const rp = xit.repo;
 const hash = xit.hash;
 
 const fork_repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
-const author = evt.CommitAuthor{ .name = "haxy", .email = "user@haxy" };
+const author = evt.CommitAuthor{ .name = "haxyuser", .email = "user@haxy" };
 
 test "user and repo" {
     const io = std.testing.io;

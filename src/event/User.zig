@@ -26,6 +26,7 @@ pub const Public = struct {
 
 const Self = @This();
 
+pub const name_min_len = 5;
 pub const name_max_len = 32;
 
 // the moment keys `evt.merge` reads and writes for this kind
@@ -39,6 +40,7 @@ pub const email_to_user_id_key = "email->user-id";
 
 pub fn validateName(name: []const u8) !void {
     if (name.len == 0) return error.NameEmpty;
+    if (name.len < name_min_len) return error.NameTooShort;
     if (name.len > name_max_len) return error.NameTooLong;
     if (name[0] == '-' or name[name.len - 1] == '-') return error.InvalidName;
 
