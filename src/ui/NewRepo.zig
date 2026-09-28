@@ -29,7 +29,7 @@ pub const View = struct {
         const saved_fields = if (session.formFeedback(.repo)) |saved| saved.fields else null;
 
         {
-            var name = try wgt.TextInput.init(allocator, .{ .label = " name ", .name = "name", .visible_width = 20, .round_corners = true, .render_content = session.is_terminal });
+            var name = try wgt.TextInput.init(allocator, .{ .label = " name ", .name = "name", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer name.deinit(allocator);
             name.getFocus().mode = .all;
             if (saved_fields) |saved| try name.setContent(allocator, saved.name);
@@ -38,7 +38,7 @@ pub const View = struct {
         }
 
         {
-            var description = try wgt.TextInput.init(allocator, .{ .label = " description ", .name = "description", .visible_width = 20, .round_corners = true, .render_content = session.is_terminal });
+            var description = try wgt.TextInput.init(allocator, .{ .label = " description ", .name = "description", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer description.deinit(allocator);
             description.getFocus().mode = .all;
             if (saved_fields) |saved| try description.setContent(allocator, saved.description);
