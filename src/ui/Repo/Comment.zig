@@ -21,21 +21,6 @@ pub const CommentWithId = struct {
     can_modify: bool = false,
 };
 
-// who a thread page is built for, which picks the comment buttons it shows
-pub const Viewer = struct {
-    role: evt.Repo.Role,
-    email: []const u8,
-
-    // the session's viewer of `repo`, or null when logged out. local mode owns everything.
-    pub fn init(session: *ui.Session, arena: *std.heap.ArenaAllocator, repo: evt.Repo.Record) !?Viewer {
-        if (session.data.host_kind == .local) return .{ .role = .owner, .email = "" };
-        const user_id = session.userId() orelse return null;
-        const moment = session.haxy_moment orelse unreachable;
-        const user = (try ui.activeUser(moment, arena, user_id)) orelse return null;
-        return .{ .role = evt.Repo.roleOf(repo, user_id), .email = user.event.email };
-    }
-};
-
 pub const Window = struct {
     comments: []const CommentWithId,
     start: usize,
@@ -58,7 +43,7 @@ pub fn init(
     thread_id: []const u8,
     selected_id: []const u8,
     start: usize,
-    viewer: ?Viewer,
+    viewer: ?ui.Viewer,
 ) !Permalink {
     const selected = (try readOne(hash_kind, arena, admin_moment, haxy_moment, selected_id, viewer)) orelse return error.NotFound;
     if (!std.mem.eql(u8, &selected.comment.event.thread_id, thread_id)) return error.NotFound;
@@ -78,7 +63,7 @@ pub fn loadWindow(
     index_key: []const u8,
     owner_id: []const u8,
     start: usize,
-    viewer: ?Viewer,
+    viewer: ?ui.Viewer,
 ) !Window {
     const DB = evt.EventDB(hash_kind);
     const index_cursor = try haxy_moment.getCursor(hash.hashInt(hash_kind, index_key)) orelse return .{
@@ -120,7 +105,7 @@ fn readOne(
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
     haxy_moment: evt.EventDB(hash_kind).HashMap(.read_only),
     id: []const u8,
-    viewer: ?Viewer,
+    viewer: ?ui.Viewer,
 ) !?CommentWithId {
     const bytes = idBytes(id) orelse return null;
     return readOneBytes(hash_kind, arena, admin_moment, haxy_moment, &bytes, viewer);
@@ -132,7 +117,7 @@ fn readOneBytes(
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
     haxy_moment: evt.EventDB(hash_kind).HashMap(.read_only),
     id_bytes: *const [evt.event_id_size]u8,
-    viewer: ?Viewer,
+    viewer: ?ui.Viewer,
 ) !?CommentWithId {
     const DB = evt.EventDB(hash_kind);
     const comment = (try evt.Comment.readById(DB, hash_kind, haxy_moment, arena, id_bytes)) orelse return null;

@@ -88,8 +88,8 @@ comment_id: []const u8,
 comments_start: usize,
 // the selected comment and its immediate replies.
 comment_page: ?Comment.Permalink = null,
-// whether the viewer may reply to comments
-can_reply: bool = false,
+// who the page is built for, null when logged out
+viewer: ?ui.Viewer = null,
 open: Window,
 closed: Window,
 // the conflicted issues' listing; its count also gates the conflicts tab.
@@ -210,7 +210,7 @@ pub fn init(
     comments_start: usize,
     theirs_picks: []const u8,
     view: ui.RoutablePage.IssuesView,
-    viewer: ?Comment.Viewer,
+    viewer: ?ui.Viewer,
 ) !Self {
     const empty = try emptyResult(arena.allocator(), identity, label, search, selected_id, comment_id, comments_start, theirs_picks, view);
 
@@ -346,7 +346,7 @@ pub fn init(
         .comment_id = empty.comment_id,
         .comments_start = comments_start,
         .comment_page = comment_page,
-        .can_reply = viewer != null,
+        .viewer = viewer,
         .open = open_window,
         .closed = closed_window,
         .conflicts = conflicts_window,

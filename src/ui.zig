@@ -1947,6 +1947,44 @@ pub fn ResolvedRefOrOid(comptime repo_kind: rp.RepoKind, comptime repo_opts: rp.
     };
 }
 
+// who a repo page is built for, which picks the actions it shows
+pub const Viewer = struct {
+    role: evt.Repo.Role,
+    email: []const u8,
+
+    // the session's viewer of `repo`, or null when logged out. local mode owns everything.
+    pub fn init(session: *Session, arena: *std.heap.ArenaAllocator, repo: evt.Repo.Record) !?Viewer {
+        if (session.data.host_kind == .local) return .{ .role = .owner, .email = "" };
+        const user_id = session.userId() orelse return null;
+        const moment = session.haxy_moment orelse unreachable;
+        const user = (try activeUser(moment, arena, user_id)) orelse return null;
+        return .{ .role = evt.Repo.roleOf(repo, user_id), .email = user.event.email };
+    }
+};
+
+// a repo a page shows, and what its viewer may do there
+pub const RepoHandle = struct {
+    location: RoutablePage.RepoLocation,
+    viewer: ?Viewer = null,
+
+    pub fn dupe(self: RepoHandle, allocator: std.mem.Allocator) !RepoHandle {
+        var copy = self;
+        copy.location = try self.location.dupe(allocator);
+        return copy;
+    }
+
+    // pushing, and seeing the events and undo tabs. local mode is always owner.
+    pub fn canWrite(self: RepoHandle) bool {
+        const viewer = self.viewer orelse return false;
+        return viewer.role.atLeast(.write);
+    }
+
+    pub fn canUndo(self: RepoHandle) bool {
+        const viewer = self.viewer orelse return false;
+        return viewer.role == .owner;
+    }
+};
+
 // where a repo page reads its on-disk repo from
 pub const RepoSource = struct {
     path: []const u8,

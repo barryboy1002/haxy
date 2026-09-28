@@ -43,8 +43,8 @@ pub const Commit = struct {
     window: Diff.Window = .{},
 };
 
-// where links and clone commands for this repository are rooted.
-location: ui.RoutablePage.RepoLocation,
+// where links and clone commands for this repository are rooted, and who views it.
+handle: ui.RepoHandle,
 // the resolved ref/oid this log walks from (the default branch when the route
 // didn't name one), so the page can canonicalize its url to it.
 ref_or_oid: ui.RoutablePage.RefOrOid,
@@ -92,7 +92,7 @@ pub fn init(
     // the admin db's moment, for resolving author emails to user names (null
     // in local mode, which has no users)
     admin_moment: ?evt.AdminDB.HashMap(.read_only),
-    location: ui.RoutablePage.RepoLocation,
+    handle: ui.RepoHandle,
     requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
     requested_value: []const u8,
     content: ui.RoutablePage.RepoCommitsRoute.Content,
@@ -127,17 +127,17 @@ pub fn init(
     // (NotFound -> 404); the default-branch path falls through to empty.
     var resolved = (try ui.ResolvedRefOrOid(repo_kind, repo_opts).init(repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null) return error.NotFound;
-        return emptyResult(aa, location, .branch, requested_value, content, base_oid);
+        return emptyResult(aa, handle, .branch, requested_value, content, base_oid);
     };
 
-    var moment = repo.core.latestMoment() catch return emptyResult(aa, location, resolved.ref_or_oid, resolved.value, content, base_oid);
+    var moment = repo.core.latestMoment() catch return emptyResult(aa, handle, resolved.ref_or_oid, resolved.value, content, base_oid);
     const state = rp.Repo(repo_kind, repo_opts).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
 
     // resolve annotated tags once, independently of the page's starting commit.
     {
         var tip = obj.Object(repo_kind, repo_opts).initCommit(state, io, gpa, &resolved.oid) catch {
             if (query != null) return error.NotFound;
-            return emptyResult(aa, location, resolved.ref_or_oid, resolved.value, content, base_oid);
+            return emptyResult(aa, handle, resolved.ref_or_oid, resolved.value, content, base_oid);
         };
         defer tip.deinit();
         resolved.oid = tip.oid;
@@ -159,7 +159,7 @@ pub fn init(
     // a base, whose version would also cover the commits before it, searches
     // the default branch instead.
     if (comptime repo_kind == .xit) index: {
-        if (location != .repo) break :index;
+        if (handle.location != .repo) break :index;
         if (resolved.ref_or_oid == .object or base_oid.len != 0) {
             var head_buffer: [xit.ref.MAX_REF_CONTENT_SIZE]u8 = undefined;
             const branch = switch (repo.head(io, &head_buffer) catch break :index) {
@@ -204,7 +204,7 @@ pub fn init(
         var start_oid = resolved.oid;
         if (from.len != 0) @memcpy(&start_oid, from);
 
-        var iter = repo.log(io, gpa, .{ .start_oids = &.{start_oid}, .first_parent = true }) catch return emptyResult(aa, location, resolved.ref_or_oid, resolved.value, content, base_oid);
+        var iter = repo.log(io, gpa, .{ .start_oids = &.{start_oid}, .first_parent = true }) catch return emptyResult(aa, handle, resolved.ref_or_oid, resolved.value, content, base_oid);
         defer iter.deinit();
         while (try iter.next(gpa)) |commit_object| {
             defer commit_object.deinit();
@@ -234,11 +234,11 @@ pub fn init(
     }
 
     return .{
-        .location = try location.dupe(aa),
+        .handle = try handle.dupe(aa),
         .ref_or_oid = resolved.ref_or_oid,
         .ref_or_oid_value = resolved.value,
         .base_oid = try aa.dupe(u8, base_oid),
-        .commit_count = if (repo_kind == .xit and location == .repo) blk: {
+        .commit_count = if (repo_kind == .xit and handle.location == .repo) blk: {
             if (base_oid.len == 0) {
                 const stats = (xit.patch.readCommitStats(repo_opts, state.extra.moment, &resolved.oid) catch null) orelse break :blk null;
                 break :blk stats.first_parent_depth;
@@ -321,9 +321,9 @@ fn identityOf(line: []const u8) []const u8 {
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
-pub fn emptyResult(aa: std.mem.Allocator, location: ui.RoutablePage.RepoLocation, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8, content: ui.RoutablePage.RepoCommitsRoute.Content, base_oid: []const u8) !Self {
+pub fn emptyResult(aa: std.mem.Allocator, handle: ui.RepoHandle, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8, content: ui.RoutablePage.RepoCommitsRoute.Content, base_oid: []const u8) !Self {
     return .{
-        .location = try location.dupe(aa),
+        .handle = try handle.dupe(aa),
         .ref_or_oid = ref_or_oid,
         .ref_or_oid_value = try aa.dupe(u8, value),
         .base_oid = try aa.dupe(u8, base_oid),
@@ -466,7 +466,7 @@ pub const View = struct {
 
         // the search box and the clone url at the top. local mode has neither.
         if (session.data.host_kind == .server) {
-            var header_view = try ui.widget.SearchHeader.init(allocator, session, data.location, " search ", "search", data.search, data.search_available);
+            var header_view = try ui.widget.SearchHeader.init(allocator, session, data.handle, " search ", "search", data.search, data.search_available);
             errdefer header_view.deinit(allocator);
             // a row taller than the header, leaving a blank line beneath it
             try outer.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .search_header = header_view }, .rect = null, .min_size = .{ .width = null, .height = 4 } });
@@ -731,7 +731,7 @@ pub const View = struct {
                         tb.getFocus().mode = .all;
                         try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
                     }
-                    if (commit.merge) if (self.data.location.commitsMergeRoute(commit.oid)) |route| {
+                    if (commit.merge) if (self.data.handle.location.commitsMergeRoute(commit.oid)) |route| {
                         try addLink(allocator, inner, "view commits from this merge", try std.fmt.allocPrint(self.session.page_arena.allocator(), "a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     };
                     if (commit.stats) |stats| {
@@ -750,11 +750,11 @@ pub const View = struct {
                         tb.getFocus().mode = .all;
                         try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
                     }
-                    try addLink(allocator, inner, "view files at this commit", try filesObjectLink(self.session.page_arena, self.data.location, commit.oid));
+                    try addLink(allocator, inner, "view files at this commit", try filesObjectLink(self.session.page_arena, self.data.handle.location, commit.oid));
                 }
 
                 try (Diff{
-                    .route = .{ .commit = .{ .location = self.data.location, .oid = commit.oid, .base_oid = self.data.base_oid } },
+                    .route = .{ .commit = .{ .location = self.data.handle.location, .oid = commit.oid, .base_oid = self.data.base_oid } },
                     .path = d.path,
                     .window = commit.window,
                 }).appendWindow(allocator, self.session, inner);
@@ -808,9 +808,9 @@ pub const View = struct {
         if (text.len == 0 and self.data.search == null) return;
         // an object view or a base-bounded list searches the default branch, so the url says so
         const route = if (self.data.default_branch.len != 0)
-            self.data.location.commitsRoute(.branch, self.data.default_branch, 0, "", "")
+            self.data.handle.location.commitsRoute(.branch, self.data.default_branch, 0, "", "")
         else
-            self.data.location.commitsRoute(self.data.ref_or_oid, self.data.ref_or_oid_value, 0, "", self.data.base_oid);
+            self.data.handle.location.commitsRoute(self.data.ref_or_oid, self.data.ref_or_oid_value, 0, "", self.data.base_oid);
         try self.session.navigate((route orelse return).withSearch(text) orelse return);
     }
 
@@ -884,10 +884,10 @@ pub const View = struct {
 };
 
 // the "a:" navigation link for the commits page walking from commit `oid` within
-// `data.location`, windowing the selected commit's diff from hunk `start`, filtered
+// `data.handle.location`, windowing the selected commit's diff from hunk `start`, filtered
 // to `path` ("" = every file).
 fn commitsLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []const u8, start: usize, path: []const u8) ![]const u8 {
-    const route = data.location.commitsRoute(.object, oid, start, path, data.base_oid) orelse return error.RouteTooLong;
+    const route = data.handle.location.commitsRoute(.object, oid, start, path, data.base_oid) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }
@@ -896,10 +896,10 @@ fn commitsLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []c
 // its query) and moves `from` along, so the search box survives paging. a fork
 // or an object view roots the page at the commit itself.
 fn pageRoute(data: *const Self, oid: []const u8) ?ui.RoutablePage {
-    if (data.location != .repo or data.ref_or_oid == .object) {
-        return data.location.commitsRoute(.object, oid, 0, "", data.base_oid);
+    if (data.handle.location != .repo or data.ref_or_oid == .object) {
+        return data.handle.location.commitsRoute(.object, oid, 0, "", data.base_oid);
     }
-    const route = data.location.commitsRoute(data.ref_or_oid, data.ref_or_oid_value, 0, "", data.base_oid) orelse return null;
+    const route = data.handle.location.commitsRoute(data.ref_or_oid, data.ref_or_oid_value, 0, "", data.base_oid) orelse return null;
     const paged = route.withFrom(oid) orelse return null;
     return paged.withSearch(data.search orelse return paged);
 }
@@ -928,8 +928,8 @@ fn commitRowLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, commit
         return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{try route.toUrl(page_arena)});
     }
     const route = (switch (content) {
-        .message => data.location.commitMessageRoute(.object, commit.oid, data.base_oid),
-        .diff => |diff| data.location.commitsRoute(.object, commit.oid, commit.window.start, diff.path, data.base_oid),
+        .message => data.handle.location.commitMessageRoute(.object, commit.oid, data.base_oid),
+        .diff => |diff| data.handle.location.commitsRoute(.object, commit.oid, commit.window.start, diff.path, data.base_oid),
     }) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
@@ -937,7 +937,7 @@ fn commitRowLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, commit
 
 // the "a:" link to the page showing `oid`'s message on its own.
 fn messageLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []const u8) ![]const u8 {
-    const route = data.location.commitMessageRoute(.object, oid, data.base_oid) orelse return error.RouteTooLong;
+    const route = data.handle.location.commitMessageRoute(.object, oid, data.base_oid) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
     return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
 }

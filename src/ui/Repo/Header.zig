@@ -267,7 +267,7 @@ pub const View = struct {
         }
 
         // events, which a server only shows to whoever it shows undo to
-        if (session.data.host_kind == .local or page.undo != null) {
+        if (page.handle.canWrite()) {
             var text_box = try wgt.TextBox.init(allocator, events_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;

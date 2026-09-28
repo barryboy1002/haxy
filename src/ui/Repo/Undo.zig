@@ -44,11 +44,11 @@ count: u64 = 0,
 items: []const Item = &.{},
 next: ?u64 = null,
 failure: ?[]const u8 = null,
-can_undo: bool = false,
+handle: ui.RepoHandle,
 // the clear-history confirmation stands in for the list
 clear: bool = false,
 
-pub fn init(comptime opts: rp.RepoOpts(.xit), arena: *std.heap.ArenaAllocator, repo: *rp.Repo(.xit, opts), haxy_moment: ?evt.AdminDB.HashMap(.read_only), identity: []const u8, selected: ?u64) !Self {
+pub fn init(comptime opts: rp.RepoOpts(.xit), arena: *std.heap.ArenaAllocator, repo: *rp.Repo(.xit, opts), haxy_moment: ?evt.AdminDB.HashMap(.read_only), identity: []const u8, selected: ?u64, handle: ui.RepoHandle) !Self {
     const aa = arena.allocator();
     const DB = rp.Repo(.xit, opts).DB;
     const history = try DB.ArrayList(.read_only).init(repo.core.db.rootCursor().readOnly());
@@ -101,7 +101,7 @@ pub fn init(comptime opts: rp.RepoOpts(.xit), arena: *std.heap.ArenaAllocator, r
             .undone = row_undone,
         });
     }
-    return .{ .identity = try aa.dupe(u8, identity), .count = count, .items = items.items, .next = if (remaining > 0) remaining - 1 else null };
+    return .{ .identity = try aa.dupe(u8, identity), .handle = handle, .count = count, .items = items.items, .next = if (remaining > 0) remaining - 1 else null };
 }
 
 const Detail = struct {
@@ -476,7 +476,7 @@ pub const View = struct {
         var button = try wgt.TextBox.init(allocator, "clear undo history", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
         errdefer button.deinit(allocator);
         button.getFocus().mode = .all;
-        button.getFocus().kind = if (data.can_undo) .{ .custom = "submit" } else .text_box;
+        button.getFocus().kind = if (data.handle.canUndo()) .{ .custom = "submit" } else .text_box;
         try box.children.put(allocator, button.getFocus().id, .{ .widget = .{ .text_box = button }, .rect = null, .min_size = null });
         box.getFocus().child_id = button.getFocus().id;
 
@@ -548,7 +548,7 @@ pub const View = struct {
             entry.value.widget.deinit(allocator);
         }
         const item = self.data.items[index];
-        const enabled = self.data.can_undo and item.index > 0;
+        const enabled = self.data.handle.canUndo() and item.index > 0;
 
         // the fixed rows are filled first, since adding the ones below
         // invalidates every pointer into the box
@@ -617,7 +617,7 @@ pub const View = struct {
         if (self.detailActive()) {
             const details = &self.detailScroll().child.box;
             if (self.selected()) |index| {
-                if (activated(root_focus, details.children.keys()[0], key) and self.data.can_undo and self.data.items[index].index > 0) {
+                if (activated(root_focus, details.children.keys()[0], key) and self.data.handle.canUndo() and self.data.items[index].index > 0) {
                     self.requestUndo(ui.RoutablePage.repoUndoRoute(self.data.identity, self.data.items[index].index) orelse return error.RouteTooLong);
                     return;
                 }
@@ -637,7 +637,7 @@ pub const View = struct {
     fn clearInput(self: *View, key: Key, root_focus: *Focus) !void {
         const center = &self.box.children.values()[content_index].widget.center;
         const button_id = center.child.box.getFocus().child_id orelse return;
-        if (!activated(root_focus, button_id, key) or !self.data.can_undo) return;
+        if (!activated(root_focus, button_id, key) or !self.data.handle.canUndo()) return;
         self.requestUndo(ui.RoutablePage.repoUndoClearRoute(self.data.identity) orelse return error.RouteTooLong);
     }
 

@@ -49,8 +49,8 @@ pub const Entry = struct {
     loaded: bool = false,
 };
 
-// where links and clone commands for this repository are rooted.
-location: ui.RoutablePage.RepoLocation,
+// where links and clone commands for this repository are rooted, and who views it.
+handle: ui.RepoHandle,
 // the resolved ref this listing is read at (the default branch when the route
 // didn't name one), so the view's directory links stay pinned to it.
 ref_or_oid: ui.RoutablePage.RefOrOid,
@@ -81,7 +81,7 @@ pub fn initPatchRev(
     repo: *rp.Repo(repo_kind, repo_opts),
     io: std.Io,
     gpa: std.mem.Allocator,
-    location: ui.RoutablePage.RepoLocation,
+    handle: ui.RepoHandle,
     id_hex: []const u8,
     path: []const u8,
     line: usize,
@@ -89,17 +89,17 @@ pub fn initPatchRev(
     const id = evt.parseEventId(id_hex) catch return error.NotFound;
     const record = (try evt.readFromRepo(evt.PatchRev, repo_kind, repo_opts, io, gpa, arena, repo, &id)) orelse return error.NotFound;
     if (record.removed) return error.NotFound;
-    var data = try init(repo_kind, repo_opts, arena, repo, io, gpa, location, .object, record.head_tree_oid, path, line, "");
+    var data = try init(repo_kind, repo_opts, arena, repo, io, gpa, handle, .object, record.head_tree_oid, path, line, "");
     data.patchrev_id = try arena.allocator().dupe(u8, id_hex);
     return data;
 }
 
 pub fn filesRoute(self: *const Self, path: []const u8, line: usize) ?ui.RoutablePage {
-    if (self.patchrev_id) |id| return switch (self.location) {
+    if (self.patchrev_id) |id| return switch (self.handle.location) {
         .repo => |identity| ui.RoutablePage.repoPatchRevFilesRoute(identity, id, path, line),
         .fork => null,
     };
-    const route = self.location.filesRoute(self.ref_or_oid, self.ref_or_oid_value, path, line) orelse return null;
+    const route = self.handle.location.filesRoute(self.ref_or_oid, self.ref_or_oid_value, path, line) orelse return null;
     return route.withFind(self.find orelse return route);
 }
 
@@ -114,7 +114,7 @@ pub fn init(
     repo: *rp.Repo(repo_kind, repo_opts),
     io: std.Io,
     gpa: std.mem.Allocator,
-    location: ui.RoutablePage.RepoLocation,
+    handle: ui.RepoHandle,
     requested_ref_or_oid: ?ui.RoutablePage.RefOrOid,
     requested_value: []const u8,
     path: []const u8,
@@ -129,14 +129,14 @@ pub fn init(
     // bad url (NotFound -> 404); the default-branch path falls through to empty.
     const resolved = (try ui.ResolvedRefOrOid(repo_kind, repo_opts).init(repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null or term != null) return error.NotFound;
-        return emptyResult(aa, location, .branch, requested_value, path);
+        return emptyResult(aa, handle, .branch, requested_value, path);
     };
 
     // read just the viewed directory of that tree or commit. building the
     // read-only state mirrors what repo.status does internally, but for an
     // arbitrary commit rather than HEAD. a path that doesn't exist in the tree
     // is a bad url (404).
-    var moment = repo.core.latestMoment() catch return emptyResult(aa, location, resolved.ref_or_oid, resolved.value, path);
+    var moment = repo.core.latestMoment() catch return emptyResult(aa, handle, resolved.ref_or_oid, resolved.value, path);
     const state = rp.Repo(repo_kind, repo_opts).State(.read_only){ .core = &repo.core, .extra = .{ .moment = &moment } };
 
     var entries: std.ArrayList(Entry) = .empty;
@@ -169,7 +169,7 @@ pub fn init(
             };
         }
         return .{
-            .location = try location.dupe(aa),
+            .handle = try handle.dupe(aa),
             .ref_or_oid = resolved.ref_or_oid,
             .ref_or_oid_value = resolved.value,
             .dir = "",
@@ -184,7 +184,7 @@ pub fn init(
 
     var tree_dir = tr.TreeDir(repo_kind, repo_opts).init(state, io, gpa, &resolved.oid, path) catch |err| switch (err) {
         error.TreeEntryNotFound => return error.NotFound,
-        else => return emptyResult(aa, location, resolved.ref_or_oid, resolved.value, path),
+        else => return emptyResult(aa, handle, resolved.ref_or_oid, resolved.value, path),
     };
     defer tree_dir.deinit();
 
@@ -227,7 +227,7 @@ pub fn init(
     }
 
     return .{
-        .location = try location.dupe(aa),
+        .handle = try handle.dupe(aa),
         .ref_or_oid = resolved.ref_or_oid,
         .ref_or_oid_value = resolved.value,
         .dir = try aa.dupe(u8, dir),
@@ -319,9 +319,9 @@ fn readFileContent(
 }
 
 // an empty listing pinned to a ref, for the wasm / no-repo / unresolved paths.
-pub fn emptyResult(aa: std.mem.Allocator, location: ui.RoutablePage.RepoLocation, ref_or_oid: ui.RoutablePage.RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
+pub fn emptyResult(aa: std.mem.Allocator, handle: ui.RepoHandle, ref_or_oid: ui.RoutablePage.RefOrOid, ref_or_oid_value: []const u8, dir: []const u8) !Self {
     return .{
-        .location = try location.dupe(aa),
+        .handle = try handle.dupe(aa),
         .ref_or_oid = ref_or_oid,
         .ref_or_oid_value = try aa.dupe(u8, ref_or_oid_value),
         .dir = try aa.dupe(u8, dir),
@@ -358,7 +358,7 @@ pub const View = struct {
 
         // the search box and the clone url at the top. local mode has neither.
         if (session.data.host_kind == .server) {
-            var header_view = try ui.widget.SearchHeader.init(allocator, session, data.location, " find file ", "find", data.find, data.find_available);
+            var header_view = try ui.widget.SearchHeader.init(allocator, session, data.handle, " find file ", "find", data.find, data.find_available);
             errdefer header_view.deinit(allocator);
             // a row taller than the header, leaving a blank line beneath it
             try outer.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .search_header = header_view }, .rect = null, .min_size = .{ .width = null, .height = 4 } });

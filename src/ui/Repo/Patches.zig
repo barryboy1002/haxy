@@ -219,8 +219,8 @@ comment_id: []const u8,
 comments_start: usize,
 // the selected comment and its immediate replies.
 comment_page: ?Comment.Permalink = null,
-// whether the viewer may reply to comments
-can_reply: bool = false,
+// who the page is built for, null when logged out
+viewer: ?ui.Viewer = null,
 open: Window,
 closed: Window,
 merged: Window,
@@ -567,7 +567,7 @@ pub fn init(
     comments_start: usize,
     theirs_picks: []const u8,
     view: ui.RoutablePage.PatchesView,
-    viewer: ?Comment.Viewer,
+    viewer: ?ui.Viewer,
 ) !Self {
     const allowed_view: ui.RoutablePage.PatchesView = if (session.local != null and view == .drafts) .open else view;
     var empty = try emptyResult(arena.allocator(), identity, label, search, selected_id, comment_id, comments_start, theirs_picks, allowed_view);
@@ -736,7 +736,7 @@ pub fn init(
         .comment_id = empty.comment_id,
         .comments_start = comments_start,
         .comment_page = comment_page,
-        .can_reply = viewer != null,
+        .viewer = viewer,
         .open = open_window,
         .closed = closed_window,
         .merged = merged_window,
@@ -973,7 +973,7 @@ pub fn appendDetails(self: *const Self, allocator: std.mem.Allocator, box: *wgt.
                 .label = " merge this patch locally ",
             },
         };
-        var copyable_text = try ui.widget.CopyableText.init(allocator, session, &choices);
+        var copyable_text = try ui.widget.CopyableText.init(allocator, session, &choices, 0);
         errdefer copyable_text.deinit(allocator);
         try box.children.put(allocator, copyable_text.getFocus().id, .{ .widget = .{ .copyable_text = copyable_text }, .rect = null, .min_size = null });
     };
@@ -995,7 +995,7 @@ pub fn appendDetails(self: *const Self, allocator: std.mem.Allocator, box: *wgt.
             .label = if (status_kind == .merged) " target branch this patch was merged into " else " target branch this patch will go to ",
         },
     };
-    var copyable_text = try ui.widget.CopyableText.init(allocator, session, fields[@intFromBool(entry.revision_oid.len == 0)..]);
+    var copyable_text = try ui.widget.CopyableText.init(allocator, session, fields[@intFromBool(entry.revision_oid.len == 0)..], 0);
     errdefer copyable_text.deinit(allocator);
     try box.children.put(allocator, copyable_text.getFocus().id, .{ .widget = .{ .copyable_text = copyable_text }, .rect = null, .min_size = null });
 }

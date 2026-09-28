@@ -29,6 +29,7 @@ pub const Quit = @import("./Quit.zig");
 
 header: Header,
 repo: evt.Repo.Record,
+handle: ui.RepoHandle,
 files: Files,
 changes: Changes,
 refs: Refs,
@@ -58,7 +59,6 @@ pub fn init(
     // every repo route stores its identity as "owner/name" (or elides it in local mode)
     const name_str = route.repoIdentity() orelse return error.UnexpectedRoute;
     const repo_identity = ui.RoutablePage.RepoIdentity.parse(name_str) orelse return error.NotFound;
-    const location = ui.RoutablePage.RepoLocation{ .repo = repo_identity.identity };
     // files, commits and diff share the requested ref, or the default branch.
     // directories and hunk windows only apply to their own tab.
     const requested_ref_or_oid: ?ui.RoutablePage.RefOrOid = switch (route) {
@@ -264,18 +264,19 @@ pub fn init(
         };
     }
 
-    const viewer = try Comment.Viewer.init(session, arena, repo);
+    const handle = ui.RepoHandle{
+        .location = .{ .repo = try arena.allocator().dupe(u8, repo_identity.identity) },
+        .viewer = try ui.Viewer.init(session, arena, repo),
+    };
 
     // open the repo once for every tab. files and changes share a ref or revision.
     // no filesystem (wasm), nowhere to look, or a failed open: empty tabs.
-    const undo_allowed = if (session.local) |local| local.repo_kind == .xit else session.userId() != null and evt.Repo.roleOf(repo, session.userId()).atLeast(.write);
-    if (route == .repo_undo and !undo_allowed) return error.NotFound;
-    // a server shows events to whoever it shows undo to, so the route follows
-    if (route == .repo_events and session.data.host_kind != .local and !undo_allowed) return error.NotFound;
+    // the events tab needs write access, like undo
+    if (route == .repo_events and !handle.canWrite()) return error.NotFound;
     const undo_index = if (route == .repo_undo) route.repo_undo.index else null;
     const undo_clear = route == .repo_undo and route.repo_undo.clear;
-    // an unreadable repo still shows the tab, like every other tab
-    var undo_data: ?Undo = if (undo_allowed) .{ .identity = repo_identity.identity } else null;
+    // only xit repos have undo history, so it's read in their branch below
+    var undo_data: ?Undo = null;
     const files, const changes, const refs, var issues, var patches, var discussions, const events = blk: {
         read: {
             const io = session.io orelse break :read;
@@ -293,10 +294,10 @@ pub fn init(
                                 try pch.refreshBranches(.local, repo_kind, opened.self_repo_opts, io, gpa, opened, null, null);
                             }
                             // tabs switch in-page, so every tab's data is read here
-                            if (repo_kind == .xit and undo_allowed) {
-                                undo_data = Undo.init(opened.self_repo_opts, arena, opened, session.haxy_moment, repo_identity.identity, undo_index) catch |err| switch (err) {
+                            if (repo_kind == .xit and handle.canWrite()) {
+                                undo_data = Undo.init(opened.self_repo_opts, arena, opened, session.haxy_moment, repo_identity.identity, undo_index, handle) catch |err| switch (err) {
                                     error.OutOfMemory => return err,
-                                    else => .{ .identity = repo_identity.identity, .failure = @errorName(err) },
+                                    else => .{ .identity = repo_identity.identity, .handle = handle, .failure = @errorName(err) },
                                 };
                             }
                             // a merge: route stands for the log of what the merge brought in
@@ -307,23 +308,23 @@ pub fn init(
                                 break :merged .{ .object, merged.oid, merged.base_oid };
                             };
                             const files_data = if (patchrev_id.len != 0)
-                                try Files.initPatchRev(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, location, patchrev_id, files_dir, files_line)
+                                try Files.initPatchRev(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, handle, patchrev_id, files_dir, files_line)
                             else
-                                try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, location, ref_or_oid, ref_value, files_dir, files_line, files_find);
+                                try Files.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, handle, ref_or_oid, ref_value, files_dir, files_line, files_find);
                             const changes_data: Changes = if (route == .repo_diff)
                                 .{ .diff = try Diff.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, route.repo_diff) }
                             else if (patchrev_id.len != 0) diff: {
                                 const diff_route = ui.RoutablePage.repoPatchRevDiffRoute(repo_identity.identity, patchrev_id, 0, "") orelse return error.RouteTooLong;
                                 break :diff .{ .diff = try Diff.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, diff_route.repo_diff) };
-                            } else .{ .commits = try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, session.haxy_moment, location, ref_or_oid, ref_value, commits_content, base_oid, commits_search, commits_from) };
+                            } else .{ .commits = try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, session.haxy_moment, handle, ref_or_oid, ref_value, commits_content, base_oid, commits_search, commits_from) };
                             const target_branch = if (files_data.ref_or_oid == .branch) files_data.ref_or_oid_value else "";
                             break :blk .{
                                 files_data,
                                 changes_data,
                                 try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, refs_kind, refs_from, refs_search),
-                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view, viewer),
-                                try Patches.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, session, repo_id_maybe, repo_identity.identity, target_branch, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view, viewer),
-                                try Discussions.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, discussions_label, discussions_search, discussions_selected, discussions_comment, discussions_comments_start, discussions_view, viewer),
+                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view, handle.viewer),
+                                try Patches.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, session, repo_id_maybe, repo_identity.identity, target_branch, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view, handle.viewer),
+                                try Discussions.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, discussions_label, discussions_search, discussions_selected, discussions_comment, discussions_comments_start, discussions_view, handle.viewer),
                                 try Events.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, events_view, events_kind, events_selected, events_moment, session.local != null, session.data.sync_failure),
                             };
                         },
@@ -333,8 +334,8 @@ pub fn init(
         }
         const aa = arena.allocator();
         break :blk .{
-            try Files.emptyResult(aa, location, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
-            Changes{ .commits = try Commits.emptyResult(aa, location, requested_ref_or_oid orelse .branch, requested_ref_value, commits_content, commits_base_oid) },
+            try Files.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
+            Changes{ .commits = try Commits.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, commits_content, commits_base_oid) },
             try Refs.emptyResult(arena, repo_identity.identity, refs_kind, refs_from, refs_search),
             try Issues.emptyResult(aa, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view),
             try Patches.emptyResult(aa, repo_identity.identity, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view),
@@ -342,11 +343,8 @@ pub fn init(
             try Events.empty(aa, repo_identity.identity, events_view, session.local != null, session.data.sync_failure),
         };
     };
-    if (undo_data) |*undo| {
-        undo.can_undo = session.local != null or evt.Repo.roleOf(repo, session.userId()) == .owner;
-        undo.clear = undo_clear;
-    }
     if (route == .repo_undo and undo_data == null) return error.NotFound;
+    if (undo_data) |*undo| undo.clear = undo_clear;
     issues.repo_source = source;
     patches.repo_source = source;
     patches.repo_id = repo_id_maybe;
@@ -356,6 +354,7 @@ pub fn init(
         // use the files tab's resolved ref for the header
         .header = try Header.init(arena, repo.event.name, owner_name, files.ref_or_oid, files.ref_or_oid_value, issues.label, patches.label, discussions.label),
         .repo = repo,
+        .handle = handle,
         .files = files,
         .changes = changes,
         .refs = refs,
@@ -439,7 +438,7 @@ pub const View = struct {
                 try stack.children.put(allocator, discussions_view.getFocus().id, .{ .repo_discussions = discussions_view });
             }
 
-            if (session.data.host_kind == .local or data.undo != null) {
+            if (data.handle.canWrite()) {
                 var events_view = try Events.View.init(allocator, &data.events, session);
                 errdefer events_view.deinit(allocator);
                 try stack.children.put(allocator, events_view.getFocus().id, .{ .repo_events = events_view });

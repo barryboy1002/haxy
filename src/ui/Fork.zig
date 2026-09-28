@@ -19,7 +19,6 @@ pub const Diff = @import("./Repo/Diff.zig");
 pub const Patches = @import("./Repo/Patches.zig");
 pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
-const Viewer = @import("./Repo/Comment.zig").Viewer;
 
 header: Header,
 files: Files,
@@ -57,6 +56,11 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     const aa = arena.allocator();
     const target_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ owner.event.name, target_record.event.name });
     const id_hex = std.fmt.bytesToHex(id, .lower);
+    // the fork's viewer is the target repo's
+    const handle = ui.RepoHandle{
+        .location = .{ .fork = .{ .identity = identity.identity, .id = &id_hex } },
+        .viewer = try ui.Viewer.init(session, arena, target_record),
+    };
     const fork_path = try fork.forkPath(aa, users_dir, &forker_id, &id);
     // a fork shares its target's hash kind
     var any_fork = try rp.AnyRepo(.xit, .{}).open(io, arena.child_allocator, .{ .path = fork_path, .require_repo_root = true });
@@ -101,7 +105,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                     patch_data.repo_source = target_source;
                 },
                 .publish => {
-                    patch_data = Patches.init(.xit, repo_opts, arena, target_repo, io, haxy_moment, session, target_id, target_identity, target_branch, "", "", &id_hex, "", 0, "", .open, try Viewer.init(session, arena, target_record)) catch |err| switch (err) {
+                    patch_data = Patches.init(.xit, repo_opts, arena, target_repo, io, haxy_moment, session, target_id, target_identity, target_branch, "", "", &id_hex, "", 0, "", .open, handle.viewer) catch |err| switch (err) {
                         error.NotFound => patch_data,
                         else => |other| return other,
                     };
@@ -136,12 +140,8 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                 .fork_commits => |c| c.content,
                 else => .{ .diff = .{} },
             };
-            const location = ui.RoutablePage.RepoLocation{ .fork = .{
-                .identity = identity.identity,
-                .id = &id_hex,
-            } };
-            const files = try Files.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, location, requested_ref, requested_value, files_path, files_line, files_find);
-            var commits = try Commits.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, haxy_moment, location, requested_ref, requested_value, commits_content, &commits_base_oid, "", "");
+            const files = try Files.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, handle, requested_ref, requested_value, files_path, files_line, files_find);
+            var commits = try Commits.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, haxy_moment, handle, requested_ref, requested_value, commits_content, &commits_base_oid, "", "");
             commits.commit_count = if (newest_revision) |revision| revision.record.commit_count else 0;
             const diff_start: usize = switch (route) {
                 .fork_diff => |d| d.start,

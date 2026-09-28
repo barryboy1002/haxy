@@ -1018,7 +1018,7 @@ pub const SearchHeader = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         session: *ui.Session,
-        location: ui.RoutablePage.RepoLocation,
+        handle: ui.RepoHandle,
         label: []const u8,
         name: []const u8,
         text: ?[]const u8,
@@ -1043,7 +1043,7 @@ pub const SearchHeader = struct {
         }
 
         if (session.data.host_kind == .server) {
-            if (try CopyableText.initClone(allocator, session, location)) |value| {
+            if (try CopyableText.initClone(allocator, session, handle)) |value| {
                 var clone_url = value;
                 errdefer clone_url.deinit(allocator);
                 const min_width = clone_url.minWidth();
@@ -1782,7 +1782,7 @@ pub const CopyableText = struct {
     choices: []Choice,
     selected: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, choices: []const Choice) !CopyableText {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, choices: []const Choice, initial: usize) !CopyableText {
         if (choices.len == 0) return error.MissingCopyableText;
 
         const owned_choices = try allocator.dupe(Choice, choices);
@@ -1801,26 +1801,27 @@ pub const CopyableText = struct {
         var text_input = try wgt.TextInput.init(allocator, .{
             .border_style = .single,
             .round_corners = true,
-            .label = choices[0].label,
-            .bottom_label = choices[0].bottom_label,
+            .label = choices[initial].label,
+            .bottom_label = choices[initial].bottom_label,
             .read_only = true,
             .render_content = session.is_terminal,
             .visible_width = null,
         });
         errdefer text_input.deinit(allocator);
         text_input.getFocus().mode = .all;
-        try text_input.setContent(allocator, choices[0].text);
+        try text_input.setContent(allocator, choices[initial].text);
         box.getFocus().child_id = text_input.getFocus().id;
         try box.children.put(allocator, text_input.getFocus().id, .{ .widget = .{ .text_input = text_input }, .rect = null, .min_size = null, .flex = .shrink });
 
-        return .{ .box = box, .session = session, .choices = owned_choices };
+        return .{ .box = box, .session = session, .choices = owned_choices, .selected = initial };
     }
 
-    pub fn initClone(allocator: std.mem.Allocator, session: *ui.Session, location: ui.RoutablePage.RepoLocation) !?CopyableText {
+    pub fn initClone(allocator: std.mem.Allocator, session: *ui.Session, handle: ui.RepoHandle) !?CopyableText {
         const aa = session.page_arena.allocator();
         var choices: [2]Choice = undefined;
         var count: usize = 0;
-        switch (location) {
+        var ssh_index: ?usize = null;
+        switch (handle.location) {
             .repo => |identity| {
                 if (session.data.git_http_port) |port| {
                     const url = try std.fmt.allocPrint(aa, "http://localhost:{d}/repo/{s}", .{ port, identity });
@@ -1833,6 +1834,7 @@ pub const CopyableText = struct {
                     count += 1;
                 }
                 if (session.data.git_ssh_port) |port| {
+                    ssh_index = count;
                     const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/repo/{s}", .{ port, identity });
                     choices[count] = .{
                         .selector = "ssh",
@@ -1854,7 +1856,9 @@ pub const CopyableText = struct {
             },
         }
         if (count == 0) return null;
-        return @as(?CopyableText, try init(allocator, session, choices[0..count]));
+        // a viewer who can push starts on the ssh url
+        const initial = if (handle.canWrite()) ssh_index orelse 0 else 0;
+        return @as(?CopyableText, try init(allocator, session, choices[0..count], initial));
     }
 
     pub fn minWidth(self: *const CopyableText) usize {

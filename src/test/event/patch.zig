@@ -291,7 +291,7 @@ fn testBranchMerge(selection: evt.Patch.MergeRevision) !void {
     }
     const diff_after = try ui.Repo.Diff.init(.xit, opts, &arena, &repo, io, allocator, diff_route.repo_diff);
     try std.testing.expectEqualDeep(diff_before.window, diff_after.window);
-    const files = try ui.Repo.Files.initPatchRev(.xit, opts, &arena, &repo, io, allocator, .{ .repo = "" }, &merged_status.patchrev_id, "base.txt", 0);
+    const files = try ui.Repo.Files.initPatchRev(.xit, opts, &arena, &repo, io, allocator, .{ .location = .{ .repo = "" } }, &merged_status.patchrev_id, "base.txt", 0);
     try std.testing.expectEqual(2, files.entries.len);
     try std.testing.expectEqualStrings("base.txt", files.entries[0].name);
     try std.testing.expectEqualStrings("source", files.entries[0].lines[0]);

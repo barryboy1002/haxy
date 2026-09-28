@@ -48,8 +48,8 @@ selected_id: []const u8,
 comment_id: []const u8,
 comments_start: usize,
 comment_page: ?Comment.Permalink = null,
-// whether the viewer may reply to comments
-can_reply: bool = false,
+// who the page is built for, null when logged out
+viewer: ?ui.Viewer = null,
 recent: Window,
 view: ui.RoutablePage.DiscussionsView,
 description_page: bool = false,
@@ -118,7 +118,7 @@ pub fn init(
     comment_id: []const u8,
     comments_start: usize,
     view: ui.RoutablePage.DiscussionsView,
-    viewer: ?Comment.Viewer,
+    viewer: ?ui.Viewer,
 ) !Self {
     const empty = try emptyResult(arena.allocator(), identity, label, search, selected_id, comment_id, comments_start, view);
     const aa = arena.allocator();
@@ -197,7 +197,7 @@ pub fn init(
         .comment_id = empty.comment_id,
         .comments_start = comments_start,
         .comment_page = comment_page,
-        .can_reply = viewer != null,
+        .viewer = viewer,
         .recent = loaded_window,
         .view = empty.view,
         .description_page = empty.description_page,
