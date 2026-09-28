@@ -646,6 +646,8 @@ pub const Header = struct {
         box: wgt.Box(ui.Widget),
         session: *ui.Session,
         tab_ids: [2]usize,
+        // the tab stays selected while the sync button has focus
+        selected_tab: usize,
         button_id: ?usize,
 
         pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !Header.View {
@@ -684,7 +686,7 @@ pub const Header = struct {
                 try box.children.put(allocator, status.getFocus().id, .{ .widget = .{ .text_box = status }, .rect = null, .min_size = null, .flex = .shrink });
             }
             box.getFocus().child_id = tab_ids[@intFromEnum(data.view)];
-            return .{ .box = box, .session = session, .tab_ids = tab_ids, .button_id = button_id };
+            return .{ .box = box, .session = session, .tab_ids = tab_ids, .selected_tab = @intFromEnum(data.view), .button_id = button_id };
         }
 
         pub fn deinit(self: *Header.View, allocator: std.mem.Allocator) void {
@@ -693,13 +695,14 @@ pub const Header = struct {
 
         pub fn build(self: *Header.View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
             self.clearGrid();
-            for (self.tab_ids) |id| {
+            if (self.getSelectedIndex()) |index| self.selected_tab = index;
+            for (self.tab_ids, 0..) |id, index| {
                 const child = self.box.children.getPtr(id) orelse continue;
                 const tab = switch (child.widget) {
                     .text_box => |*text_box| text_box,
                     else => continue,
                 };
-                ui.widget.markSelected(tab, self.box.getFocus().child_id == id);
+                ui.widget.markSelected(tab, index == self.selected_tab);
             }
             try self.box.build(allocator, constraint, root_focus);
         }
