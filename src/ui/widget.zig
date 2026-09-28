@@ -191,6 +191,57 @@ pub fn moveInRow(row: *wgt.Box(Widget), root_focus: *Focus, right: bool) bool {
     return true;
 }
 
+// a repo tab's placeholder while the repo has no commits, with the remote to
+// push to for a viewer who can
+pub fn initNoCommits(allocator: std.mem.Allocator, session: *ui.Session, handle: ui.RepoHandle) !Center {
+    var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+    errdefer box.deinit(allocator);
+
+    // built first so the text can center over it
+    var remote_maybe: ?CopyableText = if (session.data.host_kind == .server and handle.canWrite()) if (session.data.git_ssh_port) |port| blk: {
+        // only repo pages flag a repo without commits
+        const identity = switch (handle.location) {
+            .repo => |identity| identity,
+            .fork => unreachable,
+        };
+        const aa = session.page_arena.allocator();
+        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/repo/{s}", .{ port, identity });
+        break :blk try CopyableText.init(allocator, session, &.{.{
+            .text = url,
+            .copyable_text = try std.fmt.allocPrint(aa, "git remote add origin {s}", .{url}),
+            .label = " git remote add origin ",
+        }}, 0);
+    } else null else null;
+    errdefer if (remote_maybe) |*remote| remote.deinit(allocator);
+
+    {
+        var text_widget: Widget = blk: {
+            var text_box = try wgt.TextBox.init(allocator, "no commits yet", .{ .border_style = null, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            break :blk if (remote_maybe != null) .{ .center = try Center.init(allocator, .{ .text_box = text_box }) } else .{ .text_box = text_box };
+        };
+        errdefer text_widget.deinit(allocator);
+        // over the remote widget, the text centers across its width
+        const size: ?layout.MaybeSize = if (remote_maybe) |*remote| .{ .width = remote.minWidth(), .height = 1 } else null;
+        try box.children.put(allocator, text_widget.getFocus().id, .{ .widget = text_widget, .rect = null, .min_size = size, .max_size = size });
+    }
+
+    if (remote_maybe) |*remote| {
+        {
+            var gap = try wgt.Text.init(allocator, " ");
+            errdefer gap.deinit(allocator);
+            try box.children.put(allocator, gap.getFocus().id, .{ .widget = .{ .text = gap }, .rect = null, .min_size = null });
+        }
+        const min_width = remote.minWidth();
+        box.getFocus().child_id = remote.getFocus().id;
+        try box.children.put(allocator, remote.getFocus().id, .{ .widget = .{ .copyable_text = remote.* }, .rect = null, .min_size = .{ .width = min_width, .height = 3 }, .max_size = .{ .width = min_width, .height = 3 } });
+        // the box owns it now
+        remote_maybe = null;
+    }
+
+    return Center.init(allocator, .{ .box = box });
+}
+
 pub const FlowBox = struct {
     focus: *Focus,
     grid: ?Grid,

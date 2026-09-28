@@ -71,6 +71,8 @@ find: ?[]const u8 = null,
 // whether the viewed tree has a file index, so the search box shows and a
 // find: route resolves. travels in the page json for the wasm view.
 find_available: bool = false,
+// the repo's default branch has no commit yet, so the tab shows a placeholder
+no_commits: bool = false,
 
 const Self = @This();
 
@@ -129,7 +131,9 @@ pub fn init(
     // bad url (NotFound -> 404); the default-branch path falls through to empty.
     const resolved = (try ui.ResolvedRefOrOid(repo_kind, repo_opts).init(repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null or term != null) return error.NotFound;
-        return emptyResult(aa, handle, .branch, requested_value, path);
+        var data = try emptyResult(aa, handle, .branch, requested_value, path);
+        data.no_commits = true;
+        return data;
     };
 
     // read just the viewed directory of that tree or commit. building the
@@ -355,6 +359,14 @@ pub const View = struct {
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer outer.deinit(allocator);
+
+        if (data.no_commits) {
+            var center = try ui.widget.initNoCommits(allocator, session, data.handle);
+            errdefer center.deinit(allocator);
+            outer.getFocus().child_id = center.getFocus().id;
+            try outer.children.put(allocator, center.getFocus().id, .{ .widget = .{ .center = center }, .rect = null, .min_size = null });
+            return .{ .box = outer, .data = data, .session = session, .shown_index = null };
+        }
 
         // the search box and the clone url at the top. local mode has neither.
         if (session.data.host_kind == .server) {
@@ -582,6 +594,7 @@ pub const View = struct {
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
+        if (self.data.no_commits) return self.box.build(allocator, constraint, root_focus);
 
         // swap the detail pane to the selected entry when the selection changes.
         try self.refreshDetail(allocator);
@@ -723,6 +736,7 @@ pub const View = struct {
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        if (self.data.no_commits) return self.box.input(allocator, key, root_focus);
         // scrolling crosses the sub header boundary the same way arrows do
         const direction = inp.vertDirection(key);
         if (self.headerActive()) {
@@ -931,6 +945,7 @@ pub const View = struct {
 
     // only the header's own row sits directly below the repository header.
     pub fn atTop(self: *View) bool {
+        if (self.data.no_commits) return true;
         const focusable = if (self.header()) |header_view| header_view.hasFocusable() else false;
         return self.headerActive() or (!focusable and self.contentAtTop());
     }

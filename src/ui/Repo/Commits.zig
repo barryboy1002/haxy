@@ -64,6 +64,8 @@ search_available: bool = false,
 // an object view or a base-bounded list searches the default branch: that
 // branch's url-encoded name, when it is indexed
 default_branch: []const u8 = "",
+// the repo's default branch has no commit yet, so the tab shows a placeholder
+no_commits: bool = false,
 
 const Self = @This();
 
@@ -127,7 +129,9 @@ pub fn init(
     // (NotFound -> 404); the default-branch path falls through to empty.
     var resolved = (try ui.ResolvedRefOrOid(repo_kind, repo_opts).init(repo, io, aa, requested_ref_or_oid, requested_value)) orelse {
         if (requested_ref_or_oid != null) return error.NotFound;
-        return emptyResult(aa, handle, .branch, requested_value, content, base_oid);
+        var data = try emptyResult(aa, handle, .branch, requested_value, content, base_oid);
+        data.no_commits = true;
+        return data;
     };
 
     var moment = repo.core.latestMoment() catch return emptyResult(aa, handle, resolved.ref_or_oid, resolved.value, content, base_oid);
@@ -464,6 +468,14 @@ pub const View = struct {
         var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer outer.deinit(allocator);
 
+        if (data.no_commits) {
+            var center = try ui.widget.initNoCommits(allocator, session, data.handle);
+            errdefer center.deinit(allocator);
+            outer.getFocus().child_id = center.getFocus().id;
+            try outer.children.put(allocator, center.getFocus().id, .{ .widget = .{ .center = center }, .rect = null, .min_size = null });
+            return .{ .box = outer, .data = data, .session = session, .diffed_index = null };
+        }
+
         // the search box and the clone url at the top. local mode has neither.
         if (session.data.host_kind == .server) {
             var header_view = try ui.widget.SearchHeader.init(allocator, session, data.handle, " search ", "search", data.search, data.search_available);
@@ -633,6 +645,7 @@ pub const View = struct {
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
+        if (self.data.no_commits) return self.box.build(allocator, constraint, root_focus);
 
         // swap the diff pane to the selected commit when it changes.
         try self.refreshDiff(allocator);
@@ -774,6 +787,7 @@ pub const View = struct {
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        if (self.data.no_commits) return self.box.input(allocator, key, root_focus);
         // scrolling crosses the sub header boundary the same way arrows do
         const direction = inp.vertDirection(key);
         if (self.headerActive()) {
@@ -873,6 +887,7 @@ pub const View = struct {
 
     // only the header's own row sits directly below the repository header.
     pub fn atTop(self: *View) bool {
+        if (self.data.no_commits) return true;
         const focusable = if (self.header()) |header_view| header_view.hasFocusable() else false;
         return self.headerActive() or (!focusable and self.contentAtTop());
     }
