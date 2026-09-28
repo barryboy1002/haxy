@@ -1044,7 +1044,7 @@ pub const RoutablePage = union(enum) {
                 try writeListWindow(&out.writer, u.search.slice(), u.start);
                 break :blk out.written();
             },
-            .home_new_repo => "/new-repo",
+            .home_new_repo => "/repo/new",
             .home_auth => "/auth",
             .not_found => "/not-found",
             .user_repos => |u| blk: {
@@ -1278,7 +1278,6 @@ pub const RoutablePage = union(enum) {
             const params = listParams(&segments, &.{ .start, .search }) orelse return null;
             return withEncodedSearch(.{ .home_users = .{ .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
         }
-        if (std.mem.eql(u8, first, "new-repo")) return if (segments.next() == null) .home_new_repo else null;
         if (std.mem.eql(u8, first, "auth")) return if (segments.next() == null) .home_auth else null;
         // "user/<name>[/repos[/search:<s>][/start:<n>]|/new-repo|/auth]"
         if (std.mem.eql(u8, first, "user")) {
@@ -1346,6 +1345,8 @@ pub const RoutablePage = union(enum) {
         if (std.mem.eql(u8, first, "repo")) {
             const rest = segments.rest(); // "username/reponame[/...]"
             const owner = segments.next() orelse return null;
+            // "/repo/new" is the home page's new repo tab, not a repo
+            if (std.mem.eql(u8, owner, "new") and segments.peek() == null) return .home_new_repo;
             const repo_name = segments.next() orelse return null;
             // reject an empty username or reponame
             if (owner.len == 0 or repo_name.len == 0) return null;

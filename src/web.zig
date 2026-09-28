@@ -140,6 +140,8 @@ fn handleRequest(
     if (method == .POST) {
         switch (host) {
             .server => |server| {
+                // the home page's new repo form, which the "/new" suffix below would claim
+                if (std.mem.eql(u8, path, "/repo/new")) return handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
                 const PostRoute = enum { login, logout, ansi, @"new-repo", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
                 inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
                     const suffix = "/" ++ field.name;
