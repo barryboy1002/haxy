@@ -26,14 +26,6 @@ pub const ForkItem = struct {
     title: []const u8,
 };
 
-// a repo's access, shown under its list item
-fn accessLabel(repo: evt.Repo) []const u8 {
-    return switch (repo.read_access) {
-        .public => "(public)",
-        .private => "(private)",
-    };
-}
-
 header: Header,
 user: evt.User.Public,
 repos: []const evt.Repo.Record,
@@ -230,7 +222,7 @@ pub const View = struct {
                     try items.append(aa, .{
                         .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ fork_item.target.name, fork_item.title }),
                         .link = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)}),
-                        .bottom_label = accessLabel(fork_item.target),
+                        .bottom_label = if (fork_item.target.read_access == .private) "(private)" else "",
                     });
                 }
                 if (data.forks_next_start) |next_start|
@@ -410,7 +402,7 @@ pub const ReposView = struct {
                 try items.append(aa, .{
                     .text = if (repo.event.description.len == 0) repo.event.name else try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
                     .link = try std.fmt.allocPrint(aa, "a:/repo/{s}/{s}", .{ data.user.name, repo.event.name }),
-                    .bottom_label = accessLabel(repo.event),
+                    .bottom_label = if (repo.event.read_access == .private) "(private)" else "",
                 });
             if (data.repos_next_start) |next_start| {
                 var next = route;
