@@ -17,7 +17,7 @@ const wasm = builtin.target.cpu.arch == .wasm32;
 // the new-repo form every page's new repo tab shows. the repo is created for
 // the logged-in user.
 pub const View = struct {
-    box: wgt.Box(ui.Widget),
+    center: ui.widget.Center,
     session: *ui.Session,
 
     // `route` is the page's own new-repo route, which the web form posts to
@@ -29,7 +29,7 @@ pub const View = struct {
         const saved_fields = if (session.formFeedback(.repo)) |saved| saved.fields else null;
 
         {
-            var name = try wgt.TextInput.init(allocator, .{ .label = " name ", .name = "name", .visible_width = null, .round_corners = true, .render_content = session.is_terminal });
+            var name = try wgt.TextInput.init(allocator, .{ .label = " name ", .name = "name", .visible_width = 20, .round_corners = true, .render_content = session.is_terminal });
             errdefer name.deinit(allocator);
             name.getFocus().mode = .all;
             if (saved_fields) |saved| try name.setContent(allocator, saved.name);
@@ -38,7 +38,7 @@ pub const View = struct {
         }
 
         {
-            var description = try wgt.TextInput.init(allocator, .{ .label = " description ", .name = "description", .visible_width = null, .round_corners = true, .render_content = session.is_terminal });
+            var description = try wgt.TextInput.init(allocator, .{ .label = " description ", .name = "description", .visible_width = 20, .round_corners = true, .render_content = session.is_terminal });
             errdefer description.deinit(allocator);
             description.getFocus().mode = .all;
             if (saved_fields) |saved| try description.setContent(allocator, saved.description);
@@ -63,46 +63,39 @@ pub const View = struct {
             try box.children.put(allocator, submit.getFocus().id, .{ .widget = .{ .submit_button = submit }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
-        // absorbs the leftover min-height so the button keeps its natural height
-        {
-            var spacer = try ui.widget.Spacer.init(allocator);
-            errdefer spacer.deinit(allocator);
-            try box.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null });
-        }
-
-        return .{ .box = box, .session = session };
+        return .{ .center = try ui.widget.Center.init(allocator, .{ .box = box }), .session = session };
     }
 
     pub fn deinit(self: *View, allocator: std.mem.Allocator) void {
-        self.box.deinit(allocator);
+        self.center.deinit(allocator);
     }
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
         const failure = if (self.session.formFeedback(.repo)) |saved| saved.failure else null;
-        (try formField(&self.box, "name")).options.label = if (failure) |value| switch (value) {
+        (try formField(self.formBox(), "name")).options.label = if (failure) |value| switch (value) {
             .required_name => " name (required) ",
             .invalid_name => " name (invalid) ",
             .name_taken => " name (taken) ",
         } else " name ";
         // the web form handling finds the inputs by focus id
         const inputs_arena = self.session.arena.allocator();
-        for (self.box.children.values()) |*child| switch (child.widget) {
+        for (self.formBox().children.values()) |*child| switch (child.widget) {
             .text_input => |*ti| try self.session.text_inputs.put(inputs_arena, ti.getFocus().id, ti),
             else => {},
         };
-        try self.box.build(allocator, constraint, root_focus);
+        try self.center.build(allocator, constraint, root_focus);
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
-        const cid = self.box.getFocus().child_id orelse return;
-        const cur = self.box.children.getIndex(cid) orelse return;
-        const child = &self.box.children.values()[cur];
+        const cid = self.formBox().getFocus().child_id orelse return;
+        const cur = self.formBox().children.getIndex(cid) orelse return;
+        const child = &self.formBox().children.values()[cur];
 
         const on_submit = child.widget == .submit_button;
         switch (key) {
-            .arrow_up, .back_tab => return if (formStep(&self.box, cur, false)) |i| root_focus.setFocus(self.box.children.keys()[i]),
-            .arrow_down, .tab => return if (formStep(&self.box, cur, true)) |i| root_focus.setFocus(self.box.children.keys()[i]),
+            .arrow_up, .back_tab => return if (cur > 0) root_focus.setFocus(self.formBox().children.keys()[cur - 1]),
+            .arrow_down, .tab => return if (cur + 1 < self.formBox().children.count()) root_focus.setFocus(self.formBox().children.keys()[cur + 1]),
             .enter => if (on_submit) return self.submitForm(allocator),
             .mouse => |mouse| if (on_submit) {
                 if (inp.leftClickOn(root_focus, child.widget.submit_button.buttonId(), mouse)) return self.submitForm(allocator);
@@ -110,24 +103,6 @@ pub const View = struct {
             else => {},
         }
         try child.widget.input(allocator, key, root_focus);
-    }
-
-    // the neighboring form control, skipping the spacer
-    fn formStep(form: *wgt.Box(ui.Widget), cur: usize, down: bool) ?usize {
-        var i = cur;
-        while (true) {
-            if (down) {
-                i += 1;
-                if (i >= form.children.count()) return null;
-            } else {
-                if (i == 0) return null;
-                i -= 1;
-            }
-            switch (form.children.values()[i].widget) {
-                .spacer => continue,
-                else => return i,
-            }
-        }
     }
 
     fn formRadio(form: *wgt.Box(ui.Widget), name: []const u8) !*ui.widget.Radio {
@@ -157,14 +132,14 @@ pub const View = struct {
         const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
         const user = (try ui.activeUser(moment, self.session.page_arena, user_id)) orelse return;
 
-        const name_input = try formField(&self.box, "name");
-        const description_input = try formField(&self.box, "description");
+        const name_input = try formField(self.formBox(), "name");
+        const description_input = try formField(self.formBox(), "description");
         const name = try name_input.text(allocator);
         defer allocator.free(name);
         const description = try description_input.text(allocator);
         defer allocator.free(description);
-        const hash_kind = std.meta.stringToEnum(hash.HashKind, (try formRadio(&self.box, "hash")).selected()) orelse unreachable;
-        const access = std.meta.stringToEnum(evt.Repo.Access, (try formRadio(&self.box, "access")).selected()) orelse unreachable;
+        const hash_kind = std.meta.stringToEnum(hash.HashKind, (try formRadio(self.formBox(), "hash")).selected()) orelse unreachable;
+        const access = std.meta.stringToEnum(evt.Repo.Access, (try formRadio(self.formBox(), "access")).selected()) orelse unreachable;
 
         _ = evt.createRepo(io, allocator, users_dir, &user_id, .{ .name = user.event.name, .email = user.event.email }, name, description, access, hash_kind) catch |err| {
             const failure = ui.Session.FormFeedback.RepoFailure.fromError(err) orelse return err;
@@ -186,21 +161,25 @@ pub const View = struct {
         try self.session.navigate(ui.RoutablePage.repoFilesRoute(identity, null, "", "", 0) orelse return);
     }
 
+    fn formBox(self: *View) *wgt.Box(ui.Widget) {
+        return &self.center.child.box;
+    }
+
     pub fn clearGrid(self: *View) void {
-        self.box.clearGrid();
+        self.center.clearGrid();
     }
 
     pub fn getGrid(self: View) ?Grid {
-        return self.box.getGrid();
+        return self.center.getGrid();
     }
 
     pub fn getFocus(self: *View) *Focus {
-        return self.box.getFocus();
+        return self.center.getFocus();
     }
 
     // up leaves the form from its first control
     pub fn atTop(self: View) bool {
-        const first = self.box.children.keys()[0];
-        return self.box.focus.child_id == first;
+        const box = &self.center.child.box;
+        return box.focus.child_id == box.children.keys()[0];
     }
 };
