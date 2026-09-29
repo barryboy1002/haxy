@@ -90,12 +90,8 @@ pub fn init(
         .repo_files => |*f| f.find.slice(),
         else => "",
     };
-    // what the commits view's pane shows for the commit it walks from: a diff
-    // window (with the file it's filtered to) or that commit's message.
-    const commits_content: ui.RoutablePage.RepoCommitsRoute.Content = switch (route) {
-        .repo_commits => |c| c.content,
-        else => .{ .diff = .{} },
-    };
+    // the commits view's pane shows the whole message of the commit it walks from
+    const commits_message = route == .repo_commits and route.repo_commits.message;
     const commits_base_oid: []const u8 = switch (route) {
         .repo_commits => |*c| c.base_oid.slice(),
         else => "",
@@ -316,7 +312,7 @@ pub fn init(
                             else if (patchrev_id.len != 0) diff: {
                                 const diff_route = ui.RoutablePage.repoPatchRevDiffRoute(repo_identity.identity, patchrev_id, 0, "") orelse return error.RouteTooLong;
                                 break :diff .{ .diff = try Diff.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, diff_route.repo_diff) };
-                            } else .{ .commits = try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, session.haxy_moment, handle, ref_or_oid, ref_value, commits_content, base_oid, commits_search, commits_from) };
+                            } else .{ .commits = try Commits.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, session.haxy_moment, handle, ref_or_oid, ref_value, commits_message, base_oid, commits_search, commits_from) };
                             const target_branch = if (files_data.ref_or_oid == .branch) files_data.ref_or_oid_value else "";
                             break :blk .{
                                 files_data,
@@ -335,7 +331,7 @@ pub fn init(
         const aa = arena.allocator();
         break :blk .{
             try Files.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
-            Changes{ .commits = try Commits.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, commits_content, commits_base_oid) },
+            Changes{ .commits = try Commits.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, commits_base_oid) },
             try Refs.emptyResult(arena, repo_identity.identity, refs_kind, refs_from, refs_search),
             try Issues.emptyResult(aa, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view),
             try Patches.emptyResult(aa, repo_identity.identity, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view),

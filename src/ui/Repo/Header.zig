@@ -81,7 +81,6 @@ pub const View = struct {
         const aa = session.page_arena.allocator();
         const ref_name = std.Uri.percentDecodeInPlace(try aa.dupe(u8, page.files.patchrev_id orelse data.ref_or_oid_value));
         const bottom_label = try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), ref_name);
-        const bottom_label_width = try xitui.width.displayWidth(bottom_label);
         const changes_label = switch (page.changes) {
             .diff => diff_tab_label,
             .commits => |c| if (c.commit_count) |count| try std.fmt.allocPrint(aa, commits_tab_label ++ " ({d})", .{count}) else commits_tab_label,
@@ -154,7 +153,7 @@ pub const View = struct {
         const files_link = try ui.inPageTabLink(session, files_route, current_tag == .repo_files);
         const changes_route = (switch (page.changes) {
             .diff => |d| d.route.page(d.window.start, d.path),
-            .commits => |c| ui.RoutablePage.repoCommitsRoute(identity, data.ref_or_oid, data.ref_or_oid_value, 0, "", c.base_oid),
+            .commits => |c| ui.RoutablePage.repoCommitsRoute(identity, data.ref_or_oid, data.ref_or_oid_value, c.base_oid),
         }) orelse return error.RouteTooLong;
         const changes_tag = std.meta.activeTag(changes_route);
         const changes_link = try ui.inPageTabLink(session, changes_route, current_tag == changes_tag);
@@ -190,7 +189,7 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = @max(files_tab_label.len, bottom_label_width) + 2, .height = null },
+                .min_size = .{ .width = files_tab_label.len + 2, .height = null },
             });
         }
 
@@ -205,7 +204,7 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = @max(changes_label_width, bottom_label_width) + 2, .height = null },
+                .min_size = .{ .width = changes_label_width + 2, .height = null },
             });
         }
 
@@ -322,7 +321,7 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
+                .min_size = .{ .width = new_tab_label.len + 2, .height = null },
             });
         } else if (session.data.host_kind == .server) {
             var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
@@ -334,7 +333,7 @@ pub const View = struct {
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = @max(new_tab_label.len, new_user_tab_bottom_label.len) + 2, .height = null },
+                .min_size = .{ .width = new_tab_label.len + 2, .height = null },
             });
         }
 

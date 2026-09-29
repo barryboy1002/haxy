@@ -269,9 +269,9 @@ fn forkIdentity(buffer: []u8, identity: []const u8, entry: PatchWithId) ![]const
 pub fn commitsRoute(identity: []const u8, entry: PatchWithId) !?ui.RoutablePage {
     var buffer: [ui.RoutablePage.repo_identity_max_len]u8 = undefined;
     if (entry.fork_exists and entry.record.event.status.kind() != .merged)
-        return ui.RoutablePage.forkCommitsRoute(try forkIdentity(&buffer, identity, entry), entry.id, "", 0, "") orelse error.RouteTooLong;
+        return ui.RoutablePage.forkCommitsRoute(try forkIdentity(&buffer, identity, entry), entry.id, "") orelse error.RouteTooLong;
     if (entry.revision_oid.len == 0 or entry.base_oid.len == 0) return null;
-    return ui.RoutablePage.repoCommitsRoute(identity, .object, entry.revision_oid, 0, "", entry.base_oid) orelse error.RouteTooLong;
+    return ui.RoutablePage.repoCommitsRoute(identity, .object, entry.revision_oid, entry.base_oid) orelse error.RouteTooLong;
 }
 
 pub fn diffRoute(identity: []const u8, entry: PatchWithId) !?ui.RoutablePage {
@@ -282,7 +282,7 @@ pub fn diffRoute(identity: []const u8, entry: PatchWithId) !?ui.RoutablePage {
         .open, .closed => blk: {
             if (entry.fork_exists) {
                 var buffer: [ui.RoutablePage.repo_identity_max_len]u8 = undefined;
-                return ui.RoutablePage.forkDiffRoute(try forkIdentity(&buffer, identity, entry), entry.id, 0, "") orelse error.RouteTooLong;
+                return ui.RoutablePage.forkDiffRoute(try forkIdentity(&buffer, identity, entry), entry.id, "", "", 0, "") orelse error.RouteTooLong;
             }
             if (patch.source_branch == null) return null;
             break :blk (patch.revision orelse return null).id;

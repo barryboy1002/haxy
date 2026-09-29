@@ -235,7 +235,7 @@ fn pushRefs(arena: *std.heap.ArenaAllocator, identity: []const u8, payload: []co
         const route = if (removed)
             null
         else if (head and !created)
-            ui.RoutablePage.repoCommitsRoute(identity, .object, ref.new, 0, "", ref.old) orelse continue
+            ui.RoutablePage.repoCommitsRoute(identity, .object, ref.new, ref.old) orelse continue
         else
             ui.RoutablePage.repoFilesRoute(identity, if (head) .branch else .tag, try ui.urlEncodeRef(aa, name), "", 0) orelse continue;
 

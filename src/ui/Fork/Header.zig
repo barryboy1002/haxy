@@ -100,17 +100,22 @@ pub const View = struct {
         const current_tag = std.meta.activeTag(session.data.current_page);
         const routes = [_]ui.RoutablePage{
             ui.RoutablePage.forkPatchRoute(fork_identity, data.id) orelse return error.RouteTooLong,
-            ui.RoutablePage.forkDiffRoute(fork_identity, data.id, 0, "") orelse return error.RouteTooLong,
+            ui.RoutablePage.forkDiffRoute(fork_identity, data.id, "", "", 0, "") orelse return error.RouteTooLong,
             ui.RoutablePage.forkFilesRoute(fork_identity, data.id, data.oid, "", 0) orelse return error.RouteTooLong,
-            ui.RoutablePage.forkCommitsRoute(fork_identity, data.id, data.oid, 0, "") orelse return error.RouteTooLong,
+            ui.RoutablePage.forkCommitsRoute(fork_identity, data.id, data.oid) orelse return error.RouteTooLong,
         };
         const tags = [_]std.meta.Tag(ui.RoutablePage){ .fork_patch, .fork_diff, .fork_files, .fork_commits };
         const labels = [_][]const u8{ patch_tab_label, diff_tab_label, files_tab_label, commits_label };
+        // a single commit's diff names the commit under its tab
+        const bottom_labels = [_][]const u8{ "", switch (session.data.current_page) {
+            .fork_diff => |*d| if (d.oid.len == 0) "" else try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), d.oid.slice()),
+            else => "",
+        }, "", "" };
         var selected_tab: ?usize = null;
 
-        for (routes, tags, labels) |route, tag, label| {
+        for (routes, tags, labels, bottom_labels) |route, tag, label, bottom_label| {
             const selected = current_tag == tag;
-            var tab = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var tab = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = bottom_label });
             errdefer tab.deinit(allocator);
             tab.getFocus().mode = .all;
             tab.getFocus().kind = .{ .custom = try ui.inPageTabLink(session, route, selected) };

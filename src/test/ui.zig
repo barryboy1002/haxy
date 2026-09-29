@@ -159,7 +159,7 @@ fn testDiff(comptime kind: xit.repo.RepoKind) !void {
     for ([_]Diff{ diff, fork_diff }) |data| {
         for ([_]bool{ true, false }) |terminal| {
             var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = terminal };
-            session.data.current_page = if (data.route == .repo) route else ui.RoutablePage.forkDiffRoute("alice/project", id, 0, "") orelse return error.BadRoute;
+            session.data.current_page = if (data.route == .repo) route else ui.RoutablePage.forkDiffRoute("alice/project", id, "", "", 0, "") orelse return error.BadRoute;
             var view = try Diff.View.init(allocator, &data, &session);
             defer view.deinit(allocator);
             const focus = view.getFocus();
@@ -200,13 +200,13 @@ test "commits list next row is a cross-page link" {
         .ref_or_oid_value = oid0,
         .base_oid = base_oid,
         .commits = &.{
-            .{ .oid = oid0, .date = "2024-01-01", .message = "first", .timestamp = "Jan 1, 2024, 00:00:00 UTC", .window = .{} },
+            .{ .oid = oid0, .parent_oid = base_oid, .date = "2024-01-01", .message = "first", .timestamp = "Jan 1, 2024, 00:00:00 UTC" },
         },
         .next_start = next_oid,
     };
 
     var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = true };
-    session.data.current_page = ui.RoutablePage.repoCommitsRoute(identity, .object, oid0, 0, "", base_oid).?;
+    session.data.current_page = ui.RoutablePage.repoCommitsRoute(identity, .object, oid0, base_oid).?;
 
     var view = try Commits.View.init(allocator, &data, &session);
     defer view.deinit(allocator);
@@ -218,7 +218,7 @@ test "commits list next row is a cross-page link" {
     }, root_focus);
 
     // the "next" row is the last child of the list box: the view's outer box
-    // holds the sub-header then the list/diff split, whose first child is the
+    // holds the sub-header then the list/detail split, whose first child is the
     // list scroll.
     const content = &view.box.children.values()[1].widget.box;
     const lb = &content.children.values()[0].widget.scroll.child.box;
@@ -239,7 +239,7 @@ test "encoded ref name survives the commits url round-trip" {
     const base_oid = "3333333333333333333333333333333333333333";
 
     // the route layer holds the value already url-encoded ("feature%2Ffoo").
-    const route = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", 0, "", base_oid).?;
+    const route = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", base_oid).?;
     const url = try route.toUrl(&arena);
     try std.testing.expectEqualStrings("/repo/alice/ziglings/commits/branch:feature%2Ffoo/base:" ++ base_oid, url);
 
@@ -250,7 +250,7 @@ test "encoded ref name survives the commits url round-trip" {
     try std.testing.expectEqual(RP.RefOrOid.branch, parsed_route.ref_or_oid.?);
     try std.testing.expectEqualStrings("feature%2Ffoo", parsed_route.value.slice());
     try std.testing.expectEqualStrings(base_oid, parsed_route.base_oid.slice());
-    const unfiltered = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", 0, "", "").?;
+    const unfiltered = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", "").?;
     try std.testing.expect(!RP.eql(route, unfiltered));
 }
 
@@ -272,7 +272,6 @@ fn testCommitBase(comptime kind: xit.repo.RepoKind) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const handle = ui.RepoHandle{ .location = .{ .repo = "" } };
-    const content = ui.RoutablePage.RepoCommitsRoute.Content{ .diff = .{} };
     const branch = xit.ref.Ref{ .kind = .head, .name = "master" };
 
     // one more commit than fits on the first page
@@ -283,14 +282,14 @@ fn testCommitBase(comptime kind: xit.repo.RepoKind) !void {
         previous = tip;
         tip = try repo.commitAtRef(io, allocator, .{ .message = "next" }, null, branch);
     }
-    const first = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, &tip, content, &base, "", "");
+    const first = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, &tip, false, &base, "", "");
     try std.testing.expectEqual(20, first.commits.len);
-    const last = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, first.next_start orelse return error.MissingNext, content, &base, "", "");
+    const last = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, first.next_start orelse return error.MissingNext, false, &base, "", "");
     try std.testing.expectEqual(1, last.commits.len);
     try std.testing.expectEqual(null, last.next_start);
 
     // the base at a page boundary must not create an empty next page
-    const full = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, &previous, content, &base, "", "");
+    const full = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, &previous, false, &base, "", "");
     try std.testing.expectEqual(20, full.commits.len);
     try std.testing.expectEqual(null, full.next_start);
     const tag_oid = try repo.addTag(io, allocator, .{ .name = "tip", .message = "annotated" });
@@ -301,9 +300,9 @@ fn testCommitBase(comptime kind: xit.repo.RepoKind) !void {
         .{ .ref = .tag, .value = "tip" },
     };
     for (sources) |source| {
-        const empty = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, source.ref, source.value, content, &tip, "", "");
+        const empty = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, source.ref, source.value, false, &tip, "", "");
         try std.testing.expectEqual(0, empty.commits.len);
-        const paged = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, source.ref, source.value, content, &base, "", first.next_start orelse return error.MissingNext);
+        const paged = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, source.ref, source.value, false, &base, "", first.next_start orelse return error.MissingNext);
         try std.testing.expectEqual(1, paged.commits.len);
         try std.testing.expectEqualStrings(last.commits[0].oid, paged.commits[0].oid);
         try std.testing.expectEqual(source.ref, paged.ref_or_oid);
@@ -312,7 +311,7 @@ fn testCommitBase(comptime kind: xit.repo.RepoKind) !void {
 
     // an off-chain stopping point must not hide its parent on this chain
     const other = try repo.commitAtRef(io, allocator, .{ .message = "other", .parent_oids = &.{base} }, null, .{ .kind = .head, .name = "other" });
-    const off_chain = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, last.commits[0].oid, content, &other, "", "");
+    const off_chain = try Commits.init(kind, opts, &arena, &repo, io, allocator, null, handle, .object, last.commits[0].oid, false, &other, "", "");
     try std.testing.expectEqual(2, off_chain.commits.len);
     try std.testing.expectEqualStrings(&base, off_chain.commits[1].oid);
 }

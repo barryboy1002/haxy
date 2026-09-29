@@ -30,17 +30,16 @@ window: Window,
 const Self = @This();
 
 pub const Route = union(enum) {
-    commit: struct { location: ui.RoutablePage.RepoLocation, oid: []const u8, base_oid: []const u8 = "" },
     repo: struct { identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8, base_oid: []const u8 },
     patchrev: struct { identity: []const u8, id: []const u8 },
-    fork: struct { identity: []const u8, id: []const u8 },
+    // `oid` names one commit's diff against `base_oid` ("" = the whole patch)
+    fork: struct { identity: []const u8, id: []const u8, oid: []const u8 = "", base_oid: []const u8 = "" },
 
     pub fn page(self: Route, start: usize, path: []const u8) ?ui.RoutablePage {
         return switch (self) {
-            .commit => |c| c.location.commitsRoute(.object, c.oid, start, path, c.base_oid),
             .repo => |r| ui.RoutablePage.repoDiffRoute(r.identity, r.ref_or_oid, r.value, start, path, r.base_oid),
             .patchrev => |r| ui.RoutablePage.repoPatchRevDiffRoute(r.identity, r.id, start, path),
-            .fork => |f| ui.RoutablePage.forkDiffRoute(f.identity, f.id, start, path),
+            .fork => |f| ui.RoutablePage.forkDiffRoute(f.identity, f.id, f.oid, f.base_oid, start, path),
         };
     }
 
@@ -205,7 +204,7 @@ fn editLineNum(edit: df.Edit) usize {
     };
 }
 
-pub fn appendWindow(data: @This(), allocator: std.mem.Allocator, session: *ui.Session, box: *wgt.Box(ui.Widget)) !void {
+fn appendWindow(data: @This(), allocator: std.mem.Allocator, session: *ui.Session, box: *wgt.Box(ui.Widget)) !void {
     if (data.path.len != 0) {
         try addLink(allocator, box, data.path, "");
         try addLink(allocator, box, "← all files", try data.route.link(session.page_arena, 0, ""));

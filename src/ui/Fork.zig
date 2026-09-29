@@ -136,12 +136,9 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                 .fork_files => |*f| f.find.slice(),
                 else => "",
             };
-            const commits_content: ui.RoutablePage.RepoCommitsRoute.Content = switch (route) {
-                .fork_commits => |c| c.content,
-                else => .{ .diff = .{} },
-            };
+            const commits_message = route == .fork_commits and route.fork_commits.message;
             const files = try Files.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, handle, requested_ref, requested_value, files_path, files_line, files_find);
-            var commits = try Commits.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, haxy_moment, handle, requested_ref, requested_value, commits_content, &commits_base_oid, "", "");
+            var commits = try Commits.init(.xit, repo_opts, arena, fork_repo, io, arena.child_allocator, haxy_moment, handle, requested_ref, requested_value, commits_message, &commits_base_oid, "", "");
             commits.commit_count = if (newest_revision) |revision| revision.record.commit_count else 0;
             const diff_start: usize = switch (route) {
                 .fork_diff => |d| d.start,
@@ -151,6 +148,17 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                 .fork_diff => |*d| try aa.dupe(u8, d.path.slice()),
                 else => "",
             };
+            // a named commit's diff is against the route's base (all zeros for
+            // none), else the diff is the whole patch's
+            const diff_oid: []const u8, const diff_base_oid: []const u8 = switch (route) {
+                .fork_diff => |*d| .{ try aa.dupe(u8, d.oid.slice()), try aa.dupe(u8, d.base_oid.slice()) },
+                else => .{ "", "" },
+            };
+            const diff_base: ?@TypeOf(fork_oid), const diff_head: @TypeOf(fork_oid) = if (diff_oid.len == 0) .{ commits_base_oid, fork_oid } else named: {
+                evt.PatchRev.validateOid(repo_opts.hash, diff_oid) catch return error.NotFound;
+                evt.PatchRev.validateOid(repo_opts.hash, diff_base_oid) catch return error.NotFound;
+                break :named .{ if (std.mem.allEqual(u8, diff_base_oid, '0')) null else diff_base_oid[0..fork_oid.len].*, diff_oid[0..fork_oid.len].* };
+            };
 
             return .{
                 .header = try Header.init(arena, target_record.event.name, identity.owner, &id_hex, requested_value),
@@ -158,9 +166,9 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                 .commits = commits,
                 .patch = patch_data,
                 .diff = .{
-                    .route = .{ .fork = .{ .identity = try aa.dupe(u8, identity.identity), .id = try aa.dupe(u8, &id_hex) } },
+                    .route = .{ .fork = .{ .identity = try aa.dupe(u8, identity.identity), .id = try aa.dupe(u8, &id_hex), .oid = diff_oid, .base_oid = diff_base_oid } },
                     .path = diff_path,
-                    .window = try Diff.render(.xit, repo_opts, io, arena.child_allocator, aa, fork_repo, &commits_base_oid, fork_oid, diff_start, diff_path),
+                    .window = try Diff.render(.xit, repo_opts, io, arena.child_allocator, aa, fork_repo, if (diff_base) |*base| base else null, diff_head, diff_start, diff_path),
                 },
                 .auth = Auth.init(),
                 .quit = Quit.init(),
