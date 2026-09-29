@@ -456,7 +456,7 @@ pub const View = struct {
             scroll.getFocus().mode = .mouse;
             try box.children.put(allocator, scroll.getFocus().id, .{ .widget = .{ .scroll = scroll }, .rect = null, .min_size = .{ .width = detail_min_width, .height = null } });
         }
-        box.getFocus().child_id = box.children.keys()[0];
+        box.getFocus().child_id = box.children.keys()[if (data.items.len > 0) 1 else 0];
         try outer.children.put(allocator, box.getFocus().id, .{ .widget = .{ .box = box }, .rect = null, .min_size = null });
         outer.getFocus().child_id = outer.children.keys()[content_index];
         return .{ .box = outer, .data = data, .session = session };

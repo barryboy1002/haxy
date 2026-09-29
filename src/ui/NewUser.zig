@@ -101,9 +101,10 @@ pub const View = struct {
         const child = &self.formBox().children.values()[cur];
 
         const on_submit = child.widget == .submit_button;
+        const direction = inp.vertDirection(key);
+        if (direction == .up or key == .back_tab) return if (cur > 0) root_focus.setFocus(self.formBox().children.keys()[cur - 1]);
+        if (direction == .down or key == .tab) return if (cur + 1 < self.formBox().children.count()) root_focus.setFocus(self.formBox().children.keys()[cur + 1]);
         switch (key) {
-            .arrow_up, .back_tab => return if (cur > 0) root_focus.setFocus(self.formBox().children.keys()[cur - 1]),
-            .arrow_down, .tab => return if (cur + 1 < self.formBox().children.count()) root_focus.setFocus(self.formBox().children.keys()[cur + 1]),
             .enter => if (on_submit) return self.submitForm(allocator),
             .mouse => |mouse| if (on_submit) {
                 if (inp.leftClickOn(root_focus, child.widget.submit_button.buttonId(), mouse)) return self.submitForm(allocator);

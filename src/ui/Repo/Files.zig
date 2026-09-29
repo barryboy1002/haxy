@@ -379,6 +379,8 @@ pub const View = struct {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
+        var shows_file = false;
+
         // the directory listing on the left (one focusable row each).
         {
             var list_scroll = blk: {
@@ -421,6 +423,7 @@ pub const View = struct {
                     const entry_idx = selectedFileIndex(data) orelse if (data.find == null) readmeIndex(data.entries) else null;
                     sel = if (entry_idx) |i| i + base else 0;
                     list_box.getFocus().child_id = list_box.children.keys()[sel];
+                    shows_file = sel >= base and sel - base < data.entries.len and !data.entries[sel - base].is_dir;
                 }
                 var sc = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = list_box }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
                 // start scrolled so the selected row begins at the top of the
@@ -483,7 +486,7 @@ pub const View = struct {
             try box.children.put(allocator, detail_outer.getFocus().id, .{ .widget = .{ .box = detail_outer }, .rect = null, .min_size = .{ .width = detail_min_width, .height = null } });
         }
 
-        box.getFocus().child_id = box.children.keys()[list_index];
+        box.getFocus().child_id = box.children.keys()[if (shows_file) detail_index else list_index];
         try outer.children.put(allocator, box.getFocus().id, .{ .widget = .{ .box = box }, .rect = null, .min_size = null });
 
         // focus lives in the split, except that search results start in the

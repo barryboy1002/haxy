@@ -1769,7 +1769,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                 try box.children.put(allocator, frame.getFocus().id, .{ .widget = .{ .box = frame }, .rect = null, .min_size = .{ .width = detail_min_width, .height = null } });
             }
 
-            box.getFocus().child_id = box.children.keys()[list_index];
+            box.getFocus().child_id = box.children.keys()[if (win.items.len > 0) detail_index else list_index];
             return box;
         }
 

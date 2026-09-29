@@ -416,7 +416,7 @@ pub const View = struct {
         detail_scroll.getFocus().mode = .mouse;
         try content_box.children.put(allocator, detail_scroll.getFocus().id, .{ .widget = .{ .scroll = detail_scroll }, .rect = null, .min_size = .{ .width = detail_min_width, .height = null } });
 
-        content_box.getFocus().child_id = content_box.children.keys()[list_index];
+        content_box.getFocus().child_id = content_box.children.keys()[if (event_window.events.len > 0) detail_index else list_index];
         return content_box;
     }
 
