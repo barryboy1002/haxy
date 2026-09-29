@@ -67,12 +67,12 @@ pub const View = struct {
             });
         }
 
-        // title sits to the left of the tabs
+        // title sits to the left of the tabs and links to the user's default tab
         {
             var title_view = try ui.Title.View.init(allocator, &data.title);
             errdefer title_view.deinit(allocator);
             title_view.getFocus().mode = .all;
-            title_view.getFocus().kind = .{ .custom = "a:/" };
+            title_view.getFocus().kind = .{ .custom = try ui.userLink(session.page_arena, data.name) };
             try title_box.children.put(allocator, title_view.getFocus().id, .{
                 .widget = .{ .title = title_view },
                 .rect = null,
