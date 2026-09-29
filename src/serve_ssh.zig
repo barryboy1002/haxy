@@ -251,7 +251,10 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     defer if (terminal_maybe) |*terminal| terminal.deinit();
 
     // initial render — user sees the page immediately
-    if (terminal_maybe) |*terminal| _ = try terminal.render(&nav.root);
+    if (terminal_maybe) |*terminal| {
+        try terminal.queryBackground();
+        _ = try terminal.render(&nav.root);
+    }
 
     // event loop. nextEvent blocks until something interesting arrives;
     // for each event, rebuild the widget tree and re-render so the user
@@ -296,14 +299,15 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
             }
         }
 
-        try ui_session.applyAndWritePending(io, allocator, &repo);
-
         // pick up data written by other handles so the next navigation
         // builds its page from a current moment
         try ui_session.reloadMoment(allocator, &repo);
 
-        // reconcile navigation: forward to a new page, or back on escape
-        try nav.sync(allocator, &ui_session);
+        // reconcile navigation: forward to a new page, or back on escape.
+        // the terminal background can change at any time, so recheck it on each page
+        if (try nav.sync(allocator, &ui_session)) {
+            if (terminal_maybe) |*terminal| try terminal.queryBackground();
+        }
 
         // the quit button (on the quit tab) asks the host to tear down
         if (ui_session.quit_requested) break :event_loop;
@@ -316,11 +320,12 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     }
 }
 
-// only a lone ESC needs a deadline; longer CSI/SS3 fragments must remain
-// buffered until complete. a timeout leaves partial SSH packets in the reader.
+// only ambiguous input (a lone ESC or ESC ]) needs a deadline; longer
+// fragments must remain buffered until complete. a timeout leaves partial SSH
+// packets in the reader.
 pub fn nextTuiEvent(sess: *ssh.SessionCtx, terminal: ?*StreamTerminal) !?ssh.Event {
     if (terminal) |t| {
-        if (t.parser.esc_len == 1) {
+        if (t.parser.isAmbiguous()) {
             sess.conn.read_timeout = escape_timeout.toDeadline(sess.conn.io);
             defer sess.conn.read_timeout = .none;
             return sess.nextEvent() catch |err| switch (err) {

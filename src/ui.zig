@@ -2149,7 +2149,6 @@ pub const Session = struct {
     // (haxy invoked with no arguments inside a repo). null on the server paths,
     // which resolve repos from the admin db instead.
     local: ?RepoSource = null,
-    pending: std.ArrayList(Action) = .empty, // actions queued by widgets this frame
     // focus id -> the live TextInput, refreshed each frame by the views that own
     // inputs. web/wasm form handling looks widgets up here by focus id.
     text_inputs: std.AutoHashMapUnmanaged(usize, *wgt.TextInput) = .empty,
@@ -2161,6 +2160,8 @@ pub const Session = struct {
     // does not navigate.
     next_page: ?RoutablePage = null,
     is_terminal: bool = false, // true on remote SSH and local TUI
+    // the terminal's reported default background, which the art blends toward
+    terminal_background: ?Grid.Color.Rgb = null,
     // port the web UI is served on, for the TUI/SSH footer's "http://localhost:<port>..."
     // url. null on the web itself (no footer there).
     web_port: ?u16 = null,
@@ -2297,8 +2298,6 @@ pub const Session = struct {
         // a failed terminal undo retained on the current tab
         undo_failure: ?[]const u8 = null,
         current_page: RoutablePage = .default,
-        // whether to render the ANSI art backdrop
-        enable_ansi: bool = true,
         // the selected ANSI art. the server serializes one image for WASM so
         // the browser does not need the whole build-generated collection.
         ansi_art: []const u8 = "",
@@ -2312,15 +2311,6 @@ pub const Session = struct {
         // the wasm side also parses elided link urls and hides the multi-user
         // chrome.
         host_kind: evt.HostKind = .server,
-    };
-
-    // a user-initiated state change. widgets enqueue these on the session during
-    // input instead of mutating state or touching the DB themselves; the host
-    // drains them each frame (see applyAndWritePending / applyPending). this keeps DB
-    // side effects out of the widget tree and gives every render path one place to
-    // turn a UI action into a state change + event.
-    pub const Action = union(enum) {
-        toggle_ansi,
     };
 
     pub fn init(
@@ -2348,7 +2338,6 @@ pub const Session = struct {
         const moment = self.haxy_moment orelse return;
         const user = (try activeUser(moment, self.arena, user_id)) orelse return self.logOut();
         self.data.user_name = user.event.name;
-        self.data.enable_ansi = user.event.enable_ansi;
     }
 
     // forget the logged-in user, on a logout or once their account is removed
@@ -2407,45 +2396,7 @@ pub const Session = struct {
         };
     }
 
-    // queue an action for the host to drain this frame.
-    pub fn push(self: *Self, action: Action) !void {
-        try self.pending.append(self.arena.allocator(), action);
-    }
-
-    // apply a single action's in-memory effect only (no persistence).
-    fn apply(self: *Self, action: Action) void {
-        switch (action) {
-            .toggle_ansi => self.data.enable_ansi = !self.data.enable_ansi,
-        }
-    }
-
-    // drain the session's queued actions by applying them to the session.
-    // used on the wasm path, which has no repo to persist to.
-    pub fn applyPending(self: *Self) void {
-        for (self.pending.items) |action| self.apply(action);
-        self.pending.clearRetainingCapacity();
-    }
-
-    // drain the session's queued actions by applying them to the session and
-    // writing them to the db
-    pub fn applyAndWritePending(
-        self: *Self,
-        io: std.Io,
-        allocator: std.mem.Allocator,
-        repo: *rp.Repo(.xit, evt.admin_repo_opts),
-    ) !void {
-        defer self.pending.clearRetainingCapacity();
-        for (self.pending.items) |action| {
-            self.apply(action);
-            switch (action) {
-                .toggle_ansi => if (self.data.user_id) |user_id| {
-                    try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, repo, self.users_dir orelse unreachable, user_id);
-                },
-            }
-        }
-    }
-
-    // reload the moment from the admin repo and re-read user preferences
+    // reload the moment from the admin repo and log out a removed user
     pub fn reloadMoment(self: *Self, allocator: std.mem.Allocator, repo: *rp.Repo(.xit, evt.admin_repo_opts)) !void {
         const moment = try evt.currentMoment(evt.admin_repo_opts, repo);
         self.haxy_moment = moment;
@@ -2453,8 +2404,7 @@ pub const Session = struct {
         const user_id = self.userId() orelse return;
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        const user = (try activeUser(moment, &arena, user_id)) orelse return self.logOut();
-        self.data.enable_ansi = user.event.enable_ansi;
+        if (try activeUser(moment, &arena, user_id) == null) self.logOut();
     }
 
     // request a forward navigation to `route`; the host consumes next_page
@@ -2477,6 +2427,8 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session, repo_may
     // when a panic/segfault happens
     term.setActive(&terminal);
     defer term.setActive(null);
+
+    try terminal.queryBackground();
 
     while (!terminal.shouldQuit()) {
         const grid_changed = try terminal.render(&nav.root);
@@ -2526,18 +2478,12 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session, repo_may
             }
         }
 
-        // persist queued actions when there's a repo; local mode has none,
-        // so just apply in-memory
-        if (repo_maybe) |repo| {
-            try session.applyAndWritePending(io, allocator, repo);
-            // reload so the next navigation builds its page from the current moment
-            try session.reloadMoment(allocator, repo);
-        } else {
-            session.applyPending();
-        }
+        // reload so the next navigation builds its page from the current moment
+        if (repo_maybe) |repo| try session.reloadMoment(allocator, repo);
 
         // reconcile navigation: forward to a new page, or back on escape.
-        try nav.sync(allocator, session);
+        // the terminal background can change at any time, so recheck it on each page
+        if (try nav.sync(allocator, session)) try terminal.queryBackground();
 
         // the quit button (on the quit tab) asks the host to tear down.
         if (session.quit_requested) terminal.requestQuit();
@@ -2631,6 +2577,10 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: Key, session: 
             } else {
                 try root.input(allocator, key, root_focus);
             }
+        },
+        .event => |event| switch (event) {
+            .background => |rgb| session.terminal_background = rgb,
+            .resize => try root.input(allocator, key, root_focus),
         },
         else => try root.input(allocator, key, root_focus),
     }
@@ -2865,12 +2815,13 @@ pub const Nav = struct {
     // current root and builds the new page in a fresh arena; a back request
     // frees the current page and restores the previous one. when escape is
     // pressed with no history left we switch to the quit tab instead of quitting.
-    pub fn sync(self: *Nav, allocator: std.mem.Allocator, session: *Session) !void {
+    // returns whether the root was replaced.
+    pub fn sync(self: *Nav, allocator: std.mem.Allocator, session: *Session) !bool {
         // refresh: rebuild the current page in place from a current moment
         if (session.refresh_requested) {
             session.refresh_requested = false;
             try self.rebuild(allocator, session);
-            return;
+            return true;
         }
 
         if (session.back == .requested) {
@@ -2886,10 +2837,10 @@ pub const Nav = struct {
                 // a page built under another login is rebuilt rather than restored
                 if (!std.meta.eql(entry.user_id, session.userId())) {
                     try self.rebuild(allocator, session);
-                    return;
+                    return true;
                 }
                 chooseAnsiArtForNavigation(session);
-                return;
+                return true;
             }
             session.back = .unavailable;
             // nothing to go back to; switch to the quit confirmation
@@ -2914,14 +2865,14 @@ pub const Nav = struct {
                     else => {},
                 }
             }
-            return;
+            return false;
         }
 
         // forward navigation: navigate() set next_page to the page to move to (a
         // cross-page link or tab change crossing pages)
         if (session.next_page) |route| {
             session.next_page = null;
-            if (session.haxy_moment == null and session.local == null) return;
+            if (session.haxy_moment == null and session.local == null) return false;
             const previous_route = session.data.current_page;
             // the page we navigated to becomes the current page
             session.data.current_page = route;
@@ -2943,7 +2894,9 @@ pub const Nav = struct {
             self.root = new_root;
             self.arena = arena;
             self.user_id = session.userId();
+            return true;
         }
+        return false;
     }
 };
 

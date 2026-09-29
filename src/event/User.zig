@@ -8,7 +8,6 @@ const bcrypt = std.crypto.pwhash.bcrypt;
 name: []const u8,
 email: []const u8,
 password_hash: []const u8,
-enable_ansi: bool = true,
 ssh_keys: []const u8 = "", // newline-separated authorized_keys lines (one OpenSSH public key per line)
 
 // what the db stores: the event's data plus the commit-derived fields
@@ -245,31 +244,4 @@ pub fn readByName(
     const user_id = try readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, moment, name) orelse return null;
 
     return try readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, &user_id);
-}
-
-// flip a user's ANSI-art preference by re-emitting their User event with
-// enable_ansi negated. a no-op for an unknown user. `repo` must be writable.
-pub fn toggleAnsi(
-    comptime repo_opts: rp.RepoOpts(.xit),
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    repo: *rp.Repo(.xit, repo_opts),
-    users_dir: []const u8,
-    user_id: []const u8,
-) !void {
-    const DB = rp.Repo(.xit, repo_opts).DB;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const moment = try evt.currentMoment(repo_opts, repo);
-    const user = (try readById(DB, repo_opts.hash, moment, &arena, user_id)) orelse return;
-
-    var updated = user.event;
-    updated.enable_ansi = !updated.enable_ansi;
-    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, repo_opts, io, allocator, repo, evt.events_ref, &[_]evt.EventWithId{.{
-        .id = std.fmt.bytesToHex(user_id[0..evt.event_id_size].*, .lower),
-        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
-        .author = .{ .name = user.event.name, .email = user.event.email },
-        .event = .{ .user = updated },
-    }});
 }

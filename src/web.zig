@@ -144,7 +144,7 @@ fn handleRequest(
                 if (std.mem.eql(u8, path, "/repo/new")) return handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
                 // likewise the home page's new user form
                 if (std.mem.eql(u8, path, "/user/new")) return handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
-                const PostRoute = enum { login, logout, ansi, @"new-repo", @"new-user", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
+                const PostRoute = enum { login, logout, @"new-repo", @"new-user", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
                 inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
                     const suffix = "/" ++ field.name;
                     if (std.mem.endsWith(u8, path, suffix)) {
@@ -152,7 +152,6 @@ fn handleRequest(
                         return switch (@field(PostRoute, field.name)) {
                             .login => handleLogin(io, request, allocator, base, server.admin_repo_path, server.session_store),
                             .logout => handleLogout(request, base, server.session_store),
-                            .ansi => handleAnsi(io, request, allocator, base, server.admin_repo_path, server.users_dir, server.session_store),
                             .@"new-repo" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
                             .@"new-user" => handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
                             .new => handleNew(io, request, allocator, base, host),
@@ -469,43 +468,6 @@ fn handleLogout(request: *std.http.Server.Request, base: []const u8, session_sto
         .extra_headers = &.{
             .{ .name = "location", .value = location },
             .{ .name = "set-cookie", .value = cookie_name ++ "=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" },
-        },
-    });
-}
-
-fn handleAnsi(
-    io: std.Io,
-    request: *std.http.Server.Request,
-    allocator: std.mem.Allocator,
-    base: []const u8,
-    admin_repo_path: []const u8,
-    users_dir: []const u8,
-    session_store: SessionStore,
-) !void {
-    // the toggle re-emits the user's own event, so it takes a logged-in user
-    var user_id: [evt.event_id_size]u8 = undefined;
-    const token = getCookieValue(request, cookie_name) orelse return respondLoginRequired(request);
-    if (!session_store.lookup(token, &user_id)) return respondLoginRequired(request);
-
-    {
-        const Repo = rp.Repo(.xit, evt.admin_repo_opts);
-        var repo = try Repo.open(io, allocator, .{ .path = admin_repo_path });
-        defer repo.deinit(io, allocator);
-
-        try evt.User.toggleAnsi(evt.admin_repo_opts, io, allocator, &repo, users_dir, &user_id);
-    }
-
-    // return to the auth tab the toggle came from so the change is visible.
-    const location = try std.fmt.allocPrint(allocator, "{s}/auth", .{base});
-    defer allocator.free(location);
-
-    // like logout, this is a bodyless POST, so close the connection rather than
-    // letting the keep-alive path try to discard a body that isn't framed.
-    try request.respond("", .{
-        .status = .see_other,
-        .keep_alive = false,
-        .extra_headers = &.{
-            .{ .name = "location", .value = location },
         },
     });
 }
@@ -2011,8 +1973,7 @@ pub fn generateHtml(allocator: std.mem.Allocator, root: *ui.Widget, session: *ui
     switch (root.*) {
         .background => |*background| {
             if (background.art.getGrid()) |art| {
-                var position_buf: [64]u8 = undefined;
-                try out.appendSlice(allocator, try std.fmt.bufPrint(&position_buf, "<div class=\"ansi-art\" aria-hidden=\"true\" style=\"left:{d}ch\">", .{grid.size.width -| art.size.width}));
+                try out.print(allocator, "<div class=\"ansi-art\" aria-hidden=\"true\" style=\"left:{d}ch;opacity:{d}%\">", .{ grid.size.width -| art.size.width, ui.widget.AnsiBackground.art_opacity });
                 try renderPanel(allocator, &out, background.art.getFocus(), art, session, root_focus);
                 try out.appendSlice(allocator, "</div>");
             }

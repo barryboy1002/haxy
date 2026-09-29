@@ -49,9 +49,6 @@ fn init(json: []const u8, min_height: u32, max_width: u32) !void {
 fn tick(min_height: u32, max_width: u32) !void {
     const root_ptr = if (root) |*root_value| root_value else return error.NotStarted;
 
-    // apply actions queued during input. the wasm path has no repo, so this is
-    // in-memory only; logged-in web persistence goes through the /ansi POST.
-    session.applyPending();
     // a widget asked to move to another page, so hand it to the host instead of
     // rendering this one again.
     if (session.next_page) |route| {

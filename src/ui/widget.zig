@@ -1577,6 +1577,9 @@ pub const AnsiArt = struct {
                 try rows.append(allocator, row);
                 row = .empty;
                 i += 1;
+            } else if (byte == '\r') {
+                // git may checkout the ansi art with crlf line endings on windows
+                i += 1;
             } else if (byte == 0x1B and i + 1 < content.len and content[i + 1] == '[') {
                 // CSI: scan to the final byte (0x40..0x7E); apply it if it's 'm'
                 var j = i + 2;
@@ -1730,13 +1733,23 @@ pub const AnsiBackground = struct {
             .max_size = constraint.max_size,
         }, root_focus);
 
-        if (!self.session.data.enable_ansi) return;
         const foreground = self.child.getGrid() orelse return;
+        // terminals show the art only once they report a background to fade it toward
+        const backdrop: ?Grid.Color.Rgb = if (self.session.is_terminal) self.session.terminal_background orelse return else null;
         self.art.content = self.session.data.ansi_art;
-        try self.buildArt(allocator, foreground.size, root_focus);
-        if (!self.session.is_terminal) return;
-        const art_grid = self.art.getGrid() orelse return;
-        self.grid = try artBehind(allocator, foreground, art_grid);
+        try self.art.build(allocator, .{
+            .min_size = .{ .width = null, .height = null },
+            .max_size = .{ .width = foreground.size.width, .height = foreground.size.height },
+        }, root_focus);
+        // the web fades the art with css opacity instead
+        const art_backdrop = backdrop orelse return;
+        if (self.art.grid) |*art_grid| {
+            for (art_grid.cells) |*cell| {
+                cell.style.fg = fadeColor(cell.style.fg, art_backdrop);
+                cell.style.bg = fadeColor(cell.style.bg, art_backdrop);
+            }
+            self.grid = try artBehind(allocator, foreground, art_grid.*);
+        }
     }
 
     pub fn input(self: *AnsiBackground, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
@@ -1770,9 +1783,9 @@ pub const AnsiBackground = struct {
         return true;
     }
 
-    // the art is dimmed to this fraction of its brightness so foreground text
-    // stays legible over it
-    const art_brightness = 35; // percent
+    // the art is faded toward the background at this opacity so foreground
+    // text stays legible over it
+    pub const art_opacity = 25; // percent
 
     // the art parser only emits truecolor, so a palette color never occurs
     fn artRgb(color: ?Grid.Color) ?Grid.Color.Rgb {
@@ -1783,26 +1796,14 @@ pub const AnsiBackground = struct {
         };
     }
 
-    fn dimColor(color: ?Grid.Color) ?Grid.Color {
+    fn fadeColor(color: ?Grid.Color, backdrop: Grid.Color.Rgb) ?Grid.Color {
         const v = artRgb(color) orelse return color;
-        return .{ .rgb = .{
-            .r = @intCast(@as(u16, v.r) * art_brightness / 100),
-            .g = @intCast(@as(u16, v.g) * art_brightness / 100),
-            .b = @intCast(@as(u16, v.b) * art_brightness / 100),
-        } };
-    }
-
-    fn buildArt(self: *AnsiBackground, allocator: std.mem.Allocator, size: layout.Size, root_focus: *Focus) !void {
-        try self.art.build(allocator, .{
-            .min_size = .{ .width = null, .height = null },
-            .max_size = .{ .width = size.width, .height = size.height },
-        }, root_focus);
-        if (self.art.grid) |*grid| {
-            for (grid.cells) |*cell| {
-                cell.style.fg = dimColor(cell.style.fg);
-                cell.style.bg = dimColor(cell.style.bg);
+        const blend = struct {
+            fn f(c: u8, b: u8) u8 {
+                return @intCast((@as(u16, c) * art_opacity + @as(u16, b) * (100 - art_opacity)) / 100);
             }
-        }
+        }.f;
+        return .{ .rgb = .{ .r = blend(v.r, backdrop.r), .g = blend(v.g, backdrop.g), .b = blend(v.b, backdrop.b) } };
     }
 
     // terminals that don't support truecolor misparse a "38;2;r;g;b"/"48;2;…"
