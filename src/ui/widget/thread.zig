@@ -1041,31 +1041,10 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
         }
 
         fn descriptionInput(self: *This, key: Key, root_focus: *Focus) void {
-            const detail_scroll = &self.scroll;
             switch (key) {
                 .arrow_left => self.exit = .list,
-                .arrow_up => {
-                    if (!self.session.is_terminal) {
-                        _ = self.moveVertical(root_focus, false);
-                        return;
-                    }
-                    if (self.focusAdjacentVisible(root_focus, false)) return;
-                    const before = detail_scroll.y;
-                    detail_scroll.y -= 1;
-                    detail_scroll.clampToContent();
-                    if (detail_scroll.y == before) _ = self.moveVertical(root_focus, false);
-                },
-                .arrow_down => {
-                    if (!self.session.is_terminal) {
-                        _ = self.moveVertical(root_focus, true);
-                        return;
-                    }
-                    if (self.focusAdjacentVisible(root_focus, true)) return;
-                    const before = detail_scroll.y;
-                    detail_scroll.y += 1;
-                    detail_scroll.clampToContent();
-                    if (detail_scroll.y == before) _ = self.moveVertical(root_focus, true);
-                },
+                .arrow_up => _ = self.moveVertical(root_focus, false),
+                .arrow_down => _ = self.moveVertical(root_focus, true),
                 else => {},
             }
         }
@@ -1157,24 +1136,6 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
             return false;
         }
 
-        fn focusAdjacentVisible(self: *This, root_focus: *Focus, down: bool) bool {
-            const inner_box = self.inner();
-            var next = self.focusedChild(root_focus) orelse return false;
-            while (true) {
-                if (down) {
-                    next += 1;
-                    if (next >= inner_box.children.count()) return false;
-                } else {
-                    if (next == 0) return false;
-                    next -= 1;
-                }
-                if (self.focusVisibleChild(next, root_focus, !down)) {
-                    self.focusChild(next, !down, root_focus);
-                    return true;
-                }
-            }
-        }
-
         fn focusedChild(self: *This, root_focus: *Focus) ?usize {
             const inner_box = self.inner();
             var id = root_focus.grandchild_id orelse return null;
@@ -1233,6 +1194,9 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
         fn moveVertical(self: *This, root_focus: *Focus, down: bool) bool {
             const inner_box = self.inner();
             const current = self.focusedChild(root_focus) orelse return false;
+            // a tall description or comment body is scrolled through before focus
+            // leaves it
+            if (self.focusedRect(current)) |rect| if (widget.scrollThroughRow(&self.scroll, rect, if (down) 1 else -1)) return true;
             if (inner_box.children.values()[current].widget == .repo_comment) {
                 const comment = &inner_box.children.values()[current].widget.repo_comment;
                 if (down and !comment.bodyFocused()) {
@@ -1258,6 +1222,21 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 self.focusChild(next, !down, root_focus);
                 return true;
             }
+        }
+
+        // the focused part of child `child_index`, in the scroll's content: a
+        // comment's metadata or body row, else the whole child
+        fn focusedRect(self: *This, child_index: usize) ?layout.IRect {
+            const child = &self.inner().children.values()[child_index];
+            var rect = child.rect orelse return null;
+            if (child.widget == .repo_comment) {
+                const comment = &child.widget.repo_comment;
+                const row = comment.rowRect(comment.bodyFocused()) orelse return null;
+                rect.x += row.x;
+                rect.y += row.y;
+                rect.size = row.size;
+            }
+            return rect;
         }
 
         fn moveHorizontal(self: *This, root_focus: *Focus, right: bool) bool {

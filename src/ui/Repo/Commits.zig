@@ -3,7 +3,6 @@ const evt = @import("../../event.zig");
 const ui = @import("../../ui.zig");
 const xit = @import("xit");
 const rp = xit.repo;
-const Diff = @import("Diff.zig");
 const Undo = @import("Undo.zig");
 const obj = xit.object;
 const mrg = xit.merge;
@@ -434,7 +433,11 @@ pub const View = struct {
         // the detail pane: a frame around a scroll of its rows
         {
             var detail_outer = blk: {
-                var detail_scroll = try Diff.View.initEmpty(allocator, session);
+                var detail_scroll = blk2: {
+                    var rows = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                    errdefer rows.deinit(allocator);
+                    break :blk2 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = rows }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
+                };
                 errdefer detail_scroll.deinit(allocator);
                 var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .direction = .vert });
                 errdefer frame.deinit(allocator);
@@ -443,7 +446,7 @@ pub const View = struct {
                 // one), letting focus recovery descend into the pane after
                 // it's laid out beside a too-narrow list.
                 frame.getFocus().child_id = detail_scroll.getFocus().id;
-                try frame.children.put(allocator, detail_scroll.getFocus().id, .{ .widget = .{ .diff_view = detail_scroll }, .rect = null, .min_size = null });
+                try frame.children.put(allocator, detail_scroll.getFocus().id, .{ .widget = .{ .scroll = detail_scroll }, .rect = null, .min_size = null });
                 break :blk frame;
             };
             errdefer detail_outer.deinit(allocator);
@@ -537,7 +540,7 @@ pub const View = struct {
     }
 
     fn detailScroll(self: *View) *wgt.Scroll(ui.Widget) {
-        return &self.detailOuter().children.values()[0].widget.diff_view.scroll;
+        return &self.detailOuter().children.values()[0].widget.scroll;
     }
 
     fn detailInner(self: *View) *wgt.Box(ui.Widget) {
@@ -590,17 +593,6 @@ pub const View = struct {
         else
             detail_min_width;
         self.contentBox().children.values()[detail_index].min_size = .{ .width = detail_width, .height = null };
-
-        // the message is the pane's only wrapping row, and wrapping needs a
-        // bounded width, which the pane's scroll doesn't grant (it scrolls
-        // horizontally too). cap it to the pane, leaving room for the border
-        // and the scrollbar column. re-capped each build so it tracks resizes.
-        for (self.detailInner().children.values()) |*child| switch (child.widget) {
-            .text_box => |text_box| if (text_box.options.wrap_kind == .word) {
-                child.max_size = .{ .width = detail_width -| 3, .height = null };
-            },
-            else => {},
-        };
 
         // the web bounds the layout to the browser viewport like the terminal;
         // each Scroll's web-native mode hands its full content to a real
@@ -719,11 +711,13 @@ pub const View = struct {
         }
         if (direction == .up and self.contentAtTop() and self.focusHeader(root_focus)) return;
         if (self.detailActive()) {
-            const detail_view = &self.detailOuter().children.values()[0].widget.diff_view;
-            if (key == .arrow_left and self.detailScroll().x == 0) {
-                if (!detail_view.moveInRow(root_focus, false)) self.focusList(root_focus);
-            } else {
-                try detail_view.input(allocator, key, root_focus);
+            const inner = self.detailInner();
+            if (inp.rowDelta(key, @intCast(inner.children.count()))) |delta| {
+                ui.widget.moveRowFocus(inner, self.detailScroll(), root_focus, delta);
+            } else if (key == .arrow_left) {
+                if (!ui.widget.moveInSelectedRow(inner, root_focus, false)) self.focusList(root_focus);
+            } else if (key == .arrow_right) {
+                _ = ui.widget.moveInSelectedRow(inner, root_focus, true);
             }
         } else {
             try self.listInput(key, root_focus);

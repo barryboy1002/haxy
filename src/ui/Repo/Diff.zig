@@ -9,6 +9,7 @@ const layout = xit.xitui.layout;
 const Key = xit.xitui.input.Key;
 const Grid = xit.xitui.grid.Grid;
 const Focus = xit.xitui.focus.Focus;
+const inp = @import("../input.zig");
 
 pub const page_size = 10;
 pub const Hunk = struct {
@@ -251,19 +252,13 @@ fn addSpans(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), spans: []con
 
 pub const View = struct {
     scroll: wgt.Scroll(ui.Widget),
-    session: *ui.Session,
-
-    pub fn initEmpty(allocator: std.mem.Allocator, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
-        errdefer box.deinit(allocator);
-        return .{
-            .scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = box }, .{ .direction = .both, .web_native = !session.is_terminal, .fill = true }),
-            .session = session,
-        };
-    }
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var view = try initEmpty(allocator, session);
+        var view: View = blk: {
+            var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+            errdefer box.deinit(allocator);
+            break :blk .{ .scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = box }, .{ .direction = .both, .web_native = !session.is_terminal, .fill = true }) };
+        };
         errdefer view.deinit(allocator);
         const box = view.inner();
         try data.appendWindow(allocator, session, box);
@@ -298,134 +293,21 @@ pub const View = struct {
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = allocator;
         const sc = &self.scroll;
+        const box = self.inner();
+        if (inp.rowDelta(key, @intCast(box.children.count()))) |delta| return ui.widget.moveRowFocus(box, sc, root_focus, delta);
         switch (key) {
             // scroll horizontally within the diff
-            .arrow_left => if (!self.moveInRow(root_focus, false) and sc.x > 0) {
+            .arrow_left => if (!ui.widget.moveInSelectedRow(box, root_focus, false) and sc.x > 0) {
                 sc.x -= 1;
-                self.scroll.clampToContent();
+                sc.clampToContent();
             },
-            .arrow_right => if (!self.moveInRow(root_focus, true)) {
+            .arrow_right => if (!ui.widget.moveInSelectedRow(box, root_focus, true)) {
                 sc.x += 1;
-                self.scroll.clampToContent();
+                sc.clampToContent();
             },
-            .arrow_up => self.moveDiff(root_focus, -1),
-            .arrow_down => self.moveDiff(root_focus, 1),
-            .page_up => self.pageDiff(root_focus, -10),
-            .page_down => self.pageDiff(root_focus, 10),
-            .home => self.jumpDiff(root_focus, false),
-            .end => self.jumpDiff(root_focus, true),
             // Enter / a click on a "previous"/"next" row follow its "a:" link in
             // the host (it reloads the adjacent window), so they don't reach here.
-            .mouse => |mouse| switch (mouse.action) {
-                .scroll => |dir| self.moveDiff(root_focus, if (dir == .up) -1 else 1),
-                else => {},
-            },
             else => {},
         }
-    }
-
-    // step across the selected row's boxes, false when the row has none that way.
-    pub fn moveInRow(self: *View, root_focus: *Focus, right: bool) bool {
-        const box = self.inner();
-        const selected = box.getFocus().child_id orelse return false;
-        return switch ((box.children.getPtr(selected) orelse return false).widget) {
-            .box => |*row| ui.widget.moveInRow(row, root_focus, right),
-            else => false,
-        };
-    }
-
-    // move one step in `delta` (+ down, - up). in the terminal, `delta` is a
-    // line count unless there is a new hunk visible (in which case it is a
-    // hunk count). on the web `delta` is always a hunk count.
-    fn moveDiff(self: *View, root_focus: *Focus, delta: isize) void {
-        const box = self.inner();
-        const keys = box.children.keys();
-        if (keys.len == 0) return;
-        const cur: usize = if (box.getFocus().child_id) |c| (box.children.getIndex(c) orelse 0) else 0;
-        const target = @as(isize, @intCast(cur)) + delta;
-        const in_range = target >= 0 and target < @as(isize, @intCast(keys.len));
-
-        if (self.session.is_terminal) {
-            if (in_range and self.hunkVisible(@intCast(target))) {
-                root_focus.setFocus(keys[@intCast(target)]);
-                return;
-            }
-
-            const sc = &self.scroll;
-            sc.y += delta * 5; // magnify because it's a line count
-            self.scroll.clampToContent();
-            if (in_range and self.hunkVisible(@intCast(target))) {
-                root_focus.setFocus(keys[@intCast(target)]);
-            }
-        } else {
-            if (in_range) {
-                root_focus.setFocus(keys[@intCast(target)]);
-            }
-        }
-    }
-
-    // page a fixed number of lines, then focus the leading visible hunk
-    // (bottom-most when paging down, top-most when paging up). in the
-    // terminal, `delta` is a line count, and on the web it's a hunk count.
-    fn pageDiff(self: *View, root_focus: *Focus, delta: isize) void {
-        if (self.session.is_terminal) {
-            const sc = &self.scroll;
-            sc.y += delta * 5; // magnify because it's a line count
-            self.scroll.clampToContent();
-            self.focusVisible(root_focus, delta > 0);
-        } else {
-            const box = self.inner();
-            const keys = box.children.keys();
-            if (keys.len == 0) return;
-            const cur: isize = if (box.getFocus().child_id) |c| @intCast(box.children.getIndex(c) orelse 0) else 0;
-            const target: usize = @intCast(std.math.clamp(cur + delta, 0, @as(isize, @intCast(keys.len - 1))));
-            root_focus.setFocus(keys[target]);
-        }
-    }
-
-    // jump to the first or last hunk. on the web the browser scrolls to the
-    // focused hunk; on the terminal pin the scroll to the top/bottom too.
-    fn jumpDiff(self: *View, root_focus: *Focus, to_end: bool) void {
-        const box = self.inner();
-        const keys = box.children.keys();
-        if (keys.len == 0) return;
-        if (self.session.is_terminal) {
-            const sc = &self.scroll;
-            sc.y = if (to_end) std.math.maxInt(isize) else 0;
-            self.scroll.clampToContent();
-        }
-        root_focus.setFocus(if (to_end) keys[keys.len - 1] else keys[0]);
-    }
-
-    // whether hunk `index` is at least partly within the diff viewport, per the
-    // last build's layout rects (content space) and the current scroll offset.
-    fn hunkVisible(self: *View, index: usize) bool {
-        const box = self.inner();
-        const sc = &self.scroll;
-        const vp = sc.grid orelse return false;
-        const r = box.children.values()[index].rect orelse return false;
-        const top = sc.y;
-        const bottom = sc.y + @as(isize, @intCast(vp.size.height - sc.bar_h));
-        return (r.y + @as(isize, @intCast(r.size.height))) > top and r.y < bottom;
-    }
-
-    // focus the visible hunk at the scroll's leading edge. `prefer_last` picks
-    // the bottom-most visible (for downward motion), else the top-most.
-    fn focusVisible(self: *View, root_focus: *Focus, prefer_last: bool) void {
-        const box = self.inner();
-        const sc = &self.scroll;
-        const vp = sc.grid orelse return;
-        const top = sc.y;
-        const bottom = sc.y + @as(isize, @intCast(vp.size.height - sc.bar_h));
-        var chosen: ?usize = null;
-        for (box.children.keys(), box.children.values()) |id, *child| {
-            const r = child.rect orelse continue; // content-space layout rect
-            const r_top = r.y;
-            const r_bot = r.y + @as(isize, @intCast(r.size.height));
-            if (r_bot <= top or r_top >= bottom) continue; // not visible
-            chosen = id;
-            if (!prefer_last) break; // first visible
-        }
-        if (chosen) |id| root_focus.setFocus(id);
     }
 };
