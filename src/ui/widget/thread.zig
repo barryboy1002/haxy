@@ -1155,7 +1155,9 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
             return false;
         }
 
-        fn focusChild(self: *This, child_index: usize, last: bool, root_focus: *Focus) void {
+        // focus child `child_index`, its last part when `last`, entered from above
+        // when `down`
+        fn focusChild(self: *This, child_index: usize, last: bool, down: bool, root_focus: *Focus) void {
             const inner_box = self.inner();
             const child = &inner_box.children.values()[child_index];
             var target = inner_box.children.keys()[child_index];
@@ -1178,17 +1180,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 },
                 else => root_focus.setFocus(target),
             }
-            const detail_scroll = &self.scroll;
-            if (detail_scroll.grid) |viewport| {
-                const viewport_height = viewport.size.height - detail_scroll.bar_h;
-                if (rect.size.height > viewport_height) {
-                    const bottom_aligned = rect.y + @as(isize, @intCast(rect.size.height - viewport_height));
-                    detail_scroll.y = std.math.clamp(detail_scroll.y, rect.y, bottom_aligned);
-                    detail_scroll.clampToContent();
-                    return;
-                }
-            }
-            detail_scroll.scrollToRect(rect);
+            widget.scrollToEnteredRow(&self.scroll, rect, down);
         }
 
         fn moveVertical(self: *This, root_focus: *Focus, down: bool) bool {
@@ -1200,11 +1192,11 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
             if (inner_box.children.values()[current].widget == .repo_comment) {
                 const comment = &inner_box.children.values()[current].widget.repo_comment;
                 if (down and !comment.bodyFocused()) {
-                    self.focusChild(current, true, root_focus);
+                    self.focusChild(current, true, true, root_focus);
                     return true;
                 }
                 if (!down and comment.bodyFocused()) {
-                    self.focusChild(current, false, root_focus);
+                    self.focusChild(current, false, false, root_focus);
                     return true;
                 }
             }
@@ -1219,7 +1211,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                     next -= 1;
                 }
                 if (!self.childFocusable(next)) continue;
-                self.focusChild(next, !down, root_focus);
+                self.focusChild(next, !down, down, root_focus);
                 return true;
             }
         }
@@ -1312,7 +1304,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                     else => if (!self.childFocusable(child_index)) continue,
                 }
                 if (root_focus) |focus|
-                    self.focusChild(child_index, false, focus)
+                    self.focusChild(child_index, false, true, focus)
                 else
                     inner_box.getFocus().child_id = inner_box.children.keys()[child_index];
                 return true;

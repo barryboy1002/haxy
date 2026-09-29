@@ -178,18 +178,24 @@ pub fn moveRowFocus(box: *wgt.Box(Widget), scroll: *wgt.Scroll(Widget), root_foc
     const cur: isize = @intCast(box.children.getIndex(cur_id) orelse return);
     // home and end jump straight to the ends
     if (@abs(delta) < keys.len) if (box.children.values()[@intCast(cur)].rect) |rect| if (scrollThroughRow(scroll, rect, delta)) return;
-    const view_h = viewHeight(scroll);
     const last: isize = @intCast(keys.len - 1);
     const next: usize = @intCast(std.math.clamp(cur + delta, 0, last));
     if (next == @as(usize, @intCast(cur))) return;
     root_focus.setFocus(keys[next]);
-    const rect = box.children.values()[next].rect orelse return;
-    // a tall row shows the end it was entered from
-    if (view_h) |h| if (@as(isize, @intCast(rect.size.height)) > h) {
-        scroll.y = if (delta > 0) rect.y else rectBottom(rect) - h;
-        return;
-    };
-    scroll.scrollToRect(rect);
+    if (box.children.values()[next].rect) |rect| scrollToEnteredRow(scroll, rect, delta > 0);
+}
+
+// bring `rect`, a row in `scroll`'s content just entered from above (`down`)
+// or below, into view. a row taller than the view keeps the view while the
+// edge it was entered from is in it, so the following steps scroll through it,
+// and otherwise shows that edge.
+pub fn scrollToEnteredRow(scroll: *wgt.Scroll(Widget), rect: layout.IRect, down: bool) void {
+    const grid = scroll.grid orelse return;
+    const h: isize = @intCast(grid.size.height - scroll.bar_h);
+    if (@as(isize, @intCast(rect.size.height)) <= h) return scroll.scrollToRect(rect);
+    const edge = if (down) rect.y else rectBottom(rect) - 1;
+    if (edge >= scroll.y and edge < scroll.y + h) return;
+    scroll.y = if (down) rect.y else rectBottom(rect) - h;
 }
 
 // step across the boxes of `box`'s selected row, false when it isn't a row or
@@ -204,10 +210,9 @@ pub fn moveInSelectedRow(box: *wgt.Box(Widget), root_focus: *Focus, right: bool)
 
 // scroll a step through `rect`, a row in `scroll`'s content, when it extends
 // past the view in `delta`'s direction. false when it doesn't, and on the web,
-// which scrolls natively.
+// where scrollFocusedWidget in script.js handles scrolling.
 pub fn scrollThroughRow(scroll: *wgt.Scroll(Widget), rect: layout.IRect, delta: isize) bool {
-    // how far one step scrolls
-    const step_lines = 5;
+    const step_lines = 3; // how far a step scrolls (see stepLines in script.js for the web equivalent)
     const h = viewHeight(scroll) orelse return false;
     const hidden = if (delta > 0) rectBottom(rect) - (scroll.y + h) else scroll.y - rect.y;
     if (hidden <= 0) return false;

@@ -66,8 +66,9 @@ function focusedNativeScroll() {
     return container ? { focused, container } : null;
 }
 
-// scroll one row while the focused widget continues past the viewport edge.
+// scroll a step while the focused widget continues past the viewport edge.
 function scrollFocusedWidget(down) {
+    const stepLines = 3; // see step_lines in widget.zig's scrollThroughRow for the terminal equivalent
     const native = focusedNativeScroll();
     if (!native) return false;
     const viewport = native.container.getBoundingClientRect();
@@ -75,7 +76,7 @@ function scrollFocusedWidget(down) {
     const overflow = down ? edge.bottom - viewport.bottom : viewport.top - edge.top;
     if (overflow <= 0.5) return false;
     if (!cellHeight) measureCell();
-    native.container.scrollTop += (down ? 1 : -1) * Math.min(cellHeight, overflow);
+    native.container.scrollTop += (down ? 1 : -1) * Math.min(stepLines * cellHeight, overflow);
     return true;
 }
 
@@ -280,7 +281,11 @@ const importObject = {
             // vertical is the priority axis. keep the viewport in place when it
             // already overlaps a tall widget; otherwise reveal its nearest edge.
             if (bottom - top > container.clientHeight) {
-                container.scrollTop = Math.min(Math.max(container.scrollTop, top), bottom - container.clientHeight);
+                if (bottom <= container.scrollTop) {
+                    container.scrollTop = bottom - container.clientHeight;
+                } else if (top >= container.scrollTop + container.clientHeight) {
+                    container.scrollTop = top;
+                }
             } else if (top < container.scrollTop) {
                 container.scrollTop = top;
             } else if (bottom > container.scrollTop + container.clientHeight) {
