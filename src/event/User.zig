@@ -26,7 +26,7 @@ pub const Public = struct {
 
 const Self = @This();
 
-pub const name_min_len = 5;
+pub const name_min_len = 4;
 pub const name_max_len = 32;
 
 // the moment keys `evt.merge` reads and writes for this kind
