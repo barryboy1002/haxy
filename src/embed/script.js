@@ -291,13 +291,14 @@ const importObject = {
             } else if (bottom > container.scrollTop + container.clientHeight) {
                 container.scrollTop = bottom - container.clientHeight;
             }
-            // horizontal-only scrolls are rows of controls, so reveal either
-            // edge. other scrolls reveal only the row's start; chasing varying
-            // right edges while moving vertically would yank their view sideways.
-            if (left < container.scrollLeft) {
-                container.scrollLeft = left;
-            } else if (container.dataset.scrollDirection === "horiz" && right > container.scrollLeft + container.clientWidth) {
-                container.scrollLeft = right - container.clientWidth;
+            // reveal a widget that fits the view's width. a wider one keeps the
+            // horizontal position, which only arrow left/right changes.
+            if (right - left <= container.clientWidth) {
+                if (left < container.scrollLeft) {
+                    container.scrollLeft = left;
+                } else if (right > container.scrollLeft + container.clientWidth) {
+                    container.scrollLeft = right - container.clientWidth;
+                }
             }
         },
     },

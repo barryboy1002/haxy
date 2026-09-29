@@ -191,8 +191,10 @@ pub fn moveRowFocus(box: *wgt.Box(Widget), scroll: *wgt.Scroll(Widget), root_foc
 // and otherwise shows that edge.
 pub fn scrollToEnteredRow(scroll: *wgt.Scroll(Widget), rect: layout.IRect, down: bool) void {
     const grid = scroll.grid orelse return;
+    // a row wider than the view keeps the horizontal position
+    const target: layout.IRect = if (rect.size.width > grid.size.width - scroll.bar_w) .{ .x = scroll.x, .y = rect.y, .size = .{ .width = 0, .height = rect.size.height } } else rect;
     const h: isize = @intCast(grid.size.height - scroll.bar_h);
-    if (@as(isize, @intCast(rect.size.height)) <= h) return scroll.scrollToRect(rect);
+    if (@as(isize, @intCast(rect.size.height)) <= h) return scroll.scrollToRect(target);
     const edge = if (down) rect.y else rectBottom(rect) - 1;
     if (edge >= scroll.y and edge < scroll.y + h) return;
     scroll.y = if (down) rect.y else rectBottom(rect) - h;
