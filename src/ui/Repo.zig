@@ -227,6 +227,8 @@ pub fn init(
     var source: ?ui.RepoSource = null;
     var repo_id_maybe: ?[evt.event_id_size]u8 = null;
     var repo: evt.Repo.Record = undefined;
+    // local mode owns its repo
+    var role: evt.Repo.Role = .owner;
     var owner_name: []const u8 = undefined;
     if (session.local) |local| {
         source = local;
@@ -242,10 +244,11 @@ pub fn init(
         const haxy_moment = session.haxy_moment orelse return error.NoMoment;
         const io = session.io orelse return error.NoMoment;
         const users_dir = session.users_dir orelse return error.NoMoment;
-        const found = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, haxy_moment, users_dir, repo_identity.owner, repo_identity.name)) orelse return error.NotFound;
+        const found = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, haxy_moment, users_dir, repo_identity.owner, repo_identity.name, session.userId())) orelse return error.NotFound;
         // a repo the session can't read doesn't exist to it
-        if (evt.Repo.roleOf(found.repo, session.userId()) == .none) return error.NotFound;
+        if (found.role == .none) return error.NotFound;
         repo = found.repo;
+        role = found.role;
         repo_id_maybe = found.event_id;
 
         // resolve the creating user so the header can show their name to the left
@@ -262,7 +265,7 @@ pub fn init(
 
     const handle = ui.RepoHandle{
         .location = .{ .repo = try arena.allocator().dupe(u8, repo_identity.identity) },
-        .viewer = try ui.Viewer.init(session, arena, repo),
+        .viewer = try ui.Viewer.init(session, arena, role),
     };
 
     // open the repo once for every tab. files and changes share a ref or revision.

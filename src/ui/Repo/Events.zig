@@ -258,6 +258,7 @@ fn readMeta(
                 .user => evt.User,
                 .repo => evt.Repo,
                 .fork => evt.Fork,
+                .grant => evt.Grant,
                 .issue => evt.Issue,
                 .discuss => evt.Discussion,
                 .comment => evt.Comment,
@@ -303,6 +304,7 @@ fn readItem(
             }
         },
         .fork => _ = (try evt.readRecordSubset(evt.Fork, struct { removed: bool }, DB, hash_kind, haxy_moment, arena, id)) orelse return null,
+        .grant => _ = (try evt.readRecordSubset(evt.Grant, struct { removed: bool }, DB, hash_kind, haxy_moment, arena, id)) orelse return null,
         .issue => {
             const record = (try evt.readRecordSubset(evt.Issue, Authored, DB, hash_kind, haxy_moment, arena, id)) orelse return null;
             item.author = try ui.Author.initFromEmail(admin_moment, arena, record.author_email);

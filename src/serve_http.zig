@@ -133,7 +133,7 @@ fn handleGitRequest(
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-        const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, users_dir, owner_repo.owner, owner_repo.name)) orelse
+        const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, users_dir, owner_repo.owner, owner_repo.name, null)) orelse
             return error.RepoNotFound;
         if (repo.repo.event.read_access == .private) {
             if (http_server.reader.state == .received_head) http_server.reader.state = .ready;

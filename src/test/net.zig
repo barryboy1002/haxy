@@ -543,7 +543,7 @@ fn testPushFork(
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-        const target = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, users_dir, "admin", "target")) orelse return error.NotFound;
+        const target = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, users_dir, "admin", "target", null)) orelse return error.NotFound;
         repo_id = target.event_id;
         @memcpy(&user_id, target.repo.event.user_id);
         var user_repo = (try evt.openUserRepo(io, allocator, users_dir, &user_id)) orelse return error.NotFound;

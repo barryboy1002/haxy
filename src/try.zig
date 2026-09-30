@@ -232,35 +232,43 @@ pub fn main(init: std.process.Init) !void {
         const users_dir = try std.fs.path.join(arena.allocator(), &.{ server_path, "users" });
         try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
-        // admin co-owns every repo, so it has full privileges everywhere
-        // (including undo) while the other users only own their own
-        const admin_user_id_hex = std.fmt.bytesToHex(admin_user_id, .lower);
+        // admin is granted ownership of every repo, so it has full privileges
+        // everywhere (including undo) while the other users only own their own
         var repo_events: [repo_data.len]evt.EventWithId = undefined;
+        var grant_events: [repo_data.len]evt.EventWithId = undefined;
         for (repo_data, 0..) |r, i| {
+            const author: evt.CommitAuthor = .{ .name = user_data[r.user_index].name, .email = user_data[r.user_index].email };
             repo_events[i] = .{
                 .id = std.fmt.bytesToHex(repo_event_ids[i], .lower),
                 .timestamp = @intCast(user_data.len + i + 1),
-                .author = .{ .name = user_data[r.user_index].name, .email = user_data[r.user_index].email },
+                .author = author,
                 .event = .{
                     .repo = .{
                         .user_id = &user_ids[r.user_index],
                         .name = r.name,
                         .description = r.description,
                         .read_access = r.read_access,
-                        .owner_user_ids = &admin_user_id_hex,
                     },
                 },
             };
+            grant_events[i] = .{
+                .id = std.fmt.bytesToHex(evt.Grant.idOf(&repo_event_ids[i], &admin_user_id), .lower),
+                .timestamp = @intCast(user_data.len + i + 1),
+                .author = author,
+                .event = .{ .grant = .{ .target_id = &repo_event_ids[i], .user_id = &admin_user_id, .role = .owner } },
+            };
         }
 
-        // each user's repo holds the repos they own
+        // each user's repo holds the repos they own and the grants on them
         for (user_ids, 0..) |user_id, user_index| {
             const user_repo_path = try evt.userRepoPath(arena.allocator(), users_dir, &user_id);
             var user_repo = try evt.initUserRepo(io, allocator, user_repo_path);
             defer user_repo.deinit(io, allocator);
             var owned: std.ArrayList(evt.EventWithId) = .empty;
-            for (repo_data, repo_events) |r, event| {
-                if (r.user_index == user_index) try owned.append(arena.allocator(), event);
+            for (repo_data, repo_events, grant_events) |r, repo_event, grant_event| {
+                if (r.user_index != user_index) continue;
+                try owned.append(arena.allocator(), repo_event);
+                try owned.append(arena.allocator(), grant_event);
             }
             if (owned.items.len > 0) try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, owned.items);
         }

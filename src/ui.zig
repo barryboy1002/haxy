@@ -1953,13 +1953,14 @@ pub const Viewer = struct {
     role: evt.Repo.Role,
     email: []const u8,
 
-    // the session's viewer of `repo`, or null when logged out. local mode owns everything.
-    pub fn init(session: *Session, arena: *std.heap.ArenaAllocator, repo: evt.Repo.Record) !?Viewer {
+    // the session's viewer of a repo it holds `role` in, or null when logged
+    // out. local mode owns everything.
+    pub fn init(session: *Session, arena: *std.heap.ArenaAllocator, role: evt.Repo.Role) !?Viewer {
         if (session.data.host_kind == .local) return .{ .role = .owner, .email = "" };
         const user_id = session.userId() orelse return null;
         const moment = session.haxy_moment orelse unreachable;
         const user = (try activeUser(moment, arena, user_id)) orelse return null;
-        return .{ .role = evt.Repo.roleOf(repo, user_id), .email = user.event.email };
+        return .{ .role = role, .email = user.event.email };
     }
 };
 
@@ -2080,8 +2081,8 @@ pub fn authorizeUser(
     const user = (try activeUser(moment, arena, user_id)) orelse return .login_required;
 
     const owner_repo = evt.parseOwnerRepoPath(identity) orelse return .repo_not_found;
-    const repo = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, moment, users_dir, owner_repo.owner, owner_repo.name)) orelse return .repo_not_found;
-    const role = evt.Repo.roleOf(repo.repo, user_id);
+    const repo = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, moment, users_dir, owner_repo.owner, owner_repo.name, user_id)) orelse return .repo_not_found;
+    const role = repo.role;
     // a repo the user can't read doesn't exist to them
     if (role == .none) return .repo_not_found;
     if (!role.atLeast(min_role)) return .forbidden;

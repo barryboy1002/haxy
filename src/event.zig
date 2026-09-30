@@ -10,6 +10,7 @@ const pch = @import("patch.zig");
 pub const User = @import("event/User.zig");
 pub const Repo = @import("event/Repo.zig");
 pub const Fork = @import("event/Fork.zig");
+pub const Grant = @import("event/Grant.zig");
 pub const Issue = @import("event/Issue.zig");
 pub const Discussion = @import("event/Discussion.zig");
 pub const Comment = @import("event/Comment.zig");
@@ -30,7 +31,7 @@ pub const last_object_id_key = "haxy/last-object-id";
 pub const admin_repo_opts: rp.RepoOpts(.xit) = .{};
 pub const AdminDB = rp.Repo(.xit, admin_repo_opts).DB;
 
-// options + db type for a user repo, which holds its user's repo and fork events
+// options + db type for a user repo, which holds its user's repo, fork and grant events
 pub const user_repo_opts: rp.RepoOpts(.xit) = .{};
 pub const UserDB = rp.Repo(.xit, user_repo_opts).DB;
 
@@ -169,7 +170,8 @@ pub fn userMoment(repo: *rp.Repo(.xit, user_repo_opts)) !?UserDB.HashMap(.read_o
     };
 }
 
-// read a repo by its owner's name and its name, from the owner's user repo
+// read a repo by its owner's name and its name, from the owner's user repo,
+// with the role `viewer_id` holds in it. a null viewer is logged out.
 pub fn readRepoByOwnerAndName(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -178,27 +180,55 @@ pub fn readRepoByOwnerAndName(
     users_dir: []const u8,
     owner_name: []const u8,
     repo_name: []const u8,
-) !?Repo.RepoWithId {
+    viewer_id: ?[event_id_size]u8,
+) !?Repo.RepoWithRole {
     const owner_id = (try User.readIdByName(AdminDB, admin_repo_opts.hash, admin_moment, owner_name)) orelse return null;
     var user_repo = (try openUserRepo(io, allocator, users_dir, &owner_id)) orelse return null;
     defer user_repo.deinit(io, allocator);
     const moment = (try userMoment(&user_repo)) orelse return null;
-    return try Repo.readByName(UserDB, user_repo_opts.hash, moment, arena, repo_name);
+    const found = (try Repo.readByName(UserDB, user_repo_opts.hash, moment, arena, repo_name)) orelse return null;
+    return .{
+        .repo = found.repo,
+        .event_id = found.event_id,
+        .role = try Repo.roleOf(UserDB, user_repo_opts.hash, moment, arena, found.repo, &found.event_id, viewer_id),
+    };
 }
 
-// read a repo by its owner's id and its id, from the owner's user repo
+// read a repo by its owner's id and its id, from the owner's user repo, with
+// the role `viewer_id` holds in it. a null viewer is logged out.
 pub fn readRepoById(
     io: std.Io,
     allocator: std.mem.Allocator,
     arena: *std.heap.ArenaAllocator,
     users_dir: []const u8,
     owner_id: *const [event_id_size]u8,
-    repo_id: []const u8,
-) !?Repo.Record {
+    repo_id: *const [event_id_size]u8,
+    viewer_id: ?[event_id_size]u8,
+) !?Repo.RepoWithRole {
     var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return null;
     defer user_repo.deinit(io, allocator);
     const moment = (try userMoment(&user_repo)) orelse return null;
-    return try Repo.readById(UserDB, user_repo_opts.hash, moment, arena, repo_id);
+    const repo = (try Repo.readById(UserDB, user_repo_opts.hash, moment, arena, repo_id)) orelse return null;
+    return .{
+        .repo = repo,
+        .event_id = repo_id.*,
+        .role = try Repo.roleOf(UserDB, user_repo_opts.hash, moment, arena, repo, repo_id, viewer_id),
+    };
+}
+
+// a repo's active grants, from its owner's user repo
+pub fn readRepoGrants(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
+    users_dir: []const u8,
+    owner_id: *const [event_id_size]u8,
+    repo_id: *const [event_id_size]u8,
+) ![]const Grant {
+    var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return &.{};
+    defer user_repo.deinit(io, allocator);
+    const moment = (try userMoment(&user_repo)) orelse return &.{};
+    return try Grant.readByTarget(UserDB, user_repo_opts.hash, moment, arena, repo_id);
 }
 
 // read a fork by its forker's id and its id, from the forker's user repo
@@ -242,6 +272,7 @@ pub const EventKind = enum {
     user,
     repo,
     fork,
+    grant,
     issue,
     discuss,
     comment,
@@ -260,7 +291,7 @@ pub const RepoRole = enum {
         return switch (self) {
             .admin => kind == .user,
             .user => switch (kind) {
-                .repo, .fork => true,
+                .repo, .fork, .grant => true,
                 else => false,
             },
             .repo => switch (kind) {
@@ -290,6 +321,7 @@ pub const Event = union(EventKind) {
     user: ?User,
     repo: ?Repo,
     fork: ?Fork,
+    grant: ?Grant,
     issue: ?Issue,
     discuss: ?Discussion,
     comment: ?Comment,
@@ -394,6 +426,12 @@ pub const EventWithId = struct {
                     else
                         null,
                 },
+                .grant => .{
+                    .grant = if (json_event.data) |value|
+                        try std.json.parseFromValueLeaky(Grant, arena.allocator(), value, .{ .ignore_unknown_fields = true })
+                    else
+                        null,
+                },
                 .issue => .{
                     .issue = if (json_event.data) |value|
                         try std.json.parseFromValueLeaky(Issue, arena.allocator(), value, .{ .ignore_unknown_fields = true })
@@ -474,6 +512,7 @@ pub fn remove(
         .user => .{ .user = null },
         .repo => .{ .repo = null },
         .fork => .{ .fork = null },
+        .grant => .{ .grant = null },
         .issue => .{ .issue = null },
         .discuss => .{ .discuss = null },
         .comment => .{ .comment = null },
@@ -1168,6 +1207,10 @@ pub fn consumeInTransaction(
                     const record_maybe: ?Fork.Record = if (event_maybe) |event| .{ .event = event, .created_order = event_order, .updated_order = event_order } else null;
                     try Fork.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, record_maybe, &arena, &repo_event_oid);
                 },
+                .grant => |event_maybe| {
+                    const record_maybe: ?Grant.Record = if (event_maybe) |event| .{ .event = event, .created_order = event_order, .updated_order = event_order } else null;
+                    try Grant.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, record_maybe, &arena, &repo_event_oid);
+                },
                 .issue => |event_maybe| {
                     const record_maybe: ?Issue.Record = if (event_maybe) |event| .{
                         .event = event,
@@ -1771,7 +1814,7 @@ pub fn readAuthorEmail(
         .attach => Attachment.record_map_key,
         .patchrev => PatchRev.record_map_key,
         .patch => Patch.record_map_key,
-        .user, .repo, .fork => return null,
+        .user, .repo, .fork, .grant => return null,
     };
 
     const DB = EventDB(repo_opts.hash);

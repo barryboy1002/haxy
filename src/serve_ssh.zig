@@ -456,9 +456,9 @@ fn runForkSession(
             inline else => |*repo| try repo.uploadPack(io, allocator, reader, writer, .{ .protocol_version = protocol_version }, &sideband),
         }
     } else {
-        const target = (try evt.readRepoById(io, allocator, &admin_arena, handler.users_dir, fork_record.event.repo_user_id[0..evt.event_id_size], fork_record.event.repo_id)) orelse
+        const target = (try evt.readRepoById(io, allocator, &admin_arena, handler.users_dir, fork_record.event.repo_user_id[0..evt.event_id_size], fork_record.event.repo_id[0..evt.event_id_size], null)) orelse
             return writeError(sess, "repo not found");
-        if (!std.mem.eql(u8, target.event.name, forker_repo.name)) return writeError(sess, "patch draft belongs to another repo");
+        if (!std.mem.eql(u8, target.repo.event.name, forker_repo.name)) return writeError(sess, "patch draft belongs to another repo");
         const target_path = try evt.repoPath(allocator, handler.users_dir, fork_record.event.repo_user_id, fork_record.event.repo_id);
         defer allocator.free(target_path);
         const author: evt.CommitAuthor = .{ .name = user.event.name, .email = user.event.email };
@@ -565,7 +565,8 @@ fn authorizeRepoKey(
     defer admin.deinit(io, allocator);
 
     const moment = try evt.currentMoment(evt.admin_repo_opts, &admin);
-    const repo = (try evt.readRepoByOwnerAndName(io, allocator, arena, moment, users_dir, owner_name, repo_name)) orelse {
+    // no viewer yet, so this carries the base role
+    const repo = (try evt.readRepoByOwnerAndName(io, allocator, arena, moment, users_dir, owner_name, repo_name, null)) orelse {
         if (service == .upload_pack) return .not_found;
         const owner = (try evt.User.readByName(io, allocator, admin_repo_path, arena, owner_name)) orelse return .not_found;
         return if (isKeyInAuthorizedKeys(owner.event.ssh_keys, fingerprint))
@@ -579,49 +580,31 @@ fn authorizeRepoKey(
         .receive_pack => .write,
     };
     // skip the key lookups when the base role is enough
-    if (evt.Repo.roleOf(repo.repo, null).atLeast(min_role)) return .{ .allowed = null };
+    if (repo.role.atLeast(min_role)) return .{ .allowed = null };
 
-    const user = (try repoUserWithKey(moment, arena, repo.repo.event, fingerprint)) orelse return .denied;
-    if (!evt.Repo.roleOf(repo.repo, user.id).atLeast(min_role)) return .denied;
-    return .{ .allowed = user.author };
-}
+    // the creator owns the repo
+    const owner_id = repo.repo.event.user_id[0..evt.event_id_size];
+    if (try authorWithKey(moment, arena, owner_id, fingerprint)) |author| return .{ .allowed = author };
 
-const UserWithKey = struct {
-    id: [evt.event_id_size]u8,
-    author: evt.CommitAuthor,
-};
-
-// the repo's owner or collaborator holding the key, or null for anyone else
-fn repoUserWithKey(
-    moment: evt.AdminDB.HashMap(.read_only),
-    arena: *std.heap.ArenaAllocator,
-    repo: evt.Repo,
-    fingerprint: *const [ssh.fingerprint_len]u8,
-) !?UserWithKey {
-    if (try userWithKey(moment, arena, repo.user_id, fingerprint)) |user| return user;
-
-    for ([_][]const u8{ repo.owner_user_ids, repo.write_user_ids, repo.read_user_ids }) |user_ids| {
-        var lines = std.mem.tokenizeScalar(u8, user_ids, '\n');
-        while (lines.next()) |id| {
-            const user_id = try evt.parseEventId(id);
-            if (try userWithKey(moment, arena, &user_id, fingerprint)) |user| return user;
-        }
+    // anyone else holding the key needs a grant with the role. a key can be
+    // shared, so a grant that falls short doesn't end the search.
+    for (try evt.readRepoGrants(io, allocator, arena, users_dir, owner_id, &repo.event_id)) |grant| {
+        if (!grant.role.atLeast(min_role)) continue;
+        if (try authorWithKey(moment, arena, grant.user_id, fingerprint)) |author| return .{ .allowed = author };
     }
-    return null;
+    return .denied;
 }
 
-fn userWithKey(
+// the user as a commit author, or null unless they hold the key
+fn authorWithKey(
     moment: evt.AdminDB.HashMap(.read_only),
     arena: *std.heap.ArenaAllocator,
     user_id: []const u8,
     fingerprint: *const [ssh.fingerprint_len]u8,
-) !?UserWithKey {
+) !?evt.CommitAuthor {
     const user = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, user_id)) orelse return null;
     if (user.removed or !isKeyInAuthorizedKeys(user.event.ssh_keys, fingerprint)) return null;
-    return .{
-        .id = user_id[0..evt.event_id_size].*,
-        .author = .{ .name = user.event.name, .email = user.event.email },
-    };
+    return .{ .name = user.event.name, .email = user.event.email };
 }
 
 fn isKeyInAuthorizedKeys(ssh_keys: []const u8, fingerprint: *const [ssh.fingerprint_len]u8) bool {

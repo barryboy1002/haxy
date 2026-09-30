@@ -8,10 +8,6 @@ name: []const u8,
 description: []const u8,
 read_access: Access = .private,
 write_access: Access = .private,
-read_user_ids: []const u8 = "",
-write_user_ids: []const u8 = "",
-// collaborators who hold the owner's role without being the creator
-owner_user_ids: []const u8 = "",
 
 // what the db stores: the event's data plus the commit-derived fields
 pub const Record = struct {
@@ -50,27 +46,25 @@ pub const Role = enum {
 
 pub const name_max_len = 32;
 
-// the role `user_id_maybe` holds in the repo. null is a logged-out user, who
-// gets the base role the access fields give everyone.
-pub fn roleOf(record: Record, user_id_maybe: ?[evt.event_id_size]u8) Role {
-    const event = record.event;
-    const base: Role = if (event.write_access == .public) .write else if (event.read_access == .public) .read else .none;
+// the role `user_id_maybe` holds in the repo: its creator owns it, and anyone
+// else gets the higher of the base role and their grant. `user_moment` is the
+// owner's, which holds the grants. null is a logged-out user.
+pub fn roleOf(
+    comptime DB: type,
+    comptime hash_kind: hash.HashKind,
+    user_moment: DB.HashMap(.read_only),
+    arena: *std.heap.ArenaAllocator,
+    record: Record,
+    repo_id: *const [evt.event_id_size]u8,
+    user_id_maybe: ?[evt.event_id_size]u8,
+) !Role {
+    // what the access fields give everyone, logged in or not
+    const base: Role = if (record.event.write_access == .public) .write else if (record.event.read_access == .public) .read else .none;
     const user_id = user_id_maybe orelse return base;
-    if (std.mem.eql(u8, event.user_id, &user_id)) return .owner;
+    if (std.mem.eql(u8, record.event.user_id, &user_id)) return .owner;
 
-    const user_id_hex = std.fmt.bytesToHex(user_id, .lower);
-    if (containsUserId(event.owner_user_ids, &user_id_hex)) return .owner;
-    if (base == .write or containsUserId(event.write_user_ids, &user_id_hex)) return .write;
-    if (base == .read or containsUserId(event.read_user_ids, &user_id_hex)) return .read;
-    return .none;
-}
-
-fn containsUserId(user_ids: []const u8, user_id_hex: []const u8) bool {
-    var lines = std.mem.tokenizeScalar(u8, user_ids, '\n');
-    while (lines.next()) |id| {
-        if (std.mem.eql(u8, id, user_id_hex)) return true;
-    }
-    return false;
+    const granted = (try evt.Grant.readRole(DB, hash_kind, user_moment, arena, repo_id, &user_id)) orelse return base;
+    return if (granted.atLeast(base)) granted else base;
 }
 
 // the moment keys `evt.merge` reads and writes for this kind
@@ -88,11 +82,6 @@ pub fn validateName(name: []const u8) !void {
         if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.')
             return error.InvalidName;
     }
-}
-
-fn validateUserIds(user_ids: []const u8) !void {
-    var lines = std.mem.tokenizeScalar(u8, user_ids, '\n');
-    while (lines.next()) |id| _ = try evt.parseEventId(id);
 }
 
 pub fn consume(
@@ -121,12 +110,7 @@ pub fn consume(
 
     var record_to_write = record_maybe orelse try evt.removedRecord(Record, DB, hash_kind, haxy_moment.readOnly(), existing_record_maybe);
 
-    if (!record_to_write.removed) {
-        try validateName(record_to_write.event.name);
-        try validateUserIds(record_to_write.event.read_user_ids);
-        try validateUserIds(record_to_write.event.write_user_ids);
-        try validateUserIds(record_to_write.event.owner_user_ids);
-    }
+    if (!record_to_write.removed) try validateName(record_to_write.event.name);
 
     if (existing_record_maybe) |existing_record| {
         // updates preserve the original creation metadata
@@ -162,6 +146,13 @@ pub fn consume(
 pub const RepoWithId = struct {
     repo: Record,
     event_id: [evt.event_id_size]u8,
+};
+
+// a repo as one viewer sees it
+pub const RepoWithRole = struct {
+    repo: Record,
+    event_id: [evt.event_id_size]u8,
+    role: Role,
 };
 
 // read a repo by its name from its owner's user repo

@@ -47,9 +47,10 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     @memcpy(&target_id, fork_record.event.repo_id);
     const owner_id = fork_record.event.repo_user_id[0..evt.event_id_size];
 
-    const target_record = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, fork_record.event.repo_id)) orelse return error.NotFound;
+    const target = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, &target_id, session.userId())) orelse return error.NotFound;
     // a draft is as readable as the repo it targets
-    if (evt.Repo.roleOf(target_record, session.userId()) == .none) return error.NotFound;
+    if (target.role == .none) return error.NotFound;
+    const target_record = target.repo;
     const owner = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, owner_id)) orelse return error.NotFound;
     if (!std.mem.eql(u8, target_record.event.name, identity.name)) return error.NotFound;
 
@@ -59,7 +60,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     // the fork's viewer is the target repo's
     const handle = ui.RepoHandle{
         .location = .{ .fork = .{ .identity = identity.identity, .id = &id_hex } },
-        .viewer = try ui.Viewer.init(session, arena, target_record),
+        .viewer = try ui.Viewer.init(session, arena, target.role),
     };
     const fork_path = try fork.forkPath(aa, users_dir, &forker_id, &id);
     // a fork shares its target's hash kind

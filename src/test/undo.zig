@@ -71,7 +71,7 @@ test "repo undo visibility and fresh owner authorization" {
     const repo_id = [_]u8{4} ** evt.event_id_size;
     const author: evt.CommitAuthor = .{ .name = "test", .email = "test@example.test" };
     const writer_hex = std.fmt.bytesToHex(writer, .lower);
-    var repo_event: evt.Repo = .{ .user_id = &owner, .name = "demo", .description = "", .read_access = .public, .write_user_ids = &writer_hex };
+    var repo_event: evt.Repo = .{ .user_id = &owner, .name = "demo", .description = "", .read_access = .public };
     const seed = [_]evt.EventWithId{
         .{ .id = std.fmt.bytesToHex(owner, .lower), .author = author, .event = .{ .user = .{ .name = "alice", .email = "alice@example.test", .password_hash = "unused" } } },
         .{ .id = writer_hex, .author = author, .event = .{ .user = .{ .name = "writer", .email = "writer@example.test", .password_hash = "unused" } } },
@@ -80,7 +80,10 @@ test "repo undo visibility and fresh owner authorization" {
     try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &admin, evt.events_ref, &seed);
     var user_repo = try evt.initUserRepo(io, allocator, try evt.userRepoPath(aa, users_dir, &owner));
     defer user_repo.deinit(io, allocator);
-    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{ .id = std.fmt.bytesToHex(repo_id, .lower), .author = author, .event = .{ .repo = repo_event } }});
+    try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{
+        .{ .id = std.fmt.bytesToHex(repo_id, .lower), .author = author, .event = .{ .repo = repo_event } },
+        .{ .id = std.fmt.bytesToHex(evt.Grant.idOf(&repo_id, &writer), .lower), .author = author, .event = .{ .grant = .{ .target_id = &repo_id, .user_id = &writer, .role = .write } } },
+    });
     const path = try evt.repoPath(aa, users_dir, &owner, &repo_id);
     {
         var repo = try xit.repo.Repo(.xit, .{}).init(io, allocator, .{ .path = path });
