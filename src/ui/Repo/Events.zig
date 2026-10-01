@@ -671,6 +671,13 @@ pub const Header = struct {
                 try box.children.put(allocator, tab.getFocus().id, .{ .widget = .{ .text_box = tab }, .rect = null, .min_size = .{ .width = label.len + 2, .height = null } });
             }
 
+            // pushes the sync button and status to the right
+            {
+                var spacer = try ui.widget.Spacer.init(allocator);
+                errdefer spacer.deinit(allocator);
+                try box.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null, .flex = .grow });
+            }
+
             var button_id: ?usize = null;
             if (data.header.sync_status != null) {
                 box.getFocus().kind = .{ .custom = "form:/sync" };
@@ -711,10 +718,11 @@ pub const Header = struct {
 
         pub fn input(self: *Header.View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
             const selected = self.box.getFocus().child_id orelse return;
-            const current = self.box.children.getIndex(selected) orelse return;
+            const stops = [_]?usize{ self.tab_ids[0], self.tab_ids[1], self.button_id };
             const count = 2 + @as(usize, @intFromBool(self.button_id != null));
+            const current = std.mem.indexOfScalar(?usize, stops[0..count], selected) orelse return;
             if (inp.moveTab(key, current, count)) |next| {
-                root_focus.setFocus(self.box.children.keys()[next]);
+                root_focus.setFocus(stops[next] orelse unreachable);
                 return;
             }
             switch (key) {
