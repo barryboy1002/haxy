@@ -140,11 +140,8 @@ fn handleRequest(
     if (method == .POST) {
         switch (host) {
             .server => |server| {
-                // the home page's new repo form, which the "/new" suffix below would claim
-                if (std.mem.eql(u8, path, "/repo/new")) return handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
-                // likewise the home page's new user form
-                if (std.mem.eql(u8, path, "/user/new")) return handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store);
-                const PostRoute = enum { login, logout, @"new-repo", @"new-user", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
+                // "repo/new" and "user/new" come before "new", which would claim them
+                const PostRoute = enum { login, logout, @"repo/new", @"user/new", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
                 inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
                     const suffix = "/" ++ field.name;
                     if (std.mem.endsWith(u8, path, suffix)) {
@@ -152,8 +149,8 @@ fn handleRequest(
                         return switch (@field(PostRoute, field.name)) {
                             .login => handleLogin(io, request, allocator, base, server.admin_repo_path, server.session_store),
                             .logout => handleLogout(request, base, server.session_store),
-                            .@"new-repo" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
-                            .@"new-user" => handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
+                            .@"repo/new" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
+                            .@"user/new" => handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
                             .new => handleNew(io, request, allocator, base, host),
                             .edit => handleEdit(io, request, allocator, base, host),
                             .remove => handleRemove(io, request, allocator, base, host),

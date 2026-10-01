@@ -165,10 +165,10 @@ pub const View = struct {
         const discussions_link = try ui.inPageTabLink(session, discussions_route, current_tag == .repo_discussions);
         const events_route = ui.RoutablePage.repoEventsRoute(identity, .active, null, "", null) orelse return error.RouteTooLong;
         const events_link = try ui.inPageTabLink(session, events_route, current_tag == .repo_events);
-        const new_repo_route = ui.RoutablePage{ .repo_new_repo = Array.from(identity) orelse return error.RouteTooLong };
-        const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .repo_new_repo);
-        const new_user_route = ui.RoutablePage{ .repo_new_user = Array.from(identity) orelse return error.RouteTooLong };
-        const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .repo_new_user);
+        const new_repo_route = ui.RoutablePage{ .repo_repo_new = Array.from(identity) orelse return error.RouteTooLong };
+        const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .repo_repo_new);
+        const new_user_route = ui.RoutablePage{ .repo_user_new = Array.from(identity) orelse return error.RouteTooLong };
+        const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .repo_user_new);
         const user_route = ui.RoutablePage{ .repo_user = Array.from(identity) orelse return error.RouteTooLong };
         const user_link = try ui.inPageTabLink(session, user_route, current_tag == .repo_user);
 
@@ -315,7 +315,7 @@ pub const View = struct {
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_repo_link };
             try tab_ids.put(allocator, text_box.getFocus().id, {});
-            if (current_tag == .repo_new_repo) selected_tab = text_box.getFocus().id;
+            if (current_tag == .repo_repo_new) selected_tab = text_box.getFocus().id;
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,
@@ -327,7 +327,7 @@ pub const View = struct {
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_user_link };
             try tab_ids.put(allocator, text_box.getFocus().id, {});
-            if (current_tag == .repo_new_user) selected_tab = text_box.getFocus().id;
+            if (current_tag == .repo_user_new) selected_tab = text_box.getFocus().id;
             try tabs_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,

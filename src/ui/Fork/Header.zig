@@ -133,10 +133,10 @@ pub const View = struct {
             try tabs_box.children.put(allocator, spacer.getFocus().id, .{ .widget = .{ .spacer = spacer }, .rect = null, .min_size = null, .flex = .grow });
         }
 
-        const new_repo_route = ui.RoutablePage.forkNewRepoRoute(fork_identity, data.id) orelse return error.RouteTooLong;
-        const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .fork_new_repo);
-        const new_user_route = ui.RoutablePage.forkNewUserRoute(fork_identity, data.id) orelse return error.RouteTooLong;
-        const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .fork_new_user);
+        const new_repo_route = ui.RoutablePage.forkRepoNewRoute(fork_identity, data.id) orelse return error.RouteTooLong;
+        const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .fork_repo_new);
+        const new_user_route = ui.RoutablePage.forkUserNewRoute(fork_identity, data.id) orelse return error.RouteTooLong;
+        const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .fork_user_new);
         const user_route = ui.RoutablePage.forkUserRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const user_link = try ui.inPageTabLink(session, user_route, current_tag == .fork_user);
 
@@ -147,7 +147,7 @@ pub const View = struct {
             new_repo.getFocus().mode = .all;
             new_repo.getFocus().kind = .{ .custom = new_repo_link };
             try tab_ids.put(allocator, new_repo.getFocus().id, {});
-            if (current_tag == .fork_new_repo) selected_tab = new_repo.getFocus().id;
+            if (current_tag == .fork_repo_new) selected_tab = new_repo.getFocus().id;
             try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null } });
         } else if (session.data.host_kind == .server) {
             var new_user = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
@@ -155,7 +155,7 @@ pub const View = struct {
             new_user.getFocus().mode = .all;
             new_user.getFocus().kind = .{ .custom = new_user_link };
             try tab_ids.put(allocator, new_user.getFocus().id, {});
-            if (current_tag == .fork_new_user) selected_tab = new_user.getFocus().id;
+            if (current_tag == .fork_user_new) selected_tab = new_user.getFocus().id;
             try tabs_box.children.put(allocator, new_user.getFocus().id, .{ .widget = .{ .text_box = new_user }, .rect = null, .min_size = .{ .width = @max(new_tab_label.len, new_user_tab_bottom_label.len) + 2, .height = null } });
         }
 

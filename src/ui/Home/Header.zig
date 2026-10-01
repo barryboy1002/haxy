@@ -91,13 +91,13 @@ pub const View = struct {
         const current_tag = std.meta.activeTag(session.data.current_page);
         const about_link = try ui.inPageTabLink(session, .home_about, current_tag == .home_about);
         const users_link = try ui.inPageTabLink(session, .{ .home_users = .{} }, current_tag == .home_users);
-        const new_repo_link = try ui.inPageTabLink(session, .home_new_repo, current_tag == .home_new_repo);
-        const new_user_link = try ui.inPageTabLink(session, .home_new_user, current_tag == .home_new_user);
+        const new_repo_link = try ui.inPageTabLink(session, .home_repo_new, current_tag == .home_repo_new);
+        const new_user_link = try ui.inPageTabLink(session, .home_user_new, current_tag == .home_user_new);
         const user_link = try ui.inPageTabLink(session, .home_user, current_tag == .home_user);
         const current_link: []const u8 = switch (current_tag) {
             .home_users => users_link,
-            .home_new_repo => new_repo_link,
-            .home_new_user => new_user_link,
+            .home_repo_new => new_repo_link,
+            .home_user_new => new_user_link,
             .home_user => user_link,
             else => about_link,
         };

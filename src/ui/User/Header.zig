@@ -102,15 +102,15 @@ pub const View = struct {
         const current_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try current_page.toUrl(session.page_arena)});
         const repos_link = if (current_tag == .user_repos) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}", .{data.name});
         const forks_link = if (current_tag == .user_forks) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/forks", .{data.name});
-        const new_repo_link = if (current_tag == .user_new_repo) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/new-repo", .{data.name});
-        const new_user_link = if (current_tag == .user_new_user) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/new-user", .{data.name});
+        const new_repo_link = if (current_tag == .user_repo_new) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/repo/new", .{data.name});
+        const new_user_link = if (current_tag == .user_user_new) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/user/new", .{data.name});
         const user_link = if (current_tag == .user_user) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/user", .{data.name});
 
         // the tab matching the current page is focused initially; matching by
         // link (rather than position) keeps this robust to tab changes.
         const selected_link: []const u8 = switch (current_page) {
-            .user_new_repo => new_repo_link,
-            .user_new_user => new_user_link,
+            .user_repo_new => new_repo_link,
+            .user_user_new => new_user_link,
             .user_user => user_link,
             .user_forks => forks_link,
             else => repos_link,
