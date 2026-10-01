@@ -53,7 +53,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     if (!std.mem.eql(u8, target_record.event.name, identity.name)) return error.NotFound;
 
     const aa = arena.allocator();
-    const target_identity = try std.fmt.allocPrint(aa, "{s}/{s}", .{ owner.event.name, target_record.event.name });
+    const target_identity = try std.fmt.allocPrint(aa, "{s}:{s}", .{ owner.event.name, target_record.event.name });
     const id_hex = std.fmt.bytesToHex(id, .lower);
     // the fork's viewer is the target repo's
     const handle = ui.RepoHandle{
@@ -211,7 +211,7 @@ pub const View = struct {
                 errdefer commits.deinit(allocator);
                 try stack.children.put(allocator, commits.getFocus().id, .{ .repo_commits = commits });
             }
-            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.forker_name, data.header.name });
+            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}:{s}", .{ data.header.forker_name, data.header.name });
             if (session.data.user_id != null) {
                 const route = ui.RoutablePage.forkRepoNewRoute(identity, data.header.id) orelse return error.RouteTooLong;
                 var new_repo = try ui.NewRepo.View.init(allocator, session, route);

@@ -100,5 +100,5 @@ pub fn url(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: []con
     return if (identity.len == 0)
         try std.fmt.allocPrint(page_arena.allocator(), "/attachment:{s}", .{id})
     else
-        try std.fmt.allocPrint(page_arena.allocator(), "/repo/{s}/attachment:{s}", .{ identity, id });
+        try std.fmt.allocPrint(page_arena.allocator(), "/{s}/attachment:{s}", .{ identity, id });
 }

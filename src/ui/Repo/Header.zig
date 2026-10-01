@@ -92,7 +92,7 @@ pub const View = struct {
         if (session.data.host_kind == .server) {
             var text_buf: [evt.User.name_max_len + 1]u8 = undefined;
             const text = try std.fmt.bufPrint(&text_buf, "{s}/", .{data.owner_name});
-            const link = try std.fmt.allocPrint(aa, "a:/user/{s}", .{data.owner_name});
+            const link = try std.fmt.allocPrint(aa, "a:/{s}", .{data.owner_name});
 
             var text_box = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
@@ -107,7 +107,7 @@ pub const View = struct {
         }
 
         // local routes carry no identity, so their urls come out elided
-        const identity = if (session.data.host_kind == .local) "" else try std.fmt.allocPrint(aa, "{s}/{s}", .{ data.owner_name, data.name });
+        const identity = if (session.data.host_kind == .local) "" else try std.fmt.allocPrint(aa, "{s}:{s}", .{ data.owner_name, data.name });
 
         // title links to the repo's files root (the bare route, so it resolves
         // to the default branch).
@@ -142,7 +142,7 @@ pub const View = struct {
         // in-page anchor: crossPageLink ignores it so a wasm click just switches
         // tabs (the page already holds every tab's content), while the href is
         // still followed with js off. the files tab routes through the shared
-        // helper so the /repo/.../files url format lives in one place.
+        // helper so the /.../files url format lives in one place.
         // files and changes keep the same ref or revision when switching tabs.
         // the files tab opens at its root directory.
         const current_page = session.data.current_page;

@@ -14,7 +14,7 @@ const inp = @import("../input.zig");
 // how many refs one window of a column shows.
 pub const page_size = 50;
 
-// "owner/name", needed to build the columns' window-navigation links.
+// "owner:name", needed to build the columns' window-navigation links.
 identity: []const u8,
 // only one column windows at a time: `from` (a url-encoded ref name, "" = the
 // first window) roots `kind`'s column; the other always shows its first window.
@@ -425,7 +425,7 @@ pub const View = struct {
 };
 
 // the "a:" link to `kind`'s column windowed from ref `name` (raw; "" = the
-// first window) within `identity` ("owner/name"). the other column resets to
+// first window) within `identity` ("owner:name"). the other column resets to
 // its first window.
 fn windowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.RoutablePage.RefKind, name: []const u8, search: []const u8) ![]const u8 {
     const encoded = try ui.urlEncodeRef(page_arena.allocator(), name);
@@ -436,7 +436,7 @@ fn windowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: 
 }
 
 // the "a:" link to the files tab at ref `name` (a branch or tag) within
-// `identity` ("owner/name"), at its root directory. the name is percent-encoded
+// `identity` ("owner:name"), at its root directory. the name is percent-encoded
 // since it can contain a '/'.
 fn refLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.RoutablePage.RefKind, name: []const u8) ![]const u8 {
     const aa = page_arena.allocator();

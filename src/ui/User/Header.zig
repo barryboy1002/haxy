@@ -1,5 +1,6 @@
 const std = @import("std");
 const ui = @import("../../ui.zig");
+const evt = @import("../../event.zig");
 const inp = @import("../input.zig");
 const xit = @import("xit");
 const xitui = xit.xitui;
@@ -96,15 +97,14 @@ pub const View = struct {
         // tabs (the page already holds every tab's content), while the href is
         // still followed with js off. allocated in the page arena so the focus
         // kinds that borrow them live as long as this page's widget tree.
-        const aa = session.page_arena.allocator();
         const current_page = session.data.current_page;
         const current_tag = std.meta.activeTag(current_page);
-        const current_link = try std.fmt.allocPrint(aa, "ai:{s}", .{try current_page.toUrl(session.page_arena)});
-        const repos_link = if (current_tag == .user_repos) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}", .{data.name});
-        const forks_link = if (current_tag == .user_forks) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/forks", .{data.name});
-        const new_repo_link = if (current_tag == .user_repo_new) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/repo/new", .{data.name});
-        const new_user_link = if (current_tag == .user_user_new) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/user/new", .{data.name});
-        const user_link = if (current_tag == .user_user) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/user", .{data.name});
+        const name = ui.RoutablePage.Array(evt.User.name_max_len).from(data.name) orelse return error.RouteTooLong;
+        const repos_link = try ui.inPageTabLink(session, .{ .user_repos = .{ .name = name } }, current_tag == .user_repos);
+        const forks_link = try ui.inPageTabLink(session, .{ .user_forks = .{ .name = name } }, current_tag == .user_forks);
+        const new_repo_link = try ui.inPageTabLink(session, .{ .user_repo_new = name }, current_tag == .user_repo_new);
+        const new_user_link = try ui.inPageTabLink(session, .{ .user_user_new = name }, current_tag == .user_user_new);
+        const user_link = try ui.inPageTabLink(session, .{ .user_user = name }, current_tag == .user_user);
 
         // the tab matching the current page is focused initially; matching by
         // link (rather than position) keeps this robust to tab changes.

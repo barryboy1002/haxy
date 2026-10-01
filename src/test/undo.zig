@@ -95,7 +95,7 @@ test "repo undo visibility and fresh owner authorization" {
         var session = try ui.Session.init(&arena, &admin, .{ .user_id = user });
         session.io = io;
         session.users_dir = users_dir;
-        const files = ui.RoutablePage.repoFilesRoute("alice/demo", null, "", "", 0).?;
+        const files = ui.RoutablePage.repoFilesRoute("alice:demo", null, "", "", 0).?;
         session.data.current_page = files;
         const page = try ui.Repo.init(&arena, &session, files);
         try std.testing.expectEqual(allowed, page.undo != null);
@@ -105,34 +105,34 @@ test "repo undo visibility and fresh owner authorization" {
         try root.build(allocator, constraint, root.getFocus());
         const html = try @import("../web.zig").generateHtml(allocator, &root, &session);
         defer allocator.free(html);
-        try std.testing.expectEqual(allowed, std.mem.indexOf(u8, html, "/repo/alice/demo/undo") != null);
-        const route = ui.RoutablePage.repoUndoRoute("alice/demo", null).?;
+        try std.testing.expectEqual(allowed, std.mem.indexOf(u8, html, "/alice:demo/undo") != null);
+        const route = ui.RoutablePage.repoUndoRoute("alice:demo", null).?;
         if (allowed) {
             _ = try ui.Repo.init(&arena, &session, route);
         } else {
             try std.testing.expectError(error.NotFound, ui.Repo.init(&arena, &session, route));
         }
         if (user == null or !std.mem.eql(u8, user.?, &owner)) {
-            try std.testing.expectError(error.Forbidden, Undo.perform(allocator, &session, ui.RoutablePage.repoUndoRoute("alice/demo", 2).?.repo_undo));
+            try std.testing.expectError(error.Forbidden, Undo.perform(allocator, &session, ui.RoutablePage.repoUndoRoute("alice:demo", 2).?.repo_undo));
         }
     }
     var session = try ui.Session.init(&arena, &admin, .{ .user_id = &owner });
     session.io = io;
     session.users_dir = users_dir;
-    try Undo.perform(allocator, &session, ui.RoutablePage.repoUndoRoute("alice/demo", 2).?.repo_undo);
+    try Undo.perform(allocator, &session, ui.RoutablePage.repoUndoRoute("alice:demo", 2).?.repo_undo);
     try std.testing.expectEqual(null, session.next_page.?.repo_undo.index);
     {
         var repo = try xit.repo.Repo(.xit, .{}).open(io, allocator, .{ .path = path });
         defer repo.deinit(io, allocator);
         try expectConfig(&repo, "first");
-        const data = try Undo.init(.{}, &arena, &repo, null, "alice/demo", null, .{ .location = .{ .repo = "" } });
+        const data = try Undo.init(.{}, &arena, &repo, null, "alice:demo", null, .{ .location = .{ .repo = "" } });
         try std.testing.expectEqualStrings("undo", data.items[0].action);
     }
     // keep the old session/page moment, but transfer ownership to the writer.
     repo_event.user_id = &writer;
     try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, &.{.{ .id = std.fmt.bytesToHex(repo_id, .lower), .author = author, .event = .{ .repo = repo_event } }});
     session.next_page = null;
-    Undo.handleRequest(allocator, &session, ui.RoutablePage.repoUndoRoute("alice/demo", 1).?.repo_undo);
+    Undo.handleRequest(allocator, &session, ui.RoutablePage.repoUndoRoute("alice:demo", 1).?.repo_undo);
     try std.testing.expectEqualStrings("Forbidden", session.data.undo_failure.?);
     try std.testing.expectEqual(null, session.next_page);
 
@@ -143,7 +143,7 @@ test "repo undo visibility and fresh owner authorization" {
     var anonymous = try ui.Session.init(&arena, &admin, .{});
     anonymous.io = io;
     anonymous.users_dir = users_dir;
-    try std.testing.expectError(error.NotFound, ui.Repo.init(&arena, &anonymous, ui.RoutablePage.repoUndoRoute("alice/demo", null).?));
+    try std.testing.expectError(error.NotFound, ui.Repo.init(&arena, &anonymous, ui.RoutablePage.repoUndoRoute("alice:demo", null).?));
 }
 
 test "local git has no undo and local xit can undo and refresh" {

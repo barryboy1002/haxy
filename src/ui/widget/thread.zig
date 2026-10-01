@@ -771,7 +771,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                         const action = if (self.data.identity.len == 0)
                             try std.fmt.allocPrint(pa, "{s}/{s}:{s}/attach", .{ ui.file_input_prefix, @tagName(kind), entry.id })
                         else
-                            try std.fmt.allocPrint(pa, "{s}/repo/{s}/{s}:{s}/attach", .{ ui.file_input_prefix, self.data.identity, @tagName(kind), entry.id });
+                            try std.fmt.allocPrint(pa, "{s}/{s}/{s}:{s}/attach", .{ ui.file_input_prefix, self.data.identity, @tagName(kind), entry.id });
                         try addToolButton(allocator, row, label, "", action);
                     }
 

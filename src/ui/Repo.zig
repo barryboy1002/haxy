@@ -56,7 +56,7 @@ pub fn init(
     const DB = evt.AdminDB;
     const hash_kind = evt.admin_repo_opts.hash;
 
-    // every repo route stores its identity as "owner/name" (or elides it in local mode)
+    // every repo route stores its identity as "owner:name" (or elides it in local mode)
     const name_str = route.repoIdentity() orelse return error.UnexpectedRoute;
     const repo_identity = ui.RoutablePage.RepoIdentity.parse(name_str) orelse return error.NotFound;
     // files, commits and diff share the requested ref, or the default branch.
@@ -468,7 +468,7 @@ pub const View = struct {
             // the header shows new repo with a login, and new user without one
             // and user only outside local mode, so keep the stack's children
             // 1:1 with the tabs by skipping the same views.
-            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.owner_name, data.header.name });
+            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}:{s}", .{ data.header.owner_name, data.header.name });
             if (session.data.user_id != null) {
                 const route = ui.RoutablePage{ .repo_repo_new = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(identity) orelse return error.RouteTooLong };
                 var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);

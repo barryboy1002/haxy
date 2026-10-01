@@ -300,9 +300,7 @@ pub const RoutablePage = union(enum) {
         search: Array(search_route_max_len) = .{},
     };
 
-    const user_segment = "/user/";
-    const repo_segment = "/repo/";
-    const fork_segment = "/fork/";
+    const home_segment = "home";
     const files_seg = "files";
     const commits_seg = "commits";
     // ends a commits route naming its commit's full message
@@ -325,7 +323,7 @@ pub const RoutablePage = union(enum) {
     // remainder of the url, so it must come last
     const path_seg = "path:";
 
-    // a repo route is "username/reponame", optionally followed by the files
+    // a repo route is "username:reponame", optionally followed by the files
     // tab's "/files/<refkind>:<refvalue>[/line:<n>][/path:<dir>]"; the bare
     // pair means the default branch's files root. a local session's routes
     // elide the identity: "" at the bare root, else starting at the tail's "/".
@@ -357,7 +355,7 @@ pub const RoutablePage = union(enum) {
 
     // the identity stored by every repo route. Local routes elide it.
     pub const RepoIdentity = struct {
-        identity: []const u8, // "owner/name"
+        identity: []const u8, // "owner:name"
         owner: []const u8,
         name: []const u8,
 
@@ -367,17 +365,11 @@ pub const RoutablePage = union(enum) {
                 .owner = "",
                 .name = "",
             };
-            if (identityElided(s)) {
-                return result;
-            } else {
-                var id_segments = std.mem.splitScalar(u8, s, '/');
-                const owner = id_segments.next() orelse return null;
-                const name = id_segments.next() orelse return null;
-                if (owner.len == 0 or name.len == 0) return null;
-                result.identity = s[0 .. owner.len + 1 + name.len];
-                result.owner = owner;
-                result.name = name;
-            }
+            if (identityElided(s)) return result;
+            const parsed = evt.parseOwnerRepoPath(s) orelse return null;
+            result.identity = s;
+            result.owner = parsed.owner;
+            result.name = parsed.name;
             return result;
         }
     };
@@ -779,7 +771,7 @@ pub const RoutablePage = union(enum) {
         } };
     }
 
-    // build a `.repo_issues` route for "owner/name" (identity) showing
+    // build a `.repo_issues` route for "owner:name" (identity) showing
     // `status`'s list, filtered to the url-encoded `label` ("" = unfiltered) and
     // rooted at the issue with hex event id `selected` ("" = the first window).
     pub fn repoIssuesRoute(identity: []const u8, status: evt.Issue.Status, label: []const u8, selected: []const u8) ?RoutablePage {
@@ -1056,27 +1048,27 @@ pub const RoutablePage = union(enum) {
             .home_about => "/",
             .home_users => |u| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
-                try out.writer.writeAll("/users");
+                try out.writer.writeAll("/" ++ home_segment ++ "/users");
                 try writeListWindow(&out.writer, u.search.slice(), u.start);
                 break :blk out.written();
             },
-            .home_repo_new => "/repo/new",
-            .home_user_new => "/user/new",
-            .home_user => "/user",
-            .not_found => "/not-found",
+            .home_repo_new => "/" ++ home_segment ++ "/repo/new",
+            .home_user_new => "/" ++ home_segment ++ "/user/new",
+            .home_user => "/" ++ home_segment ++ "/user",
+            .not_found => "/" ++ home_segment ++ "/not-found",
             .user_repos => |u| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
-                try out.writer.print(user_segment ++ "{s}/repos", .{u.name.slice()});
+                try out.writer.print("/{s}/repos", .{u.name.slice()});
                 try writeListWindow(&out.writer, u.search.slice(), u.start);
                 break :blk out.written();
             },
             .user_forks => |u| if (u.start == 0)
-                try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/forks", .{u.name.slice()})
+                try std.fmt.allocPrint(arena.allocator(), "/{s}/forks", .{u.name.slice()})
             else
-                try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/forks/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
-            .user_repo_new => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/repo/new", .{name.slice()}),
-            .user_user_new => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/user/new", .{name.slice()}),
-            .user_user => |name| try std.fmt.allocPrint(arena.allocator(), user_segment ++ "{s}/user", .{name.slice()}),
+                try std.fmt.allocPrint(arena.allocator(), "/{s}/forks/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
+            .user_repo_new => |name| try std.fmt.allocPrint(arena.allocator(), "/{s}/repo/new", .{name.slice()}),
+            .user_user_new => |name| try std.fmt.allocPrint(arena.allocator(), "/{s}/user/new", .{name.slice()}),
+            .user_user => |name| try std.fmt.allocPrint(arena.allocator(), "/{s}/user", .{name.slice()}),
             .repo_files => |f| blk: {
                 const prefix = try repoUrlPrefix(arena, f.name.slice());
                 if (f.ref_kind == null and f.patchrev_id.len == 0 and f.find.len == 0 and f.line == 0) break :blk if (prefix.len == 0) "/" else prefix;
@@ -1248,10 +1240,10 @@ pub const RoutablePage = union(enum) {
             .repo_user_new => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/user/new", .{try repoUrlPrefix(arena, name.slice())}),
             .repo_repo => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/repo", .{try repoUrlPrefix(arena, name.slice())}),
             .repo_user => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/user", .{try repoUrlPrefix(arena, name.slice())}),
-            .fork_patch => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}", .{ f.name.slice(), f.id.slice() }),
+            .fork_patch => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}", .{ f.name.slice(), f.id.slice() }),
             .fork_diff => |d| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
-                try out.writer.print(fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/diff", .{ d.fork.name.slice(), d.fork.id.slice() });
+                try out.writer.print("/{s}+{s}/diff", .{ d.fork.name.slice(), d.fork.id.slice() });
                 if (d.oid.len != 0) try out.writer.print("/object:{s}/" ++ base_seg ++ "{s}", .{ d.oid.slice(), d.base_oid.slice() });
                 if (d.start != 0) try out.writer.print("/" ++ start_seg ++ "{d}", .{d.start});
                 if (d.path.len != 0) try out.writer.print("/" ++ path_seg ++ "{s}", .{d.path.slice()});
@@ -1259,7 +1251,7 @@ pub const RoutablePage = union(enum) {
             },
             .fork_files => |f| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
-                try out.writer.print(fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/" ++ files_seg, .{ f.fork.name.slice(), f.fork.id.slice() });
+                try out.writer.print("/{s}+{s}/" ++ files_seg, .{ f.fork.name.slice(), f.fork.id.slice() });
                 if (f.oid.len != 0) try out.writer.print("/object:{s}", .{f.oid.slice()});
                 if (f.find.len != 0) try out.writer.print("/" ++ find_seg ++ "{s}", .{f.find.slice()});
                 if (f.line != 0) try out.writer.print("/" ++ line_seg ++ "{d}", .{f.line});
@@ -1268,14 +1260,14 @@ pub const RoutablePage = union(enum) {
             },
             .fork_commits => |c| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
-                try out.writer.print(fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/" ++ commits_seg, .{ c.fork.name.slice(), c.fork.id.slice() });
+                try out.writer.print("/{s}+{s}/" ++ commits_seg, .{ c.fork.name.slice(), c.fork.id.slice() });
                 if (c.oid.len != 0) try out.writer.print("/object:{s}", .{c.oid.slice()});
                 if (c.message) try out.writer.print("/" ++ message_seg, .{});
                 break :blk out.written();
             },
-            .fork_repo_new => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/repo/new", .{ f.name.slice(), f.id.slice() }),
-            .fork_user_new => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/user/new", .{ f.name.slice(), f.id.slice() }),
-            .fork_user => |f| try std.fmt.allocPrint(arena.allocator(), fork_segment ++ "{s}/" ++ patch_seg ++ "{s}/user", .{ f.name.slice(), f.id.slice() }),
+            .fork_repo_new => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}/repo/new", .{ f.name.slice(), f.id.slice() }),
+            .fork_user_new => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}/user/new", .{ f.name.slice(), f.id.slice() }),
+            .fork_user => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}/user", .{ f.name.slice(), f.id.slice() }),
         };
     }
 
@@ -1284,40 +1276,15 @@ pub const RoutablePage = union(enum) {
         if (path.len < 2 or path[0] != '/') return null;
         var segments = std.mem.splitScalar(u8, path[1..], '/');
         const first = segments.next() orelse return null;
-        if (std.mem.eql(u8, first, "users")) {
-            const params = listParams(&segments, &.{ .start, .search }) orelse return null;
-            return withEncodedSearch(.{ .home_users = .{ .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
-        }
-        // "user/<name>[/repos[/search:<s>][/start:<n>]|/repo/new|/user[/new]]"
-        if (std.mem.eql(u8, first, "user")) {
-            const name = segments.next() orelse return .home_user;
-            if (name.len == 0) return null;
-            // "/user/new" is the home page's new user tab, not a user
-            if (std.mem.eql(u8, name, "new") and segments.peek() == null) return .home_user_new;
-            const parsed = Array(evt.User.name_max_len).from(name) orelse return null; // name too long
-            const sub = segments.next() orelse return .{ .user_repos = .{ .name = parsed } };
-            if (std.mem.eql(u8, sub, "repos")) {
-                const params = listParams(&segments, &.{ .start, .search }) orelse return null;
-                return withEncodedSearch(.{ .user_repos = .{ .name = parsed, .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
-            }
-            if (std.mem.eql(u8, sub, "forks")) return .{ .user_forks = .{ .name = parsed, .start = listStart(&segments) orelse return null } };
-            if (std.mem.eql(u8, sub, "repo")) return if (isNewTail(&segments)) .{ .user_repo_new = parsed } else null;
-            if (std.mem.eql(u8, sub, "user")) return if (segments.peek() == null) .{ .user_user = parsed } else if (isNewTail(&segments)) .{ .user_user_new = parsed } else null;
-            return null; // unknown sub-path
-        }
-        // "fork/<forker>/<reponame>/patch:<id>[/files|/commits]"; the
-        // patch branch is implicit, while object ids and view-specific params
+        // "<forker>:<reponame>+<patch id>[/files|/commits]"; the patch
+        // branch is implicit, while object ids and view-specific params
         // use the same tails as the repo files and commits routes.
-        if (std.mem.eql(u8, first, "fork")) {
-            const rest = segments.rest();
-            const owner = segments.next() orelse return null;
-            const repo_name = segments.next() orelse return null;
-            if (owner.len == 0 or repo_name.len == 0) return null;
-            const identity = rest[0 .. owner.len + 1 + repo_name.len];
-            const patch = segments.next() orelse return null;
-            if (!std.mem.startsWith(u8, patch, patch_seg)) return null;
-            const id = patch[patch_seg.len..];
+        if (std.mem.indexOfScalar(u8, first, '+')) |plus| {
+            const identity = first[0..plus];
+            _ = RepoIdentity.parse(identity) orelse return null;
+            const id = first[plus + 1 ..];
             if (id.len != evt.event_id_size * 2) return null;
+            for (id) |c| if (!std.ascii.isHex(c)) return null;
             const tab = segments.next() orelse return forkPatchRoute(identity, id);
             var params = Params{};
             if (std.mem.eql(u8, tab, "diff")) {
@@ -1351,26 +1318,41 @@ pub const RoutablePage = union(enum) {
             if (std.mem.eql(u8, tab, "user")) return if (segments.peek() == null) forkUserRoute(identity, id) else if (isNewTail(&segments)) forkUserNewRoute(identity, id) else null;
             return null;
         }
-        // "repo/<username>/<reponame>[/<tab tail>]"; the bare pair is the
-        // files root
-        if (std.mem.eql(u8, first, "repo")) {
-            const rest = segments.rest(); // "username/reponame[/...]"
-            const owner = segments.next() orelse return null;
-            // "/repo/new" is the home page's new repo tab, not a repo
-            if (std.mem.eql(u8, owner, "new") and segments.peek() == null) return .home_repo_new;
-            const repo_name = segments.next() orelse return null;
-            // reject an empty username or reponame
-            if (owner.len == 0 or repo_name.len == 0) return null;
-            const pair = rest[0 .. owner.len + 1 + repo_name.len]; // "username/reponame"
+        // "<username>:<reponame>[/<tab tail>]"; the bare pair is the files root
+        if (std.mem.indexOfScalar(u8, first, ':') != null) {
+            _ = RepoIdentity.parse(first) orelse return null;
             if (segments.peek() != null) {
-                return repoSubRoute(pair, segments.rest());
+                return repoSubRoute(first, segments.rest());
             }
-            return repoFilesRoute(pair, null, "", "", 0);
+            return repoFilesRoute(first, null, "", "", 0);
         }
-        return null;
+        // "home[/users[/search:<s>][/start:<n>]|/repo/new|/user[/new]|/not-found]"
+        if (std.mem.eql(u8, first, home_segment)) {
+            const sub = segments.next() orelse return default;
+            if (std.mem.eql(u8, sub, "users")) {
+                const params = listParams(&segments, &.{ .start, .search }) orelse return null;
+                return withEncodedSearch(.{ .home_users = .{ .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
+            }
+            if (std.mem.eql(u8, sub, "repo")) return if (isNewTail(&segments)) .home_repo_new else null;
+            if (std.mem.eql(u8, sub, "user")) return if (segments.peek() == null) .home_user else if (isNewTail(&segments)) .home_user_new else null;
+            if (std.mem.eql(u8, sub, "not-found")) return if (segments.peek() == null) .not_found else null;
+            return null;
+        }
+        // "<username>[/repos[/search:<s>][/start:<n>]|/forks|/repo/new|/user[/new]]"
+        evt.User.validateName(first) catch return null;
+        const parsed = Array(evt.User.name_max_len).from(first) orelse return null;
+        const sub = segments.next() orelse return .{ .user_repos = .{ .name = parsed } };
+        if (std.mem.eql(u8, sub, "repos")) {
+            const params = listParams(&segments, &.{ .start, .search }) orelse return null;
+            return withEncodedSearch(.{ .user_repos = .{ .name = parsed, .start = params.start() orelse return null } }, params.values.get(.search) orelse "");
+        }
+        if (std.mem.eql(u8, sub, "forks")) return .{ .user_forks = .{ .name = parsed, .start = listStart(&segments) orelse return null } };
+        if (std.mem.eql(u8, sub, "repo")) return if (isNewTail(&segments)) .{ .user_repo_new = parsed } else null;
+        if (std.mem.eql(u8, sub, "user")) return if (segments.peek() == null) .{ .user_user = parsed } else if (isNewTail(&segments)) .{ .user_user_new = parsed } else null;
+        return null; // unknown sub-path
     }
 
-    // parse a local-mode url, which elides the "/repo/<owner>/<name>" prefix:
+    // parse a local-mode url, which elides the "/<owner>:<name>" prefix:
     // "/" is the files root and the sub-paths follow directly.
     pub fn fromUrlLocal(path: []const u8) ?RoutablePage {
         if (std.mem.eql(u8, path, "/")) return repoFilesRoute("", null, "", "", 0);
@@ -1378,11 +1360,11 @@ pub const RoutablePage = union(enum) {
         return repoSubRoute("", path[1..]);
     }
 
-    // the url prefix for a repo route's identity: "/repo/<identity>", or ""
+    // the url prefix for a repo route's identity: "/<identity>", or ""
     // when the identity is elided.
     fn repoUrlPrefix(arena: *std.heap.ArenaAllocator, identity: []const u8) ![]const u8 {
         if (identity.len == 0) return "";
-        return std.fmt.allocPrint(arena.allocator(), repo_segment ++ "{s}", .{identity});
+        return std.fmt.allocPrint(arena.allocator(), "/{s}", .{identity});
     }
 
     // true when the page builds at its content height on the web, letting the
@@ -1395,7 +1377,7 @@ pub const RoutablePage = union(enum) {
         };
     }
 
-    // the "owner/name" a repo route carries, null for any other route. the
+    // the "owner:name" a repo route carries, null for any other route. the
     // result borrows the route, so it must outlive the slice.
     pub fn repoIdentity(self: *const RoutablePage) ?[]const u8 {
         return switch (self.*) {

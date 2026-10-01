@@ -121,7 +121,7 @@ fn handleGitRequest(
 
     const owner_repo = evt.parseOwnerRepoPath(repo_rel) orelse {
         if (http_server.reader.state == .received_head) http_server.reader.state = .ready;
-        try writeSimpleResponse(http_server, 400, "Bad Request", "text/plain", "repo path must be <owner>/<repo>");
+        try writeSimpleResponse(http_server, 400, "Bad Request", "text/plain", "repo path must be <owner>:<repo>");
         return;
     };
     const repo_path = blk: {

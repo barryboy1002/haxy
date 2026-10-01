@@ -256,7 +256,7 @@ pub fn initNoCommits(allocator: std.mem.Allocator, session: *ui.Session, handle:
             .fork => unreachable,
         };
         const aa = session.page_arena.allocator();
-        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/repo/{s}", .{ port, identity });
+        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}", .{ port, identity });
         break :blk try CopyableText.init(allocator, session, &.{.{
             .text = url,
             .copyable_text = try std.fmt.allocPrint(aa, "git remote add origin {s}", .{url}),
@@ -1927,7 +1927,7 @@ pub const CopyableText = struct {
         switch (handle.location) {
             .repo => |identity| {
                 if (session.data.git_http_port) |port| {
-                    const url = try std.fmt.allocPrint(aa, "http://localhost:{d}/repo/{s}", .{ port, identity });
+                    const url = try std.fmt.allocPrint(aa, "http://localhost:{d}/{s}", .{ port, identity });
                     choices[count] = .{
                         .selector = "http",
                         .text = url,
@@ -1938,7 +1938,7 @@ pub const CopyableText = struct {
                 }
                 if (session.data.git_ssh_port) |port| {
                     ssh_index = count;
-                    const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/repo/{s}", .{ port, identity });
+                    const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}", .{ port, identity });
                     choices[count] = .{
                         .selector = "ssh",
                         .text = url,
@@ -1949,7 +1949,7 @@ pub const CopyableText = struct {
                 }
             },
             .fork => |f| if (session.data.git_ssh_port) |port| {
-                const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/fork/{s}/patch:{s}", .{ port, f.identity, f.id });
+                const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}+{s}", .{ port, f.identity, f.id });
                 choices[count] = .{
                     .text = url,
                     .copyable_text = try std.fmt.allocPrint(aa, "{s}git clone {s}", .{ session.data.git_ssh_prefix, url }),

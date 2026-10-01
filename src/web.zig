@@ -67,12 +67,27 @@ const RequestRepoSource = struct {
     }
 };
 
+// the "owner:name" identity a repo url base names, or null for any other base
+fn repoBaseIdentity(repo_base: []const u8) ?[]const u8 {
+    if (repo_base.len < 2 or repo_base[0] != '/') return null;
+    const identity = repo_base[1..];
+    if (std.mem.indexOfScalar(u8, identity, ':') == null or std.mem.indexOfAny(u8, identity, "/+") != null) return null;
+    return identity;
+}
+
+// the route a url names under this host's url scheme
+fn routeFromUrl(host: Host, path: []const u8) ?ui.RoutablePage {
+    return switch (host) {
+        .server => ui.RoutablePage.fromUrl(path),
+        .local => ui.RoutablePage.fromUrlLocal(path),
+    };
+}
+
 fn requestRepoSource(io: std.Io, allocator: std.mem.Allocator, host: Host, repo_base: []const u8) !?RequestRepoSource {
     return switch (host) {
         .server => |server| blk: {
-            const repo_prefix = "/repo/";
-            if (!std.mem.startsWith(u8, repo_base, repo_prefix)) break :blk null;
-            const path = switch (try serve_common.resolveRepoPath(io, allocator, server.users_dir, server.admin_repo_path, repo_base[repo_prefix.len..], false)) {
+            const identity = repoBaseIdentity(repo_base) orelse break :blk null;
+            const path = switch (try serve_common.resolveRepoPath(io, allocator, server.users_dir, server.admin_repo_path, identity, false)) {
                 .ok => |value| value,
                 .invalid, .not_found => break :blk null,
             };
@@ -213,12 +228,8 @@ fn handleRequest(
     // before the routable pages
     if (attachmentRequest(path)) |attachment| return serveAttachment(io, request, allocator, attachment, host);
 
-    const route_maybe = switch (host) {
-        .server => ui.RoutablePage.fromUrl(path),
-        .local => ui.RoutablePage.fromUrlLocal(path),
-    };
-    // a path that's neither a page nor an embed gets the not-found page
-    if (route_maybe == null) if (findEmbed(path)) |embed| {
+    // embeds are matched before the pages so an embed's name never reads as a user
+    if (findEmbed(path)) |embed| {
         // the embeds change with every build, so the browser must revalidate
         // rather than heuristically cache them across server restarts
         try request.respond(embed.body, .{
@@ -228,9 +239,10 @@ fn handleRequest(
             },
         });
         return;
-    };
+    }
     {
-        const current_page = route_maybe orelse .not_found;
+        // a path that's neither a page nor an embed gets the not-found page
+        const current_page = routeFromUrl(host, path) orelse .not_found;
         // resolve the haxy_session cookie's token to a user_id via the
         // store. user_id_buf lives on the stack for the rest of handleRequest,
         // which is plenty for renderIndexHtml to consume. local mode has no
@@ -488,13 +500,12 @@ fn authorizeWrite(
     const authorization: ui.Authorization = blk: {
         const user_id = requestUserId(request, server.session_store) orelse break :blk .login_required;
 
-        const repo_prefix = "/repo/";
-        if (!std.mem.startsWith(u8, repo_base, repo_prefix)) break :blk .repo_not_found;
+        const identity = repoBaseIdentity(repo_base) orelse break :blk .repo_not_found;
 
         var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
         defer admin_repo.deinit(io, allocator);
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin_repo);
-        break :blk try ui.authorizeUser(io, moment, arena, server.users_dir, user_id, repo_base[repo_prefix.len..], min_role);
+        break :blk try ui.authorizeUser(io, moment, arena, server.users_dir, user_id, identity, min_role);
     };
     switch (authorization) {
         .actor => |actor| return actor,
@@ -518,8 +529,7 @@ fn mayRead(
         .server => |server| server,
         .local => return true,
     };
-    const repo_prefix = "/repo/";
-    if (!std.mem.startsWith(u8, repo_base, repo_prefix)) return false;
+    const identity = repoBaseIdentity(repo_base) orelse return false;
 
     var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
     defer admin_repo.deinit(io, allocator);
@@ -530,7 +540,7 @@ fn mayRead(
         const id = requestUserId(request, server.session_store) orelse break :blk null;
         break :blk if (try ui.activeUser(moment, &arena, id) != null) id else null;
     };
-    const owner_repo = evt.parseOwnerRepoPath(repo_base[repo_prefix.len..]) orelse return false;
+    const owner_repo = evt.parseOwnerRepoPath(identity) orelse return false;
     const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, server.users_dir, owner_repo.owner, owner_repo.name, user_id)) orelse return false;
     return repo.role != .none;
 }
@@ -578,7 +588,7 @@ fn handleNew(
     base: []const u8,
     host: Host,
 ) !void {
-    if (commentBaseParts(base) != null) return handleCommentNew(io, request, allocator, base, host);
+    if (commentBaseParts(host, base) != null) return handleCommentNew(io, request, allocator, base, host);
 
     const issues_suffix = "/issues";
     if (std.mem.endsWith(u8, base, issues_suffix))
@@ -641,7 +651,7 @@ fn handleRepoNew(
         } } });
     };
 
-    const location = try std.fmt.allocPrint(allocator, "/repo/{s}/{s}", .{ user.event.name, name });
+    const location = try std.fmt.allocPrint(allocator, "/{s}:{s}", .{ user.event.name, name });
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -677,8 +687,9 @@ fn handleRepoSettings(
     defer allocator.free(access_value);
     const access = std.meta.stringToEnum(evt.Repo.Access, access_value) orelse return request.respond("invalid access", .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }} });
 
-    const repo_prefix = "/repo/";
-    const route = ui.Repo.Settings.update(io, allocator, server.users_dir, actor, repo_base[repo_prefix.len..], name, description, access) catch |err| switch (err) {
+    // authorizeWrite refused any other base
+    const identity = repoBaseIdentity(repo_base) orelse unreachable;
+    const route = ui.Repo.Settings.update(io, allocator, server.users_dir, actor, identity, name, description, access) catch |err| switch (err) {
         error.NotFound => return respondRepoNotFound(request),
         else => {
             const failure = ui.Session.FormFeedback.RepoFailure.fromError(err) orelse return err;
@@ -738,7 +749,7 @@ fn handleUserNew(
     const token = try session_store.create(&user_id);
     var cookie_buf: [256]u8 = undefined;
     const cookie = try std.fmt.bufPrint(&cookie_buf, session_cookie_fmt, .{token});
-    const location = try std.fmt.allocPrint(allocator, "/user/{s}", .{name});
+    const location = try std.fmt.allocPrint(allocator, "/{s}", .{name});
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -897,8 +908,8 @@ const CommentBaseParts = struct {
     comment_id: ?[evt.event_id_size]u8,
 };
 
-fn commentBaseParts(base: []const u8) ?CommentBaseParts {
-    const route = ui.RoutablePage.fromUrl(base) orelse ui.RoutablePage.fromUrlLocal(base) orelse return null;
+fn commentBaseParts(host: Host, base: []const u8) ?CommentBaseParts {
+    const route = routeFromUrl(host, base) orelse return null;
     const identity, const thread_kind, const thread_hex, const comment_hex = switch (route) {
         .repo_issues => |*issue| .{ issue.name.slice(), evt.EventKind.issue, issue.selected.slice(), issue.comment.slice() },
         .repo_patches => |*patch| .{ patch.name.slice(), evt.EventKind.patch, patch.selected.slice(), patch.comment.slice() },
@@ -907,7 +918,7 @@ fn commentBaseParts(base: []const u8) ?CommentBaseParts {
     };
     const thread_id = evt.parseEventId(thread_hex) catch return null;
     const comment_id = if (comment_hex.len == 0) null else evt.parseEventId(comment_hex) catch return null;
-    const repo_base_len = if (identity.len == 0) 0 else "/repo/".len + identity.len;
+    const repo_base_len = if (identity.len == 0) 0 else "/".len + identity.len;
     return .{ .repo_base = base[0..repo_base_len], .thread_kind = thread_kind, .thread_id = thread_id, .comment_id = comment_id };
 }
 
@@ -918,7 +929,7 @@ fn handlePatchPublish(
     base: []const u8,
     host: Host,
 ) !void {
-    const parts = commentBaseParts(base) orelse return respondRemoveNotFound(request);
+    const parts = commentBaseParts(host, base) orelse return respondRemoveNotFound(request);
     if (parts.thread_kind != .patch or parts.comment_id != null) return respondRemoveNotFound(request);
     const server = switch (host) {
         .server => |server| server,
@@ -962,7 +973,7 @@ fn handlePatchMerge(
     host: Host,
     revision: evt.Patch.MergeRevision,
 ) !void {
-    const parts = commentBaseParts(base) orelse return respondRemoveNotFound(request);
+    const parts = commentBaseParts(host, base) orelse return respondRemoveNotFound(request);
     if (parts.thread_kind != .patch or parts.comment_id != null) return respondRemoveNotFound(request);
     const server = switch (host) {
         .server => |server| server,
@@ -1014,7 +1025,7 @@ fn handleCommentNew(
     host: Host,
 ) !void {
     const not_found = "comment parent not found";
-    const parts = commentBaseParts(base) orelse {
+    const parts = commentBaseParts(host, base) orelse {
         try request.respond(not_found, .{
             .status = .not_found,
             .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
@@ -1324,7 +1335,7 @@ fn handleEdit(
     base: []const u8,
     host: Host,
 ) !void {
-    const parts = commentBaseParts(base) orelse return respondRemoveNotFound(request);
+    const parts = commentBaseParts(host, base) orelse return respondRemoveNotFound(request);
     if (parts.comment_id != null) return handleCommentEdit(io, request, allocator, base, host, parts);
     return handleThreadEdit(io, request, allocator, base, host, parts);
 }
@@ -1417,7 +1428,7 @@ const RemoveParts = struct {
 };
 
 // split a remove url into the repo and event it names
-fn removeParts(base: []const u8) ?RemoveParts {
+fn removeParts(host: Host, base: []const u8) ?RemoveParts {
     if (attachmentRequest(base)) |attachment| {
         const parent = attachParentParts(attachment.repo_base) orelse return null;
         return .{
@@ -1426,7 +1437,7 @@ fn removeParts(base: []const u8) ?RemoveParts {
             .id = attachment.id,
         };
     }
-    if (commentBaseParts(base)) |thread| return .{
+    if (commentBaseParts(host, base)) |thread| return .{
         .repo_base = thread.repo_base,
         .kind = if (thread.comment_id != null) .comment else thread.thread_kind,
         .id = thread.comment_id orelse thread.thread_id,
@@ -1442,7 +1453,7 @@ fn handleRemove(
     base: []const u8,
     host: Host,
 ) !void {
-    const parts = removeParts(base) orelse return respondRemoveNotFound(request);
+    const parts = removeParts(host, base) orelse return respondRemoveNotFound(request);
 
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
@@ -1537,7 +1548,7 @@ fn updateDiscussion(
 }
 
 // set the status of the issue the url names (base is
-// "/repo/<owner>/<name>/issue:<id>", identity elided in local mode) by
+// "/<owner>:<name>/issue:<id>", identity elided in local mode) by
 // re-emitting its event, then redirect back to it
 fn handleThreadStatus(
     io: std.Io,
@@ -1548,7 +1559,7 @@ fn handleThreadStatus(
     open: bool,
 ) !void {
     const not_found = "thread not found";
-    const parts = commentBaseParts(base) orelse {
+    const parts = commentBaseParts(host, base) orelse {
         try request.respond(not_found, .{
             .status = .not_found,
             .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
@@ -1731,7 +1742,7 @@ fn handleThreadResolve(
     base: []const u8,
     host: Host,
 ) !void {
-    const parts = commentBaseParts(base) orelse {
+    const parts = commentBaseParts(host, base) orelse {
         try request.respond("thread not found", .{
             .status = .not_found,
             .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
@@ -1769,7 +1780,7 @@ fn handleThreadResolve(
         });
         return;
     }
-    const route = ui.RoutablePage.fromUrl(base) orelse ui.RoutablePage.fromUrlLocal(base) orelse {
+    const route = routeFromUrl(host, base) orelse {
         try request.respond("thread not found", .{
             .status = .not_found,
             .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
@@ -1826,15 +1837,12 @@ fn handleThreadResolve(
 // the posted path drops the action's own segment, so the route it parses is
 // the undo page the action applies to, never the confirmation page itself
 fn handleUndo(io: std.Io, request: *std.http.Server.Request, allocator: std.mem.Allocator, base: []const u8, host: Host, action: enum { undo, clear }) !void {
-    const route = (switch (host) {
-        .local => ui.RoutablePage.fromUrlLocal(base),
-        .server => ui.RoutablePage.fromUrl(base),
-    }) orelse return respondRepoNotFound(request);
+    const route = routeFromUrl(host, base) orelse return respondRepoNotFound(request);
     if (route != .repo_undo) return respondRepoNotFound(request);
     const target = route.repo_undo;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const repo_base = if (target.name.len == 0) "" else try std.fmt.allocPrint(arena.allocator(), "/repo/{s}", .{target.name.slice()});
+    const repo_base = if (target.name.len == 0) "" else try std.fmt.allocPrint(arena.allocator(), "/{s}", .{target.name.slice()});
     _ = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner)) orelse return;
     const resolved = (try requestRepoSource(io, allocator, host, repo_base)) orelse return respondRepoNotFound(request);
     defer resolved.deinit(allocator);
@@ -1992,12 +2000,12 @@ fn renderIndexHtml(
 }
 
 fn findEmbed(request_path: []const u8) ?Embed {
-    const path = if (std.mem.eql(u8, request_path, "/"))
-        "index.html"
-    else if (request_path.len > 1 and request_path[0] == '/')
-        request_path[1..]
-    else
-        return null;
+    // embeds are matched before pages, so a dot keeps them from claiming a username or tab
+    comptime for (embeds) |embed| {
+        if (std.mem.indexOfScalar(u8, embed.path, '.') == null) @compileError("embed path needs a '.' so it can't shadow a page: " ++ embed.path);
+    };
+    if (request_path.len < 2 or request_path[0] != '/') return null;
+    const path = request_path[1..];
 
     for (embeds) |embed| {
         if (std.mem.eql(u8, path, embed.path)) return embed;

@@ -942,7 +942,7 @@ pub fn main(init: std.process.Init) !void {
                     \\  echo "hello" > hello.txt
                     \\  git add hello.txt
                     \\  git commit -m "let there be light"
-                    \\  GIT_SSH_COMMAND='ssh -p {d} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i {s}' git push localhost:admin/test HEAD:master
+                    \\  GIT_SSH_COMMAND='ssh -p {d} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i {s}' git push localhost:admin:test HEAD:master
                     \\
                     \\to quit, press enter.
                     \\

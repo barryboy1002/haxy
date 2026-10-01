@@ -6,12 +6,12 @@ const rp = @import("xit").repo;
 // the http and ssh paths each map the cases to their own error responses.
 pub const RepoPath = union(enum) {
     ok: []const u8, // resolved on-disk path; the caller owns and frees it
-    invalid, // a <owner>/<repo> path was expected but not given
+    invalid, // a <owner>:<repo> path was expected but not given
     not_found, // unknown owner, or the repo doesn't exist and we aren't creating
 };
 
 // resolve a requested repo path to its on-disk directory, parsed as
-// <owner>/<repo> through the event store, minting a repo event for a fresh push.
+// <owner>:<repo> through the event store, minting a repo event for a fresh push.
 pub fn resolveRepoPath(
     io: std.Io,
     allocator: std.mem.Allocator,

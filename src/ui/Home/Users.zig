@@ -112,10 +112,10 @@ pub const View = struct {
             }
             for (data.users) |user|
                 // clicking a user opens their page; the "a:" prefix makes the web
-                // renderer emit an <a href="/user/foo"> anchor.
+                // renderer emit an <a href="/foo"> anchor.
                 try items.append(aa, .{
                     .text = user.name,
-                    .link = try std.fmt.allocPrint(aa, "a:/user/{s}", .{user.name}),
+                    .link = try std.fmt.allocPrint(aa, "a:/{s}", .{user.name}),
                 });
             if (data.next_start) |next_start| {
                 var next = route;

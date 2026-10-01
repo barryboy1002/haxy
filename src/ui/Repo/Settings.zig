@@ -202,6 +202,6 @@ pub fn update(
     const owner_id = actor.repo_user_id orelse return error.NotFound;
     try evt.updateRepo(io, allocator, users_dir, &owner_id, actor.author, parsed.name, name, description, access);
     var buf: [ui.RoutablePage.repo_route_max_len]u8 = undefined;
-    const new_identity = std.fmt.bufPrint(&buf, "{s}/{s}", .{ parsed.owner, name }) catch return error.RouteTooLong;
+    const new_identity = std.fmt.bufPrint(&buf, "{s}:{s}", .{ parsed.owner, name }) catch return error.RouteTooLong;
     return ui.RoutablePage.repoRepoRoute(new_identity) orelse error.RouteTooLong;
 }

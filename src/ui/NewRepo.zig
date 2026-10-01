@@ -158,7 +158,7 @@ pub const View = struct {
         name_input.clear(allocator);
         description_input.clear(allocator);
 
-        const identity = try std.fmt.allocPrint(self.session.page_arena.allocator(), "{s}/{s}", .{ user.event.name, name });
+        const identity = try std.fmt.allocPrint(self.session.page_arena.allocator(), "{s}:{s}", .{ user.event.name, name });
         try self.session.navigate(ui.RoutablePage.repoFilesRoute(identity, null, "", "", 0) orelse return);
     }
 

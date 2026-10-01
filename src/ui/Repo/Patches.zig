@@ -203,7 +203,7 @@ pub const Window = struct {
     pub const empty: Window = .{ .items = &.{}, .prev_id = null, .next_id = null, .count = 0 };
 };
 
-// "owner/name", so the view can build /repo/owner/name/patches/... links.
+// "owner:name", so the view can build /owner:name/patches/... links.
 identity: []const u8,
 default_target_branch: []const u8 = "",
 // the url-encoded label the lists are filtered to ("" = unfiltered).
@@ -263,7 +263,7 @@ pub fn listRoute(identity: []const u8, status: Status, label: []const u8, select
 // a fork route's identity names the forker and the target repo
 fn forkIdentity(buffer: []u8, identity: []const u8, entry: PatchWithId) ![]const u8 {
     const repo_identity = ui.RoutablePage.RepoIdentity.parse(identity) orelse return error.RouteTooLong;
-    return std.fmt.bufPrint(buffer, "{s}/{s}", .{ entry.forker, repo_identity.name }) catch error.RouteTooLong;
+    return std.fmt.bufPrint(buffer, "{s}:{s}", .{ entry.forker, repo_identity.name }) catch error.RouteTooLong;
 }
 
 pub fn commitsRoute(identity: []const u8, entry: PatchWithId) !?ui.RoutablePage {
@@ -945,13 +945,10 @@ pub fn appendDetails(self: *const Self, allocator: std.mem.Allocator, box: *wgt.
     const target_branch = entry.record.event.target_branch;
 
     if (status_kind != .merged and entry.fork_exists) if (session.data.git_ssh_port) |port| {
-        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/fork/{s}/patch:{s}", .{ port, self.identity, entry.id });
+        var buffer: [ui.RoutablePage.repo_identity_max_len]u8 = undefined;
+        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}+{s}", .{ port, try forkIdentity(&buffer, self.identity, entry), entry.id });
         const push_command = try std.fmt.allocPrint(aa, "git push {s} HEAD:patch", .{url});
-        const clone_name = try cloneDirectoryName(aa, entry.record.event.title);
-        const clone_command = if (clone_name.len == 0)
-            try std.fmt.allocPrint(aa, "git clone {s}", .{url})
-        else
-            try std.fmt.allocPrint(aa, "git clone {s} {s}", .{ url, clone_name });
+        const clone_command = try std.fmt.allocPrint(aa, "git clone {s}", .{url});
         const merge_command = try std.fmt.allocPrint(aa, "git fetch '{s}' refs/heads/patch && git merge FETCH_HEAD", .{url});
         const choices: [3]ui.widget.CopyableText.Choice = .{
             .{
@@ -998,32 +995,6 @@ pub fn appendDetails(self: *const Self, allocator: std.mem.Allocator, box: *wgt.
     var copyable_text = try ui.widget.CopyableText.init(allocator, session, fields[@intFromBool(entry.revision_oid.len == 0)..], 0);
     errdefer copyable_text.deinit(allocator);
     try box.children.put(allocator, copyable_text.getFocus().id, .{ .widget = .{ .copyable_text = copyable_text }, .rect = null, .min_size = null });
-}
-
-fn cloneDirectoryName(allocator: std.mem.Allocator, title: []const u8) ![]const u8 {
-    var name: [64]u8 = undefined;
-    var len: usize = 0;
-    var pending: ?u8 = null;
-
-    for (title) |char| {
-        if (std.ascii.isAlphanumeric(char)) {
-            const needed: usize = if (pending == null) 1 else 2;
-            if (len + needed > name.len) break;
-            if (pending) |value| {
-                name[len] = value;
-                len += 1;
-            }
-            name[len] = std.ascii.toLower(char);
-            len += 1;
-            pending = null;
-        } else if (char == ' ') {
-            if (len != 0) pending = '-';
-        } else if (char == '.') {
-            if (len != 0 and pending != '-') pending = '.';
-        }
-    }
-    if (len == 0) return "";
-    return allocator.dupe(u8, name[0..len]);
 }
 
 // tabs switching between the patches page's views

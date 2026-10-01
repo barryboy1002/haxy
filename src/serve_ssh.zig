@@ -370,19 +370,16 @@ fn runGitSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, exec: ss
 
     const parsed = parseGitCommand(allocator, exec.command) catch return writeError(sess, "unsupported command (expected git-upload-pack or git-receive-pack)");
     defer parsed.deinit(allocator);
-    const path = std.mem.trimStart(u8, parsed.dir, "/");
-    const fork_prefix = "fork/";
+    const repo_identity = std.mem.trimStart(u8, parsed.dir, "/");
 
-    if (std.mem.startsWith(u8, path, fork_prefix)) {
-        return runForkSession(handler, sess, path[fork_prefix.len..], parsed.service, protocol_version, &reader.interface, &writer.interface);
+    // a "+" names a fork's patch draft
+    if (std.mem.indexOfScalar(u8, repo_identity, '+') != null) {
+        return runForkSession(handler, sess, repo_identity, parsed.service, protocol_version, &reader.interface, &writer.interface);
     }
-
-    const repo_prefix = "repo/";
-    const repo_identity = if (std.mem.startsWith(u8, path, repo_prefix)) path[repo_prefix.len..] else path;
 
     const create_if_missing = parsed.service == .receive_pack;
 
-    const owner_repo = evt.parseOwnerRepoPath(repo_identity) orelse return writeError(sess, "repo path must be <owner>/<repo>");
+    const owner_repo = evt.parseOwnerRepoPath(repo_identity) orelse return writeError(sess, "repo path must be <owner>:<repo>");
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
     const author = switch (try authorizeRepoKey(io, &author_arena, handler.admin_repo_path, handler.users_dir, owner_repo.owner, owner_repo.name, parsed.service, &sess.fingerprint)) {
@@ -426,7 +423,7 @@ fn runForkSession(
 
     const route = fork.parseRoute(fork_path) orelse return writeError(sess, "invalid fork path");
     // the route names the forker and the target repo
-    const forker_repo = evt.parseOwnerRepoPath(route.identity) orelse return writeError(sess, "repo path must be <forker>/<repo>");
+    const forker_repo = evt.parseOwnerRepoPath(route.identity) orelse return writeError(sess, "repo path must be <forker>:<repo>");
 
     var admin = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = handler.admin_repo_path });
     defer admin.deinit(io, allocator);

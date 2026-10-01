@@ -73,7 +73,7 @@ pub const Window = struct {
     pub const empty: Window = .{ .items = &.{}, .prev_id = null, .next_id = null, .count = 0 };
 };
 
-// "owner/name", so the view can build /repo/owner/name/issues/... links.
+// "owner:name", so the view can build /owner:name/issues/... links.
 identity: []const u8,
 // the url-encoded label the lists are filtered to ("" = unfiltered).
 label: []const u8,

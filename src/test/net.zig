@@ -570,7 +570,7 @@ fn testPushFork(
     var client = try rp.Repo(.xit, .{ .hash = hash_kind, .is_test = true }).clone(
         io,
         allocator,
-        "git@localhost:admin/target",
+        "git@localhost:admin:target",
         client_path,
         client_path,
         null,
@@ -586,7 +586,7 @@ fn testPushFork(
         break :blk try client.commit(io, allocator, .{ .message = "add feature" });
     };
 
-    const remote_url = try std.fmt.allocPrint(allocator, "git@localhost:fork/admin/target/patch:{s}", .{&fork_id_hex});
+    const remote_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:target+{s}", .{&fork_id_hex});
     defer allocator.free(remote_url);
     try client.addRemote(io, allocator, .{ .name = "patch", .value = remote_url });
     try client.push(io, allocator, "patch", "master:patch", false, .{ .wire = .{ .ssh = .{ .command = ssh_cmd } } });
@@ -645,7 +645,7 @@ fn testPushFork(
         } }, .{ .name = "admin", .email = "admin@example.test" });
     }
 
-    const feature_remote_url = try std.fmt.allocPrint(allocator, "git@localhost:fork/admin/target/patch:{s}", .{&fork_id_hex});
+    const feature_remote_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:target+{s}", .{&fork_id_hex});
     defer allocator.free(feature_remote_url);
     try client.addRemote(io, allocator, .{ .name = "patch-to-feature", .value = feature_remote_url });
 
@@ -782,7 +782,7 @@ fn testPushFork(
         try std.testing.expectEqualStrings(&second_patch_oid, imported.patch_oid);
     }
 
-    const other_url = try std.fmt.allocPrint(allocator, "git@localhost:fork/admin/other/patch:{s}", .{&fork_id_hex});
+    const other_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:other+{s}", .{&fork_id_hex});
     defer allocator.free(other_url);
     try client.addRemote(io, allocator, .{ .name = "other", .value = other_url });
     // early rejections need no input. give ssh eof so windows openssh
@@ -846,7 +846,7 @@ fn testPushFork(
         });
     }
 
-    const denied_url = try std.fmt.allocPrint(allocator, "git@localhost:fork/admin/target/patch:{s}", .{&fork_id_hex});
+    const denied_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:target+{s}", .{&fork_id_hex});
     defer allocator.free(denied_url);
     try client.addRemote(io, allocator, .{ .name = "denied", .value = denied_url });
     try std.testing.expectError(error.ServerReportedError, client.push(io, allocator, "denied", "master:patch", false, .{ .wire = .{ .ssh = .{ .command = reject_ssh_cmd } } }));
@@ -911,7 +911,7 @@ fn testPushCreatesMissingRepo(
         } } },
     );
 
-    // the push registered admin/server; resolve its on-disk directory
+    // the push registered admin:server; resolve its on-disk directory
     const server_path = (try repoOnDiskPath(io, allocator, temp_path, "testrepo", false)).?;
     defer allocator.free(server_path);
 
@@ -1661,7 +1661,7 @@ fn setupAdmin(io: std.Io, allocator: std.mem.Allocator, data_path: []const u8) !
     defer user_repo.deinit(io, allocator);
 }
 
-// resolve admin/<repo_name> to its on-disk directory under <data_dir>/users via
+// resolve admin:<repo_name> to its on-disk directory under <data_dir>/users via
 // the event store
 fn repoOnDiskPath(
     io: std.Io,
@@ -1687,7 +1687,7 @@ fn repoOnDiskPath(
     return try evt.repoPath(allocator, users_dir, &location.owner_id, &location.repo_id);
 }
 
-// build the remote URL addressing admin/<repo_name> over the given transport
+// build the remote URL addressing admin:<repo_name> over the given transport
 fn remoteUrl(
     comptime transport_def: net.TransportDefinition,
     allocator: std.mem.Allocator,
@@ -1697,9 +1697,9 @@ fn remoteUrl(
     return switch (transport_def) {
         .file => unreachable,
         .wire => |wire_kind| switch (wire_kind) {
-            .http => try std.fmt.allocPrint(allocator, "http://localhost:{}/admin/{s}", .{ port, repo_name }),
-            .raw => try std.fmt.allocPrint(allocator, "git://localhost:{}/admin/{s}", .{ port, repo_name }),
-            .ssh => try std.fmt.allocPrint(allocator, "git@localhost:admin/{s}", .{repo_name}),
+            .http => try std.fmt.allocPrint(allocator, "http://localhost:{}/admin:{s}", .{ port, repo_name }),
+            .raw => try std.fmt.allocPrint(allocator, "git://localhost:{}/admin:{s}", .{ port, repo_name }),
+            .ssh => try std.fmt.allocPrint(allocator, "git@localhost:admin:{s}", .{repo_name}),
         },
     };
 }

@@ -117,7 +117,7 @@ fn testDiff(comptime kind: xit.repo.RepoKind) !void {
         try repo.add(io, allocator, &.{name});
         head = try repo.commit(io, allocator, .{ .message = "add file" });
     }
-    const route = ui.RoutablePage.repoDiffRoute("alice/project", .object, &head, 0, "", &base) orelse return error.BadRoute;
+    const route = ui.RoutablePage.repoDiffRoute("alice:project", .object, &head, 0, "", &base) orelse return error.BadRoute;
     const diff = try Diff.init(kind, opts, &arena, &repo, io, allocator, route.repo_diff);
     const first = diff.window;
     try std.testing.expectEqual(Diff.page_size, first.hunks.len);
@@ -139,27 +139,27 @@ fn testDiff(comptime kind: xit.repo.RepoKind) !void {
         .{ .ref = .tag, .value = "tip" },
     };
     for (sources) |source| {
-        const selected = ui.RoutablePage.repoDiffRoute("alice/project", source.ref, source.value, 0, "", &base) orelse return error.BadRoute;
+        const selected = ui.RoutablePage.repoDiffRoute("alice:project", source.ref, source.value, 0, "", &base) orelse return error.BadRoute;
         const data = try Diff.init(kind, opts, &arena, &repo, io, allocator, selected.repo_diff);
         try std.testing.expectEqualDeep(first, data.window);
     }
-    const unchanged = ui.RoutablePage.repoDiffRoute("alice/project", .object, &head, 0, "", &head) orelse return error.BadRoute;
+    const unchanged = ui.RoutablePage.repoDiffRoute("alice:project", .object, &head, 0, "", &head) orelse return error.BadRoute;
     try std.testing.expectEqual(0, (try Diff.init(kind, opts, &arena, &repo, io, allocator, unchanged.repo_diff)).window.hunks.len);
 
     // a zero base includes files that were already present in the first commit
     const zero = [_]u8{'0'} ** xit.hash.hexLen(opts.hash);
-    const created = ui.RoutablePage.repoDiffRoute("alice/project", .object, &head, 0, "shared.txt", &zero) orelse return error.BadRoute;
+    const created = ui.RoutablePage.repoDiffRoute("alice:project", .object, &head, 0, "shared.txt", &zero) orelse return error.BadRoute;
     const created_diff = try Diff.init(kind, opts, &arena, &repo, io, allocator, created.repo_diff);
     try std.testing.expectEqual(1, created_diff.window.hunks.len);
     try std.testing.expectEqualStrings("shared.txt", created_diff.window.hunks[0].path orelse return error.MissingPath);
 
     // standalone panes keep their comparison when filtering or paginating
     const id = "11111111111111111111111111111111";
-    const fork_diff = Diff{ .route = .{ .fork = .{ .identity = "alice/project", .id = id } }, .window = first };
+    const fork_diff = Diff{ .route = .{ .fork = .{ .identity = "alice:project", .id = id } }, .window = first };
     for ([_]Diff{ diff, fork_diff }) |data| {
         for ([_]bool{ true, false }) |terminal| {
             var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = terminal };
-            session.data.current_page = if (data.route == .repo) route else ui.RoutablePage.forkDiffRoute("alice/project", id, "", "", 0, "") orelse return error.BadRoute;
+            session.data.current_page = if (data.route == .repo) route else ui.RoutablePage.forkDiffRoute("alice:project", id, "", "", 0, "") orelse return error.BadRoute;
             var view = try Diff.View.init(allocator, &data, &session);
             defer view.deinit(allocator);
             const focus = view.getFocus();
@@ -189,7 +189,7 @@ test "commits list next row is a cross-page link" {
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const identity = "alice/ziglings";
+    const identity = "alice:ziglings";
     const oid0 = "1111111111111111111111111111111111111111";
     const next_oid = "2222222222222222222222222222222222222222";
     const base_oid = "3333333333333333333333333333333333333333";
@@ -239,9 +239,9 @@ test "encoded ref name survives the commits url round-trip" {
     const base_oid = "3333333333333333333333333333333333333333";
 
     // the route layer holds the value already url-encoded ("feature%2Ffoo").
-    const route = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", base_oid).?;
+    const route = RP.repoCommitsRoute("alice:ziglings", .branch, "feature%2Ffoo", base_oid).?;
     const url = try route.toUrl(&arena);
-    try std.testing.expectEqualStrings("/repo/alice/ziglings/commits/branch:feature%2Ffoo/base:" ++ base_oid, url);
+    try std.testing.expectEqualStrings("/alice:ziglings/commits/branch:feature%2Ffoo/base:" ++ base_oid, url);
 
     // parsing it back yields the same route, and the ref splits out intact.
     const parsed = RP.fromUrl(url);
@@ -250,7 +250,7 @@ test "encoded ref name survives the commits url round-trip" {
     try std.testing.expectEqual(RP.RefOrOid.branch, parsed_route.ref_or_oid.?);
     try std.testing.expectEqualStrings("feature%2Ffoo", parsed_route.value.slice());
     try std.testing.expectEqualStrings(base_oid, parsed_route.base_oid.slice());
-    const unfiltered = RP.repoCommitsRoute("alice/ziglings", .branch, "feature%2Ffoo", "").?;
+    const unfiltered = RP.repoCommitsRoute("alice:ziglings", .branch, "feature%2Ffoo", "").?;
     try std.testing.expect(!RP.eql(route, unfiltered));
 }
 

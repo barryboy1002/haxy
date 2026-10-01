@@ -18,11 +18,11 @@ pub const Route = struct {
     id: [evt.event_id_size * 2]u8,
 };
 
+// parse a "<forker>:<repo>+<patch id>" fork path
 pub fn parseRoute(route_path: []const u8) ?Route {
-    const patch_segment = "/patch:";
-    const patch_start = std.mem.indexOf(u8, route_path, patch_segment) orelse return null;
-    const identity = route_path[0..patch_start];
-    const id_text = route_path[patch_start + patch_segment.len ..];
+    const plus = std.mem.indexOfScalar(u8, route_path, '+') orelse return null;
+    const identity = route_path[0..plus];
+    const id_text = route_path[plus + 1 ..];
     if (identity.len == 0 or id_text.len != evt.event_id_size * 2) return null;
     const id_bytes = evt.parseEventId(id_text) catch return null;
     return .{ .identity = identity, .id = std.fmt.bytesToHex(id_bytes, .lower) };

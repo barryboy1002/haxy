@@ -1843,10 +1843,11 @@ pub fn readOrderKeyId(comptime DB: type, kv_pair_cursor: DB.Cursor(.read_only)) 
     return order_key[@sizeOf(u64)..][0..event_id_size].*;
 }
 
-// split a pushed "<owner>/<repo>" path into its two components, or null if it
-// isn't exactly two non-empty segments.
+// split a pushed "<owner>:<repo>" path into its two components, or null if it
+// isn't exactly two non-empty parts with no "/".
 pub fn parseOwnerRepoPath(path: []const u8) ?struct { owner: []const u8, name: []const u8 } {
-    var it = std.mem.splitScalar(u8, path, '/');
+    if (std.mem.indexOfScalar(u8, path, '/') != null) return null;
+    var it = std.mem.splitScalar(u8, path, ':');
     const owner = it.next() orelse return null;
     const name = it.next() orelse return null;
     if (it.next() != null) return null;
@@ -1865,7 +1866,7 @@ pub const RepoLocation = struct {
     repo_id: [event_id_size]u8,
 };
 
-// resolve a pushed `<owner>/<repo>` to the ids that locate its on-disk directory
+// resolve a pushed `<owner>:<repo>` to the ids that locate its on-disk directory
 pub fn resolveOrCreateRepo(
     io: std.Io,
     allocator: std.mem.Allocator,

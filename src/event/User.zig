@@ -42,6 +42,8 @@ pub fn validateName(name: []const u8) !void {
     if (name.len < name_min_len) return error.NameTooShort;
     if (name.len > name_max_len) return error.NameTooLong;
     if (name[0] == '-' or name[name.len - 1] == '-') return error.InvalidName;
+    // reserved for the top-level pages' url segment
+    if (std.ascii.eqlIgnoreCase(name, "home")) return error.InvalidName;
 
     var previous_was_hyphen = false;
     for (name) |c| {
