@@ -18,8 +18,6 @@ const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
 const new_user_tab_bottom_label = "user";
 
-pub const AuthTab = @import("../AuthTab.zig");
-
 name: []const u8,
 forker_name: []const u8,
 title: ui.Title,
@@ -128,7 +126,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes new repo, new user, and auth to the right.
+        // spacer pushes new repo, new user, and user to the right.
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -139,8 +137,8 @@ pub const View = struct {
         const new_repo_link = try ui.inPageTabLink(session, new_repo_route, current_tag == .fork_new_repo);
         const new_user_route = ui.RoutablePage.forkNewUserRoute(fork_identity, data.id) orelse return error.RouteTooLong;
         const new_user_link = try ui.inPageTabLink(session, new_user_route, current_tag == .fork_new_user);
-        const auth_route = ui.RoutablePage.forkAuthRoute(fork_identity, data.id) orelse return error.RouteTooLong;
-        const auth_link = try ui.inPageTabLink(session, auth_route, current_tag == .fork_auth);
+        const user_route = ui.RoutablePage.forkUserRoute(fork_identity, data.id) orelse return error.RouteTooLong;
+        const user_link = try ui.inPageTabLink(session, user_route, current_tag == .fork_user);
 
         // new repo tab with a login, new user tab without one outside local mode
         if (session.data.user_id != null) {
@@ -161,14 +159,15 @@ pub const View = struct {
             try tabs_box.children.put(allocator, new_user.getFocus().id, .{ .widget = .{ .text_box = new_user }, .rect = null, .min_size = .{ .width = @max(new_tab_label.len, new_user_tab_bottom_label.len) + 2, .height = null } });
         }
 
-        // keep authentication within the fork page.
         if (session.data.host_kind == .server) {
-            var auth_tab = try AuthTab.View.init(allocator, session);
-            errdefer auth_tab.deinit(allocator);
-            auth_tab.text_box.getFocus().kind = .{ .custom = auth_link };
-            try tab_ids.put(allocator, auth_tab.getFocus().id, {});
-            if (current_tag == .fork_auth) selected_tab = auth_tab.getFocus().id;
-            try tabs_box.children.put(allocator, auth_tab.getFocus().id, .{ .widget = .{ .auth_tab = auth_tab }, .rect = null, .min_size = .{ .width = auth_tab.minWidth(), .height = null } });
+            const label = ui.UserLogout.tabLabel(session);
+            var user_tab = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer user_tab.deinit(allocator);
+            user_tab.getFocus().mode = .all;
+            user_tab.getFocus().kind = .{ .custom = user_link };
+            try tab_ids.put(allocator, user_tab.getFocus().id, {});
+            if (current_tag == .fork_user) selected_tab = user_tab.getFocus().id;
+            try tabs_box.children.put(allocator, user_tab.getFocus().id, .{ .widget = .{ .text_box = user_tab }, .rect = null, .min_size = .{ .width = label.len + 2, .height = null } });
         }
 
         if (session.is_terminal) {
@@ -225,10 +224,6 @@ pub const View = struct {
         for (tabs_box.children.keys(), tabs_box.children.values()) |id, *child| {
             const text_box: ?*wgt.TextBox = switch (child.widget) {
                 .text_box => |*value| value,
-                .auth_tab => |*auth_tab| blk: {
-                    child.min_size = .{ .width = auth_tab.minWidth(), .height = null };
-                    break :blk &auth_tab.text_box;
-                },
                 else => null,
             };
             if (text_box) |tab| ui.widget.markSelected(tab, selected_tab == id);

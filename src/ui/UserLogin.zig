@@ -1,8 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const evt = @import("../../event.zig");
-const ui = @import("../../ui.zig");
-const inp = @import("../input.zig");
+const evt = @import("../event.zig");
+const ui = @import("../ui.zig");
+const inp = @import("./input.zig");
 const xit = @import("xit");
 const rp = xit.repo;
 const hash = xit.hash;
@@ -16,15 +16,8 @@ const bcrypt = std.crypto.pwhash.bcrypt;
 
 const wasm = builtin.target.cpu.arch == .wasm32;
 
-const Self = @This();
-
-pub fn init() Self {
-    return .{};
-}
-
 pub const View = struct {
     center: ui.widget.Center,
-    data: *const Self,
     session: *ui.Session,
     nav_ids: [3]usize,
 
@@ -32,7 +25,7 @@ pub const View = struct {
     const password_index: usize = 1;
     const button_index: usize = 2;
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
         // marks this subtree as an HTML form scope for the web renderer
@@ -84,7 +77,6 @@ pub const View = struct {
 
         return .{
             .center = try ui.widget.Center.init(allocator, .{ .box = box }),
-            .data = data,
             .session = session,
             .nav_ids = nav_ids,
         };
@@ -232,7 +224,7 @@ pub const View = struct {
                 username_input.clear(allocator);
                 password_input.clear(allocator);
 
-                // leave the auth tab for the page it belongs to, where the
+                // leave the user tab for the page it belongs to, where the
                 // web's /login redirect also lands
                 try self.session.navigate(self.session.data.current_page.pageRoot());
             },

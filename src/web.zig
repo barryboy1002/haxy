@@ -363,9 +363,9 @@ fn handleLogin(
     const result = try evt.User.verifyCredentials(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, &arena, username, password);
 
     // on success, return to the page the login came from (base, or "/" at the
-    // root); on failure, stay on its auth tab to surface the error.
+    // root); on failure, stay on its user tab to surface the error.
     const success_location: []const u8 = if (base.len == 0) "/" else base;
-    const failure_location = try std.fmt.allocPrint(arena.allocator(), "{s}/auth", .{base});
+    const failure_location = try std.fmt.allocPrint(arena.allocator(), "{s}/user", .{base});
 
     switch (result) {
         .success => |user_id| {

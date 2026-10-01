@@ -24,7 +24,6 @@ pub const Discussions = @import("./Repo/Discussions.zig");
 pub const Comment = @import("./Repo/Comment.zig");
 pub const Undo = @import("./Repo/Undo.zig");
 pub const Events = @import("./Repo/Events.zig");
-pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
 header: Header,
@@ -38,7 +37,6 @@ patches: Patches,
 discussions: Discussions,
 events: Events,
 undo: ?Undo = null,
-auth: Auth,
 quit: Quit,
 
 const Self = @This();
@@ -362,7 +360,6 @@ pub fn init(
         .discussions = discussions,
         .events = events,
         .undo = undo_data,
-        .auth = Auth.init(),
         .quit = Quit.init(),
     };
 }
@@ -377,7 +374,7 @@ pub const View = struct {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
 
-        // build the header first so we can grab the files-tab id for the auth
+        // build the header first so we can grab the files-tab id for the user
         // view (it focuses there after login).
         {
             var header_view = try Header.View.init(allocator, data, session);
@@ -450,7 +447,7 @@ pub const View = struct {
             }
 
             // the header shows new repo with a login, and new user without one
-            // and auth only outside local mode, so keep the stack's children
+            // and user only outside local mode, so keep the stack's children
             // 1:1 with the tabs by skipping the same views.
             const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}/{s}", .{ data.header.owner_name, data.header.name });
             if (session.data.user_id != null) {
@@ -466,9 +463,9 @@ pub const View = struct {
             }
 
             if (session.data.host_kind == .server) {
-                var auth_view = try Auth.View.init(allocator, &data.auth, session);
-                errdefer auth_view.deinit(allocator);
-                try stack.children.put(allocator, auth_view.getFocus().id, .{ .home_auth = auth_view });
+                var user_view = try ui.UserLogout.initView(allocator, session);
+                errdefer user_view.deinit(allocator);
+                try stack.children.put(allocator, user_view.getFocus().id, user_view);
             }
 
             if (session.is_terminal) {

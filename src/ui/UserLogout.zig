@@ -1,6 +1,6 @@
 const std = @import("std");
-const ui = @import("../../ui.zig");
-const inp = @import("../input.zig");
+const ui = @import("../ui.zig");
+const inp = @import("./input.zig");
 const xit = @import("xit");
 const xitui = xit.xitui;
 const wgt = xitui.widget;
@@ -9,19 +9,24 @@ const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 
-const Self = @This();
+// the logged-in user's page, or the login form when logged out
+pub fn initView(allocator: std.mem.Allocator, session: *ui.Session) !ui.Widget {
+    if (session.data.user_id != null) return .{ .user_logout = try View.init(allocator, session) };
+    return .{ .user_login = try ui.UserLogin.View.init(allocator, session) };
+}
 
-pub fn init() Self {
-    return .{};
+// the user tab's label: the logged-in user's name, or "login"
+pub fn tabLabel(session: *const ui.Session) []const u8 {
+    if (session.data.user_id == null) return "login";
+    return session.data.user_name orelse unreachable;
 }
 
 pub const View = struct {
     center: ui.widget.Center,
-    data: *const Self,
     session: *ui.Session,
     logout_id: usize,
 
-    pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         // the form box makes the web renderer post the button to /logout
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer box.deinit(allocator);
@@ -43,7 +48,6 @@ pub const View = struct {
 
         return .{
             .center = try ui.widget.Center.init(allocator, .{ .box = box }),
-            .data = data,
             .session = session,
             .logout_id = logout_id,
         };
@@ -68,7 +72,7 @@ pub const View = struct {
 
     fn logOut(self: *View) !void {
         self.session.logOut();
-        // leave the auth tab for the page it belongs to, where the web's
+        // leave the user tab for the page it belongs to, where the web's
         // /logout redirect also lands
         try self.session.navigate(self.session.data.current_page.pageRoot());
     }

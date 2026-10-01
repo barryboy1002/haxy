@@ -15,8 +15,6 @@ const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
 const new_user_tab_bottom_label = "user";
 
-pub const AuthTab = @import("./../AuthTab.zig");
-
 // null hides the title
 title: ?ui.Title,
 
@@ -95,12 +93,12 @@ pub const View = struct {
         const users_link = try ui.inPageTabLink(session, .{ .home_users = .{} }, current_tag == .home_users);
         const new_repo_link = try ui.inPageTabLink(session, .home_new_repo, current_tag == .home_new_repo);
         const new_user_link = try ui.inPageTabLink(session, .home_new_user, current_tag == .home_new_user);
-        const auth_link = try ui.inPageTabLink(session, .home_auth, current_tag == .home_auth);
+        const user_link = try ui.inPageTabLink(session, .home_user, current_tag == .home_user);
         const current_link: []const u8 = switch (current_tag) {
             .home_users => users_link,
             .home_new_repo => new_repo_link,
             .home_new_user => new_user_link,
-            .home_auth => auth_link,
+            .home_user => user_link,
             else => about_link,
         };
         var selected_tab: ?usize = null;
@@ -135,7 +133,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes new repo, new user, and auth to the right
+        // spacer pushes new repo, new user, and user to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -174,17 +172,19 @@ pub const View = struct {
             });
         }
 
-        // auth tab (login / logout)
+        // user tab
         {
-            var auth_tab = try AuthTab.View.init(allocator, session);
-            errdefer auth_tab.deinit(allocator);
-            auth_tab.text_box.getFocus().kind = .{ .custom = auth_link };
-            try tab_ids.put(allocator, auth_tab.getFocus().id, {});
-            if (std.mem.eql(u8, auth_link, current_link)) selected_tab = auth_tab.getFocus().id;
-            try tabs_box.children.put(allocator, auth_tab.getFocus().id, .{
-                .widget = .{ .auth_tab = auth_tab },
+            const label = ui.UserLogout.tabLabel(session);
+            var text_box = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = user_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (std.mem.eql(u8, user_link, current_link)) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = auth_tab.minWidth(), .height = null },
+                .min_size = .{ .width = label.len + 2, .height = null },
             });
         }
 
@@ -249,11 +249,6 @@ pub const View = struct {
         for (tabs_box.children.keys(), tabs_box.children.values()) |id, *child| {
             const tb: ?*wgt.TextBox = switch (child.widget) {
                 .text_box => |*x| x,
-                .auth_tab => |*at| blk: {
-                    // the label tracks login state per frame, so the width must too
-                    child.min_size = .{ .width = at.minWidth(), .height = null };
-                    break :blk &at.text_box;
-                },
                 else => null,
             };
             if (tb) |t| ui.widget.markSelected(t, selected_tab == id);

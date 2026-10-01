@@ -17,7 +17,6 @@ pub const Files = @import("./Repo/Files.zig");
 pub const Commits = @import("./Repo/Commits.zig");
 pub const Diff = @import("./Repo/Diff.zig");
 pub const Patches = @import("./Repo/Patches.zig");
-pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
 header: Header,
@@ -25,7 +24,6 @@ files: Files,
 commits: Commits,
 patch: Patches,
 diff: Diff,
-auth: Auth,
 quit: Quit,
 
 const Self = @This();
@@ -171,7 +169,6 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                     .path = diff_path,
                     .window = try Diff.render(.xit, repo_opts, io, arena.child_allocator, aa, fork_repo, if (diff_base) |*base| base else null, diff_head, diff_start, diff_path),
                 },
-                .auth = Auth.init(),
                 .quit = Quit.init(),
             };
         },
@@ -227,9 +224,9 @@ pub const View = struct {
                 try stack.children.put(allocator, new_user.getFocus().id, .{ .new_user = new_user });
             }
             if (session.data.host_kind == .server) {
-                var auth = try Auth.View.init(allocator, &data.auth, session);
-                errdefer auth.deinit(allocator);
-                try stack.children.put(allocator, auth.getFocus().id, .{ .home_auth = auth });
+                var user_view = try ui.UserLogout.initView(allocator, session);
+                errdefer user_view.deinit(allocator);
+                try stack.children.put(allocator, user_view.getFocus().id, user_view);
             }
             if (session.is_terminal) {
                 var quit = try Quit.View.init(allocator, session);

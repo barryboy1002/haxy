@@ -15,8 +15,6 @@ const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
 const new_user_tab_bottom_label = "user";
 
-pub const AuthTab = @import("./../AuthTab.zig");
-
 name: []const u8,
 title: ui.Title,
 
@@ -93,7 +91,7 @@ pub const View = struct {
 
         // every tab link is user-scoped so selecting one stays on this page —
         // switching its stack and updating the url — instead of navigating to
-        // the global new repo or auth pages. the "ai:" prefix makes each an
+        // the global new repo or user pages. the "ai:" prefix makes each an
         // in-page anchor: crossPageLink ignores it so a wasm click just switches
         // tabs (the page already holds every tab's content), while the href is
         // still followed with js off. allocated in the page arena so the focus
@@ -106,14 +104,14 @@ pub const View = struct {
         const forks_link = if (current_tag == .user_forks) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/forks", .{data.name});
         const new_repo_link = if (current_tag == .user_new_repo) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/new-repo", .{data.name});
         const new_user_link = if (current_tag == .user_new_user) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/new-user", .{data.name});
-        const auth_link = if (current_tag == .user_auth) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/auth", .{data.name});
+        const user_link = if (current_tag == .user_user) current_link else try std.fmt.allocPrint(aa, "ai:/user/{s}/user", .{data.name});
 
         // the tab matching the current page is focused initially; matching by
         // link (rather than position) keeps this robust to tab changes.
         const selected_link: []const u8 = switch (current_page) {
             .user_new_repo => new_repo_link,
             .user_new_user => new_user_link,
-            .user_auth => auth_link,
+            .user_user => user_link,
             .user_forks => forks_link,
             else => repos_link,
         };
@@ -149,7 +147,7 @@ pub const View = struct {
             });
         }
 
-        // spacer pushes new repo, new user, and auth to the right
+        // spacer pushes new repo, new user, and user to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);
             errdefer spacer.deinit(allocator);
@@ -188,18 +186,19 @@ pub const View = struct {
             });
         }
 
-        // auth tab (login / logout). AuthTab defaults to the global ai:/auth
-        // link; repoint its instance at this user's auth route so it stays local.
+        // user tab
         {
-            var auth_tab = try AuthTab.View.init(allocator, session);
-            errdefer auth_tab.deinit(allocator);
-            auth_tab.text_box.getFocus().kind = .{ .custom = auth_link };
-            try tab_ids.put(allocator, auth_tab.getFocus().id, {});
-            if (std.mem.eql(u8, auth_link, selected_link)) selected_tab = auth_tab.getFocus().id;
-            try tabs_box.children.put(allocator, auth_tab.getFocus().id, .{
-                .widget = .{ .auth_tab = auth_tab },
+            const label = ui.UserLogout.tabLabel(session);
+            var text_box = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = user_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (std.mem.eql(u8, user_link, selected_link)) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
                 .rect = null,
-                .min_size = .{ .width = auth_tab.minWidth(), .height = null },
+                .min_size = .{ .width = label.len + 2, .height = null },
             });
         }
 
@@ -264,11 +263,6 @@ pub const View = struct {
         for (tabs_box.children.keys(), tabs_box.children.values()) |id, *child| {
             const tb: ?*wgt.TextBox = switch (child.widget) {
                 .text_box => |*x| x,
-                .auth_tab => |*at| blk: {
-                    // the label tracks login state per frame, so the width must too
-                    child.min_size = .{ .width = at.minWidth(), .height = null };
-                    break :blk &at.text_box;
-                },
                 else => null,
             };
             if (tb) |t| ui.widget.markSelected(t, selected_tab == id);

@@ -13,13 +13,11 @@ const evt = @import("../event.zig");
 pub const About = @import("./Home/About.zig");
 pub const Users = @import("./Home/Users.zig");
 pub const Header = @import("./Home/Header.zig");
-pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
 header: Header,
 about: About,
 users: Users,
-auth: Auth,
 quit: Quit,
 
 const Self = @This();
@@ -36,7 +34,6 @@ pub fn init(
         .header = try Header.init(arena, about.title),
         .about = about,
         .users = try Users.init(arena, haxy_moment, users_route),
-        .auth = Auth.init(),
         .quit = Quit.init(),
     };
 }
@@ -88,9 +85,9 @@ pub const View = struct {
             }
 
             {
-                var auth_view = try Auth.View.init(allocator, &data.auth, session);
-                errdefer auth_view.deinit(allocator);
-                try stack.children.put(allocator, auth_view.getFocus().id, .{ .home_auth = auth_view });
+                var user_view = try ui.UserLogout.initView(allocator, session);
+                errdefer user_view.deinit(allocator);
+                try stack.children.put(allocator, user_view.getFocus().id, user_view);
             }
 
             if (session.is_terminal) {

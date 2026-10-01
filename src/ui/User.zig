@@ -14,7 +14,6 @@ const inp = @import("./input.zig");
 const fork = @import("../fork.zig");
 
 pub const Header = @import("./User/Header.zig");
-pub const Auth = @import("./Auth.zig");
 pub const Quit = @import("./Quit.zig");
 
 pub const page_size = 20; // how many repos one window of the repos tab shows
@@ -35,7 +34,6 @@ repos_search: ?[]const u8, // the name prefix the repos are narrowed to (decoded
 forks: []const ForkItem,
 forks_start: usize,
 forks_next_start: ?usize,
-auth: Auth,
 quit: Quit,
 
 const Self = @This();
@@ -171,7 +169,6 @@ pub fn init(
         .forks = forks.items,
         .forks_start = forks_start,
         .forks_next_start = forks_next_start,
-        .auth = Auth.init(),
         .quit = Quit.init(),
     };
 }
@@ -186,7 +183,7 @@ pub const View = struct {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
 
-        // build the header first so we can grab the repos-tab id for the auth
+        // build the header first so we can grab the repos-tab id for the user
         // view (it focuses there after login).
         {
             var header_view = try Header.View.init(allocator, &data.header, session);
@@ -247,9 +244,9 @@ pub const View = struct {
             }
 
             {
-                var auth_view = try Auth.View.init(allocator, &data.auth, session);
-                errdefer auth_view.deinit(allocator);
-                try stack.children.put(allocator, auth_view.getFocus().id, .{ .home_auth = auth_view });
+                var user_view = try ui.UserLogout.initView(allocator, session);
+                errdefer user_view.deinit(allocator);
+                try stack.children.put(allocator, user_view.getFocus().id, user_view);
             }
 
             if (session.is_terminal) {
