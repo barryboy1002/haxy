@@ -258,7 +258,7 @@ pub const View = struct {
         const tabs_box = &tabs_child.widget.box;
 
         // only the selected tab shows its border
-        const selected_tab = if (box.getFocus().child_id == self.tabs_id) tabs_box.getFocus().child_id else null;
+        const selected_tab = tabs_box.getFocus().child_id;
         var tabs_width: usize = 0;
         for (tabs_box.children.keys(), tabs_box.children.values()) |id, *child| {
             const tb: ?*wgt.TextBox = switch (child.widget) {

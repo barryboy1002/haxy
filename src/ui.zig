@@ -2583,6 +2583,7 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: Key, session: 
                     if (crossPageLink(root_focus, focus_id, session.data)) |route| {
                         return session.navigate(route);
                     }
+                    if (currentPageLink(root_focus, focus_id, session.data)) return;
                     if (rawLink(root_focus, focus_id)) |url| {
                         if (!mouse.ctrl) try requestRawLink(session, url);
                         return;
@@ -2672,6 +2673,13 @@ pub fn crossPageLink(root_focus: *Focus, focus_id: usize, data: Session.Data) ?R
     // links stay in-page.
     if (route.parent() != current.parent() or RoutablePage.repoPageChanged(route, current) or RoutablePage.forkPageChanged(route, current) or RoutablePage.homePageChanged(route, current) or RoutablePage.userPageChanged(route, current)) return route;
     return null;
+}
+
+// whether the `a:` focus target links to the page already shown, which a click
+// leaves alone rather than focusing
+pub fn currentPageLink(root_focus: *Focus, focus_id: usize, data: Session.Data) bool {
+    const route = pageLink(root_focus, focus_id, data, "a:") orelse return false;
+    return route.eql(data.current_page);
 }
 
 // the route carried by an `ai:` focus target, or null for any other target

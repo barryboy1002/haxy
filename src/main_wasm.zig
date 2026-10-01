@@ -161,6 +161,7 @@ fn onMouseClick(focus_id: usize) !void {
         _navigate(url.ptr, @intCast(url.len));
         return;
     }
+    if (ui.currentPageLink(root_ptr.getFocus(), focus_id, session.data)) return;
     try setFocus(focus_id);
 }
 

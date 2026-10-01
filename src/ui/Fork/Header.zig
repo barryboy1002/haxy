@@ -219,7 +219,7 @@ pub const View = struct {
         const tabs_child = self.tabsChild();
         const tabs_box = &tabs_child.widget.box;
 
-        const selected_tab = if (box.getFocus().child_id == self.tabs_id) tabs_box.getFocus().child_id else null;
+        const selected_tab = tabs_box.getFocus().child_id;
         var tabs_width: usize = 0;
         for (tabs_box.children.keys(), tabs_box.children.values()) |id, *child| {
             const text_box: ?*wgt.TextBox = switch (child.widget) {
