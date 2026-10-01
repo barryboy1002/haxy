@@ -2154,6 +2154,7 @@ pub const Session = struct {
     // does not navigate.
     next_page: ?RoutablePage = null,
     is_terminal: bool = false, // true on remote SSH and local TUI
+    color: bool = true, // false when NO_COLOR is set, which also hides the art
     // the terminal's reported default background, which the art blends toward
     terminal_background: ?Grid.Color.Rgb = null,
     // port the web UI is served on, for the TUI/SSH footer's "http://localhost:<port>..."
@@ -2422,6 +2423,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session, repo_may
     defer nav.deinit(allocator);
 
     var terminal = try term.Terminal.init(io, allocator);
+    terminal.render_state.no_color = !session.color;
     var terminal_live = true;
     defer if (terminal_live) terminal.deinit(io);
 
@@ -2465,6 +2467,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session, repo_may
                         return show_err;
                     };
                     terminal = try term.Terminal.init(io, allocator);
+                    terminal.render_state.no_color = !session.color;
                     terminal_live = true;
                     term.setActive(&terminal);
                 },

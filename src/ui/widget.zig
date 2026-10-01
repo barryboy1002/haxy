@@ -1735,6 +1735,7 @@ pub const AnsiBackground = struct {
         }, root_focus);
 
         const foreground = self.child.getGrid() orelse return;
+        if (!self.session.color) return;
         // terminals show the art only once they report a background to fade it toward
         const backdrop: ?Grid.Color.Rgb = if (self.session.is_terminal) self.session.terminal_background orelse return else null;
         self.art.content = self.session.data.ansi_art;

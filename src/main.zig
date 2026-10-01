@@ -15,6 +15,8 @@ pub const RunOpts = struct {
     // the user's global git config, used for the commit identity in local mode.
     // null by default so tests and the server paths never read it.
     global_config_path: ?[]const u8 = null,
+    // false when NO_COLOR is set, so the TUI draws without colors
+    color: bool = true,
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -48,6 +50,7 @@ pub fn main(init: std.process.Init) !u8 {
         .out = &stdout_writer.interface,
         .err = &stderr_writer.interface,
         .global_config_path = global_config_path,
+        .color = std.mem.eql(u8, environ_map.get("NO_COLOR") orelse "", ""),
     };
 
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
@@ -129,6 +132,7 @@ pub fn run(
                 .io = io,
                 .local = local,
                 .is_terminal = true,
+                .color = run_opts.color,
                 .data = .{
                     // the files root; local routes carry no identity
                     .current_page = .{ .repo_files = .{ .name = .{} } },

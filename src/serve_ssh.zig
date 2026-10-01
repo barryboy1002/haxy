@@ -39,8 +39,8 @@ pub const SessionHandler = struct {
     pub fn handleSession(self: *const SessionHandler, sess: *ssh.SessionCtx, request: ssh.Request) !void {
         serve_common.logError(sess.conn.io, self.err, "ssh session: kind={s} key={s}\n", .{ @tagName(request), sess.fingerprint });
         switch (request) {
-            .shell => |pty_maybe| {
-                const pty = pty_maybe orelse {
+            .shell => |shell| {
+                const pty = shell.pty orelse {
                     // a shell without a pty has no useful TUI to render; in
                     // openssh client terms this is `ssh -T host`. say so and
                     // exit non-zero.
@@ -49,7 +49,7 @@ pub const SessionHandler = struct {
                     return;
                 };
                 sess.exemptFromIdleTimeout();
-                try runTuiSession(self, sess, pty);
+                try runTuiSession(self, sess, pty, shell.color);
             },
             .exec => |exec| {
                 try runGitSession(self, sess, exec);
@@ -194,11 +194,11 @@ pub const Watchdog = struct {
     }
 };
 
-fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySize) !void {
+fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySize, color: bool) !void {
     // runTui owns the terminal, whose deinit restores the client's screen and
     // runs as the function unwinds — so any error it returns leaves the TUI torn
     // down and we can surface the failure on the restored screen before exiting.
-    runTui(handler, sess, pty) catch |tui_err| {
+    runTui(handler, sess, pty, color) catch |tui_err| {
         const err = sess.underlyingError(tui_err);
         serve_common.logError(sess.conn.io, handler.err, "ssh tui session failed: {s}\n", .{@errorName(err)});
         var buf: [256]u8 = undefined;
@@ -208,7 +208,7 @@ fn runTuiSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh
     };
 }
 
-fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySize) !void {
+fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySize, color: bool) !void {
     const allocator = sess.conn.allocator;
     const io = sess.conn.io;
 
@@ -229,6 +229,7 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
     defer repo.deinit(io, allocator);
     var ui_session = try ui.Session.init(&session_arena, &repo, .{});
     ui_session.is_terminal = true;
+    ui_session.color = color;
     ui_session.web_port = handler.wui_port;
     ui_session.data.git_http_port = handler.git_http_port;
     ui_session.data.git_ssh_port = handler.git_ssh_port;
@@ -252,6 +253,7 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
 
     // initial render — user sees the page immediately
     if (terminal_maybe) |*terminal| {
+        terminal.render_state.no_color = !color;
         try terminal.queryBackground();
         _ = try terminal.render(&nav.root);
     }
@@ -269,7 +271,9 @@ fn runTui(handler: *const SessionHandler, sess: *ssh.SessionCtx, pty: ssh.PtySiz
                 } else {
                     // the copyable text stays up until enter
                     if (std.mem.indexOfAny(u8, payload, "\r\n") == null) continue;
-                    terminal_maybe = try StreamTerminal.init(allocator, &session_writer.interface, terminal_size);
+                    var terminal = try StreamTerminal.init(allocator, &session_writer.interface, terminal_size);
+                    terminal.render_state.no_color = !color;
+                    terminal_maybe = terminal;
                 }
             },
             .resize => |sz| {

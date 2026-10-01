@@ -898,6 +898,7 @@ pub fn main(init: std.process.Init) !void {
         break :blk try ui.Session.init(&session_arena, &repo, .{ .user_id = &admin_user_id });
     };
     session.is_terminal = true;
+    session.color = std.mem.eql(u8, init.environ_map.get("NO_COLOR") orelse "", "");
     session.data.git_ssh_prefix = git_ssh_prefix;
 
     // start the server

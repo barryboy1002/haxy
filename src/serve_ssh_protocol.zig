@@ -301,8 +301,15 @@ pub const HostKey = struct {
 
 /// what the client wants to do on this channel.
 pub const Request = union(enum) {
-    shell: ?PtySize, // pty info if a pty-req arrived before the shell
+    shell: Shell,
     exec: Exec,
+
+    pub const Shell = struct {
+        /// pty info if a pty-req arrived before the shell
+        pty: ?PtySize,
+        /// false if a non-empty NO_COLOR env value arrived before the shell
+        color: bool,
+    };
 
     pub const Exec = struct {
         command: []const u8,
@@ -1892,9 +1899,11 @@ const Channel = struct {
     remote_window: u32, // bytes we may still send to peer before they adjust
     max_packet: u32, // max CHANNEL_DATA payload the peer accepts in one packet
     pty: ?PtySize = null,
-    // value of GIT_PROTOCOL, the one env variable we keep
+    // value of GIT_PROTOCOL, one of the two env variables we keep
     git_protocol_buf: [64]u8 = undefined,
     git_protocol_len: ?usize = null,
+    // false when NO_COLOR is set, the other env variable we keep
+    color: bool = true,
 };
 
 pub const PtySize = struct { width_cells: u16, height_cells: u16 };
@@ -2096,6 +2105,8 @@ fn handleChannelRequest(conn: *Conn, ch: *Channel, packet: []const u8) !?Request
         if (std.mem.eql(u8, name, "GIT_PROTOCOL") and value.len <= ch.git_protocol_buf.len) {
             @memcpy(ch.git_protocol_buf[0..value.len], value);
             ch.git_protocol_len = value.len;
+        } else if (std.mem.eql(u8, name, "NO_COLOR")) {
+            ch.color = value.len == 0;
         }
         try replyChannelRequest(conn, ch, want_reply, true);
         return null;
@@ -2112,7 +2123,7 @@ fn handleChannelRequest(conn: *Conn, ch: *Channel, packet: []const u8) !?Request
 
     if (std.mem.eql(u8, req_type, "shell")) {
         try replyChannelRequest(conn, ch, want_reply, true);
-        return .{ .shell = ch.pty };
+        return .{ .shell = .{ .pty = ch.pty, .color = ch.color } };
     }
 
     if (std.mem.eql(u8, req_type, "exec")) {
