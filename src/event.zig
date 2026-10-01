@@ -1949,6 +1949,42 @@ pub fn createRepo(
     return .{ .owner_id = owner_id.*, .repo_id = id_bytes };
 }
 
+// change the name, description, and read access of the repo named
+// `old_name` in its owner's user repo
+pub fn updateRepo(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    owner_id: *const [event_id_size]u8,
+    author: CommitAuthor,
+    old_name: []const u8,
+    name: []const u8,
+    description: []const u8,
+    read_access: Repo.Access,
+) !void {
+    try Repo.validateName(name);
+    var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return error.NotFound;
+    defer user_repo.deinit(io, allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const moment = (try userMoment(&user_repo)) orelse return error.NotFound;
+    const found = (try Repo.readByName(UserDB, user_repo_opts.hash, moment, &arena, old_name)) orelse return error.NotFound;
+    if (try Repo.readByName(UserDB, user_repo_opts.hash, moment, &arena, name)) |taken| {
+        if (!std.mem.eql(u8, &taken.event_id, &found.event_id)) return error.NameTaken;
+    }
+
+    var event = found.repo.event;
+    event.name = name;
+    event.description = description;
+    event.read_access = read_access;
+    try consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
+        .id = std.fmt.bytesToHex(found.event_id, .lower),
+        .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),
+        .author = author,
+        .event = .{ .repo = event },
+    }});
+}
+
 // create a user and their user repo, returning the new user's id
 pub fn createUser(
     io: std.Io,

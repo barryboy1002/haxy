@@ -296,6 +296,21 @@ pub const View = struct {
             });
         }
 
+        if (page.settings != null) {
+            const route = ui.RoutablePage.repoRepoRoute(identity) orelse return error.RouteTooLong;
+            var text_box = try wgt.TextBox.init(allocator, ui.Repo.Settings.tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = try ui.inPageTabLink(session, route, current_tag == .repo_repo) };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (current_tag == .repo_repo) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = 3, .height = null },
+            });
+        }
+
         // spacer pushes new repo, new user, and user to the right
         {
             var spacer = try ui.widget.Spacer.init(allocator);

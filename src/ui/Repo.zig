@@ -24,6 +24,7 @@ pub const Discussions = @import("./Repo/Discussions.zig");
 pub const Comment = @import("./Repo/Comment.zig");
 pub const Undo = @import("./Repo/Undo.zig");
 pub const Events = @import("./Repo/Events.zig");
+pub const Settings = @import("./Repo/Settings.zig");
 pub const Quit = @import("./Quit.zig");
 
 header: Header,
@@ -37,6 +38,7 @@ patches: Patches,
 discussions: Discussions,
 events: Events,
 undo: ?Undo = null,
+settings: ?Settings = null,
 quit: Quit,
 
 const Self = @This();
@@ -274,6 +276,8 @@ pub fn init(
     const undo_clear = route == .repo_undo and route.repo_undo.clear;
     // only xit repos have undo history, so it's read in their branch below
     var undo_data: ?Undo = null;
+    // only the owner sees the settings, which show the repo's hash kind
+    var settings: ?Settings = null;
     const files, const changes, const refs, var issues, var patches, var discussions, const events = blk: {
         read: {
             const io = session.io orelse break :read;
@@ -290,11 +294,18 @@ pub fn init(
                                 try evt.consume(.local, .repo, repo_kind, opened.self_repo_opts, io, gpa, opened, evt.events_ref, &.{});
                                 try pch.refreshBranches(.local, repo_kind, opened.self_repo_opts, io, gpa, opened, null, null);
                             }
+                            if (session.data.host_kind == .server and handle.canUndo()) settings = .{
+                                .identity = try arena.allocator().dupe(u8, repo_identity.identity),
+                                .name = repo.event.name,
+                                .description = repo.event.description,
+                                .access = repo.event.read_access,
+                                .hash_kind = opened.self_repo_opts.hash,
+                            };
                             // tabs switch in-page, so every tab's data is read here
                             if (repo_kind == .xit and handle.canWrite()) {
                                 undo_data = Undo.init(opened.self_repo_opts, arena, opened, session.haxy_moment, repo_identity.identity, undo_index, handle) catch |err| switch (err) {
                                     error.OutOfMemory => return err,
-                                    else => .{ .identity = repo_identity.identity, .handle = handle, .failure = @errorName(err) },
+                                    else => .{ .identity = try arena.allocator().dupe(u8, repo_identity.identity), .handle = handle, .failure = @errorName(err) },
                                 };
                             }
                             // a merge: route stands for the log of what the merge brought in
@@ -341,6 +352,7 @@ pub fn init(
         };
     };
     if (route == .repo_undo and undo_data == null) return error.NotFound;
+    if (route == .repo_repo and settings == null) return error.NotFound;
     if (undo_data) |*undo| undo.clear = undo_clear;
     issues.repo_source = source;
     patches.repo_source = source;
@@ -360,6 +372,7 @@ pub fn init(
         .discussions = discussions,
         .events = events,
         .undo = undo_data,
+        .settings = settings,
         .quit = Quit.init(),
     };
 }
@@ -444,6 +457,12 @@ pub const View = struct {
                 var undo_view = try Undo.View.init(allocator, undo, session);
                 errdefer undo_view.deinit(allocator);
                 try stack.children.put(allocator, undo_view.getFocus().id, .{ .repo_undo = undo_view });
+            }
+
+            if (data.settings) |*settings| {
+                var settings_view = try Settings.View.init(allocator, settings, session);
+                errdefer settings_view.deinit(allocator);
+                try stack.children.put(allocator, settings_view.getFocus().id, .{ .repo_settings = settings_view });
             }
 
             // the header shows new repo with a login, and new user without one

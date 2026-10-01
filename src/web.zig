@@ -141,7 +141,7 @@ fn handleRequest(
         switch (host) {
             .server => |server| {
                 // "repo/new" and "user/new" come before "new", which would claim them
-                const PostRoute = enum { login, logout, @"repo/new", @"user/new", new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
+                const PostRoute = enum { login, logout, @"repo/new", @"user/new", repo, new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
                 inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
                     const suffix = "/" ++ field.name;
                     if (std.mem.endsWith(u8, path, suffix)) {
@@ -151,6 +151,7 @@ fn handleRequest(
                             .logout => handleLogout(request, base, server.session_store),
                             .@"repo/new" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
                             .@"user/new" => handleUserNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
+                            .repo => handleRepoSettings(io, request, allocator, path, base, host),
                             .new => handleNew(io, request, allocator, base, host),
                             .edit => handleEdit(io, request, allocator, base, host),
                             .remove => handleRemove(io, request, allocator, base, host),
@@ -645,6 +646,53 @@ fn handleRepoNew(
     try request.respond("", .{
         .status = .see_other,
         .extra_headers = &.{.{ .name = "location", .value = location }},
+    });
+}
+
+// change the repo `repo_base` names as its owner, then redirect to its
+// settings under its new name. a failure goes back to the settings page.
+fn handleRepoSettings(
+    io: std.Io,
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    form_location: []const u8,
+    repo_base: []const u8,
+    host: Host,
+) !void {
+    const server = switch (host) {
+        .server => |server| server,
+        .local => return respondRepoNotFound(request),
+    };
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const actor = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner)) orelse return;
+
+    const body = try readFormBody(request, allocator);
+    defer allocator.free(body);
+    const name = (try parseFormField(allocator, body, "name")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(name);
+    const description = (try parseFormField(allocator, body, "description")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(description);
+    const access_value = (try parseFormField(allocator, body, "access")) orelse try allocator.dupe(u8, "");
+    defer allocator.free(access_value);
+    const access = std.meta.stringToEnum(evt.Repo.Access, access_value) orelse return request.respond("invalid access", .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }} });
+
+    const repo_prefix = "/repo/";
+    const route = ui.Repo.Settings.update(io, allocator, server.users_dir, actor, repo_base[repo_prefix.len..], name, description, access) catch |err| switch (err) {
+        error.NotFound => return respondRepoNotFound(request),
+        else => {
+            const failure = ui.Session.FormFeedback.RepoFailure.fromError(err) orelse return err;
+            return respondFormFailure(request, allocator, server.session_store, form_location, .{ .repo_settings = .{ .failure = failure, .fields = .{
+                .name = name,
+                .description = description,
+                .access = access,
+            } } });
+        },
+    };
+
+    try request.respond("", .{
+        .status = .see_other,
+        .extra_headers = &.{.{ .name = "location", .value = try route.toUrl(&arena) }},
     });
 }
 
