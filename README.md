@@ -60,7 +60,7 @@ This will launch a server with fake data that it stores in the `temp-try` direct
 A fun test is to push Haxy itself to the server. You can do that by running the following command, which will push it to the server using SSH:
 
 ```
-GIT_SSH_COMMAND='ssh -p 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i temp-try/key' git push localhost:admin/haxy HEAD:master
+GIT_SSH_COMMAND='ssh -p 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i temp-try/key' git push localhost:admin:haxy HEAD:master
 ```
 
 After that, go to the admin user in the UI and you'll see Haxy's repo page: http://localhost:8000/repo/admin/haxy/files/branch:master
