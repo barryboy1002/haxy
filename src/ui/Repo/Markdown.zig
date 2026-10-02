@@ -25,7 +25,7 @@ pub const View = struct {
             .data = data,
             .dir = if (std.mem.lastIndexOfScalar(u8, file_path, '/')) |slash| file_path[0..slash] else "",
             .page_arena = page_arena,
-            .fonts = !hasNonAsciiHeading(doc.blocks),
+            .fonts = !hasUncoveredHeading(doc.blocks),
         };
         var box = try builder.blocksBox(doc.blocks, true);
         errdefer box.deinit(allocator);
@@ -246,16 +246,16 @@ const Builder = struct {
     }
 };
 
-// whether any heading, however nested, has non-ascii text, in which case
-// none use the title fonts so they all look alike
-fn hasNonAsciiHeading(blocks: []const md.Block) bool {
+// whether any heading the title fonts would draw, however nested, has a char
+// they lack, in which case none use them so they all look alike
+fn hasUncoveredHeading(blocks: []const md.Block) bool {
     for (blocks) |block| switch (block) {
-        .heading => |heading| for (heading.inlines) |run| {
-            for (run.text) |c| if (!std.ascii.isAscii(c)) return true;
+        .heading => |heading| if (heading.level <= 2) for (heading.inlines) |run| {
+            if (!ui.Title.covers(run.text) or !ui.SubTitle.covers(run.text)) return true;
         },
-        .quote => |inner| if (hasNonAsciiHeading(inner)) return true,
+        .quote => |inner| if (hasUncoveredHeading(inner)) return true,
         .list => |list| for (list.items) |item| {
-            if (hasNonAsciiHeading(item.blocks)) return true;
+            if (hasUncoveredHeading(item.blocks)) return true;
         },
         else => {},
     };
@@ -279,7 +279,7 @@ fn put(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), widget: ui.Widget
 }
 
 // a heading in the title font when it fits, else the subtitle font, else
-// bold text. the fonts only cover plain text of their own glyphs.
+// bold text.
 pub const Heading = struct {
     focus: *Focus,
     text: RichText,
@@ -305,7 +305,7 @@ pub const Heading = struct {
             has_links = has_links or span.link.len > 0;
         }
         const text = std.mem.trim(u8, plain.items, " ");
-        if (!fonts or level > 2 or has_links or text.len == 0 or !ui.Title.covers(text) or !ui.SubTitle.covers(text)) return self;
+        if (!fonts or level > 2 or has_links or text.len == 0) return self;
 
         if (level == 1) {
             const title = try ui.Title.init(page_arena, text, .solid);
