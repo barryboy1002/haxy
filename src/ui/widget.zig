@@ -1824,25 +1824,6 @@ pub const AnsiBackground = struct {
         return .{ .rgb = .{ .r = snap(v.r), .g = snap(v.g), .b = snap(v.b) } };
     }
 
-    fn applyArtBackground(dst: *Grid.Cell, src: Grid.Cell) void {
-        const background_maybe = sgrSafe(src.style.bg orelse src.style.fg);
-        dst.style.bg = background_maybe;
-        // change unstyled text to contrast with the art behind it
-        if (dst.style.fg == null) {
-            if (artRgb(background_maybe)) |v| {
-                // use near-black and near-white, which is easier on the eyes
-                // while retaining high contrast
-                const luminance = (@as(u32, v.r) * 299 +
-                    @as(u32, v.g) * 587 +
-                    @as(u32, v.b) * 114) / 1000;
-                dst.style.fg = if (luminance >= 128)
-                    .{ .rgb = .{ .r = 16, .g = 16, .b = 16 } }
-                else
-                    .{ .rgb = .{ .r = 240, .g = 240, .b = 240 } };
-            }
-        }
-    }
-
     // composites ANSI art behind a foreground grid
     fn artBehind(allocator: std.mem.Allocator, foreground: Grid, art_grid: Grid) !Grid {
         var out = try Grid.initFromGrid(allocator, foreground, foreground.size, 0, 0);
@@ -1863,8 +1844,9 @@ pub const AnsiBackground = struct {
                     dst.style.bg = sgrSafe(dst.style.bg);
                     try out.setRune(anchor_x + x, y, src.rune);
                 } else {
-                    applyArtBackground(dst, src);
-                    if (next_dst) |next| applyArtBackground(next, src);
+                    const art_bg = sgrSafe(src.style.bg orelse src.style.fg);
+                    dst.style.bg = art_bg;
+                    if (next_dst) |next| next.style.bg = art_bg;
                 }
             }
         }
