@@ -295,7 +295,11 @@ pub const Heading = struct {
             .text = undefined,
         };
         errdefer self.focus.destroy(allocator);
-        self.text = try RichText.init(allocator, spans);
+        // the bold fallback leads with the level's #s, so levels stay apart
+        const marked = try page_arena.allocator().alloc(RichText.Span, spans.len + 1);
+        marked[0] = .{ .text = try std.fmt.allocPrint(page_arena.allocator(), "{s} ", .{"######"[0..level]}), .style = .{ .bold = true } };
+        @memcpy(marked[1..], spans);
+        self.text = try RichText.init(allocator, marked);
         errdefer self.text.deinit(allocator);
 
         var plain: std.ArrayList(u8) = .empty;
