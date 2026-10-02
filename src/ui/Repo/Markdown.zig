@@ -278,29 +278,30 @@ fn put(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), widget: ui.Widget
     try box.children.put(allocator, owned.getFocus().id, .{ .widget = owned, .rect = null, .min_size = null });
 }
 
-// a heading in the title font when it fits, else the subtitle font, else
-// bold text.
+// a heading in its level's title font, word-wrapped to the width, or bold
+// text when there's no font for it.
 pub const Heading = struct {
     focus: *Focus,
     text: RichText,
-    title: ?ui.Title.View = null,
-    title_width: usize = 0,
-    sub_title: ?ui.SubTitle.View = null,
-    sub_title_width: usize = 0,
-    shown: enum { title, sub_title, text } = .text,
+    // the font this heading draws in, if any, and the text it draws
+    font: ?enum { title, sub_title } = null,
+    plain: []const u8 = "",
+    font_box: wgt.TextBox,
 
     fn init(allocator: std.mem.Allocator, page_arena: *std.heap.ArenaAllocator, level: u3, spans: []const RichText.Span, fonts: bool) !Heading {
-        var self: Heading = .{
-            .focus = try Focus.create(allocator, .container),
-            .text = undefined,
-        };
-        errdefer self.focus.destroy(allocator);
+        const focus = try Focus.create(allocator, .container);
+        errdefer focus.destroy(allocator);
+
         // the bold fallback leads with the level's #s, so levels stay apart
         const marked = try page_arena.allocator().alloc(RichText.Span, spans.len + 1);
         marked[0] = .{ .text = try std.fmt.allocPrint(page_arena.allocator(), "{s} ", .{"######"[0..level]}), .style = .{ .bold = true } };
         @memcpy(marked[1..], spans);
-        self.text = try RichText.init(allocator, marked);
-        errdefer self.text.deinit(allocator);
+        var text = try RichText.init(allocator, marked);
+        errdefer text.deinit(allocator);
+
+        var font_box = try wgt.TextBox.init(allocator, "", .{ .border_style = null, .wrap_kind = .none });
+        errdefer font_box.deinit(allocator);
+        var self: Heading = .{ .focus = focus, .text = text, .font_box = font_box };
 
         var plain: std.ArrayList(u8) = .empty;
         var has_links = false;
@@ -308,43 +309,56 @@ pub const Heading = struct {
             try plain.appendSlice(page_arena.allocator(), span.text);
             has_links = has_links or span.link.len > 0;
         }
-        const text = std.mem.trim(u8, plain.items, " ");
-        if (!fonts or level > 2 or has_links or text.len == 0) return self;
-
-        if (level == 1) {
-            const title = try ui.Title.init(page_arena, text, .solid);
-            self.title_width = try title.width();
-            self.title = try ui.Title.View.init(allocator, &title);
-        }
-        errdefer if (self.title) |*title| title.deinit(allocator);
-        const sub_title = try ui.SubTitle.init(page_arena, text);
-        self.sub_title_width = try sub_title.width();
-        self.sub_title = try ui.SubTitle.View.init(allocator, &sub_title);
+        self.plain = std.mem.trim(u8, plain.items, " ");
+        if (fonts and level <= 2 and !has_links and self.plain.len > 0) self.font = if (level == 1) .title else .sub_title;
         return self;
     }
 
     pub fn deinit(self: *Heading, allocator: std.mem.Allocator) void {
         self.focus.destroy(allocator);
         self.text.deinit(allocator);
-        if (self.title) |*title| title.deinit(allocator);
-        if (self.sub_title) |*sub_title| sub_title.deinit(allocator);
+        self.font_box.deinit(allocator);
     }
 
     pub fn build(self: *Heading, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
         self.focus.clear();
-        const max_width = constraint.max_size.width orelse std.math.maxInt(usize);
-        self.shown = if (self.title != null and self.title_width <= max_width)
-            .title
-        else if (self.sub_title != null and self.sub_title_width <= max_width)
-            .sub_title
-        else
-            .text;
-        switch (self.shown) {
-            .title => try self.buildShown(allocator, constraint, root_focus, if (self.title) |*title| title else unreachable),
-            .sub_title => try self.buildShown(allocator, constraint, root_focus, if (self.sub_title) |*sub_title| sub_title else unreachable),
-            .text => try self.buildShown(allocator, constraint, root_focus, &self.text),
+        if (try self.wrapFont(allocator, constraint.max_size.width)) {
+            try self.buildShown(allocator, constraint, root_focus, &self.font_box);
+        } else {
+            try self.buildShown(allocator, constraint, root_focus, &self.text);
         }
+    }
+
+    // fill the font box with the heading wrapped at `max_width`, or return
+    // false when there's no font
+    fn wrapFont(self: *Heading, allocator: std.mem.Allocator, max_width: ?usize) !bool {
+        const font = self.font orelse return false;
+        // a glyph and the gap after it, so n glyphs take n * char_width - 1 columns
+        const char_width: usize = if (font == .title) 4 else 3;
+        const max_chars = if (max_width) |w| (w + 1) / char_width else null;
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const aa = arena.allocator();
+        // the fonts only cover ascii, so each byte is one char
+        const chars = try aa.alloc(u21, self.plain.len);
+        for (self.plain, chars) |c, *char| char.* = c;
+        var lines: std.ArrayList(wgt.Line) = .empty;
+        try wgt.wrapLines(aa, &lines, chars, .word, max_chars);
+
+        // a blank row between lines keeps the glyphs from touching
+        var out: std.ArrayList(u8) = .empty;
+        for (lines.items, 0..) |line, i| {
+            if (i > 0) try out.appendSlice(aa, "\n\n");
+            const text = std.mem.trimEnd(u8, self.plain[line.start..line.end], " ");
+            try out.appendSlice(aa, switch (font) {
+                .title => (try ui.Title.init(&arena, text, .solid)).content,
+                .sub_title => (try ui.SubTitle.init(&arena, text)).content,
+            });
+        }
+        try self.font_box.setContent(allocator, out.items);
+        return true;
     }
 
     fn buildShown(self: *Heading, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus, widget: anytype) !void {
@@ -362,16 +376,12 @@ pub const Heading = struct {
 
     pub fn clearGrid(self: *Heading) void {
         self.text.clearGrid();
-        if (self.title) |*title| title.clearGrid();
-        if (self.sub_title) |*sub_title| sub_title.clearGrid();
+        self.font_box.clearGrid();
     }
 
     pub fn getGrid(self: Heading) ?Grid {
-        return switch (self.shown) {
-            .title => if (self.title) |title| title.getGrid() else null,
-            .sub_title => if (self.sub_title) |sub_title| sub_title.getGrid() else null,
-            .text => self.text.getGrid(),
-        };
+        // only the one last built has a grid
+        return self.font_box.getGrid() orelse self.text.getGrid();
     }
 
     pub fn getFocus(self: *Heading) *Focus {

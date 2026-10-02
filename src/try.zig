@@ -355,9 +355,9 @@ pub fn main(init: std.process.Init) !void {
                     \\any significant changes before submitting a pull request.
                     \\See the docs under `docs/dev` for more details.
                     \\
-                    \\## A Heading Far Too Long To Fit In The Subtitle Font Within A Pane
+                    \\## A Heading Too Long To Fit On One Line In The Subtitle Font
                     \\
-                    \\Long headings fall back to bold text.
+                    \\Long headings wrap onto more lines in their font.
                     \\
                     \\## License
                     \\
