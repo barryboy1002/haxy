@@ -39,11 +39,7 @@ pub const View = struct {
     session: *ui.Session,
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        const aa = session.page_arena.allocator();
-        var lines: std.ArrayList([]const u8) = .empty;
-        var it = std.mem.splitScalar(u8, data.text, '\n');
-        while (it.next()) |line| try lines.append(aa, line);
-        const doc = try md.parse(aa, lines.items);
+        const doc = try md.parseText(session.page_arena.allocator(), data.text);
 
         var scroll = blk: {
             var markdown = try Markdown.View.init(allocator, doc, null, evt.admin_about_path, session.page_arena);
@@ -83,7 +79,7 @@ pub const View = struct {
                 .scroll => |dir| sc.y += if (dir == .up) -5 else 5,
                 else => {},
             },
-            .tab, .back_tab => try self.markdownView().stepLink(allocator, root_focus, sc, key == .tab),
+            .tab, .back_tab => try self.markdownView().stepLink(allocator, root_focus, sc, 0, 0, key == .tab),
             else => {},
         }
         sc.clampToContent();

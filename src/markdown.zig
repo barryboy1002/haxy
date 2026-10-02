@@ -47,6 +47,14 @@ pub fn parse(arena: std.mem.Allocator, lines: []const []const u8) !Document {
     return .{ .blocks = try parser.parseBlocks(expanded) };
 }
 
+// parse, for text not yet split into lines.
+pub fn parseText(arena: std.mem.Allocator, text: []const u8) !Document {
+    var lines: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| try lines.append(arena, line);
+    return parse(arena, lines.items);
+}
+
 // how deeply quotes and lists nest
 const max_depth = 16;
 // how deeply parens nest in an inline link's destination

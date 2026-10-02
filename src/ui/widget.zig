@@ -51,6 +51,7 @@ pub const Widget = union(enum) {
     markdown: ui.Repo.Markdown.View,
     markdown_heading: ui.Repo.Markdown.Heading,
     markdown_gutter: ui.Repo.Markdown.Gutter,
+    markdown_frame: ui.Repo.Markdown.Frame,
     repo_commits: ui.Repo.Commits.View,
     diff_view: ui.Repo.Diff.View,
     repo_refs: ui.Repo.Refs.View,

@@ -18,6 +18,7 @@ const srch_thrd = @import("../../search_thread.zig");
 const diff3 = @import("../../diff3.zig");
 const Comment = @import("../Repo/Comment.zig");
 const Attachment = @import("../Repo/Attachment.zig");
+const Markdown = @import("../Repo/Markdown.zig");
 
 const Widget = widget.Widget;
 const WordFlow = widget.WordFlow;
@@ -864,20 +865,13 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 "(no description)"
             else
                 whole;
-            var description = try wgt.TextBox.init(allocator, shown, .{
-                .border_style = .single,
-                .round_corners = true,
-                .wrap_kind = .word,
-                .label = " description ",
-                .bottom_label = if (preview_end != null) " click or press enter to see more " else "",
-            });
+            var description = try Markdown.Frame.init(allocator, shown, " description ", if (preview_end != null) " click or press enter to see more " else "", self.session.page_arena);
             errdefer description.deinit(allocator);
-            description.getFocus().mode = .all;
             if (preview_end != null) {
                 const route = ui.RoutablePage.repoThreadDescriptionRoute(kind, self.data.identity, entry.id) orelse return error.RouteTooLong;
-                description.getFocus().kind = .{ .custom = try std.fmt.allocPrint(self.session.page_arena.allocator(), "a:{s}", .{try route.toUrl(self.session.page_arena)}) };
+                description.body().kind = .{ .custom = try std.fmt.allocPrint(self.session.page_arena.allocator(), "a:{s}", .{try route.toUrl(self.session.page_arena)}) };
             }
-            try inner_box.children.put(allocator, description.getFocus().id, .{ .widget = .{ .text_box = description }, .rect = null, .min_size = null });
+            try inner_box.children.put(allocator, description.getFocus().id, .{ .widget = .{ .markdown_frame = description }, .rect = null, .min_size = null });
             self.description_id = description.getFocus().id;
 
             if (!supports_drafts or !entryDraft(entry)) {
@@ -926,6 +920,11 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 .page_down => self.pageDetail(root_focus, 10),
                 .home => self.jump(root_focus, false),
                 .end => self.jump(root_focus, true),
+                // tab steps between the links of a focused description or
+                // comment; the web leaves it to the browser
+                .tab, .back_tab => if (self.session.is_terminal) if (self.focusedChild(root_focus)) |index| if (self.focusedFrame(index)) |frame| {
+                    try frame.frame.stepLink(allocator, root_focus, &self.scroll, frame.x, frame.y, key == .tab);
+                },
                 else => {
                     const entry = self.entry orelse return self.exit;
                     if (self.data.comment_page != null and std.mem.eql(u8, entry.id, self.data.selected_id)) {
@@ -1134,6 +1133,22 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 return true;
             }
             return false;
+        }
+
+        // the markdown frame focused in child `child_index`, placed in the scroll's
+        // content
+        fn focusedFrame(self: *This, child_index: usize) ?struct { frame: *Markdown.Frame, x: isize, y: isize } {
+            const child = &self.inner().children.values()[child_index];
+            const rect = child.rect orelse return null;
+            switch (child.widget) {
+                .markdown_frame => |*frame| return .{ .frame = frame, .x = rect.x, .y = rect.y },
+                .repo_comment => |*comment| {
+                    if (!comment.bodyFocused()) return null;
+                    const row = comment.rowRect(true) orelse return null;
+                    return .{ .frame = comment.body(), .x = rect.x + row.x, .y = rect.y + row.y };
+                },
+                else => return null,
+            }
         }
 
         fn focusedChild(self: *This, root_focus: *Focus) ?usize {
@@ -1808,7 +1823,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             }
 
             {
-                var description = try wgt.TextInput.init(allocator, .{ .label = " description ", .name = "description", .visible_width = null, .round_corners = true, .render_content = session.is_terminal, .multiline = true, .scroll = .{ .fill = true } });
+                var description = try wgt.TextInput.init(allocator, .{ .label = " description (markdown supported) ", .name = "description", .visible_width = null, .round_corners = true, .render_content = session.is_terminal, .multiline = true, .scroll = .{ .fill = true } });
                 errdefer description.deinit(allocator);
                 description.getFocus().mode = .all;
                 if (saved_fields) |saved|
@@ -1854,7 +1869,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
 
             {
                 var body = try wgt.TextInput.init(allocator, .{
-                    .label = " comment ",
+                    .label = " comment (markdown supported) ",
                     .name = "body",
                     .visible_width = null,
                     .round_corners = true,

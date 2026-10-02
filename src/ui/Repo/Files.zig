@@ -869,7 +869,7 @@ pub const View = struct {
             },
             // step between the rendered markdown's links; the web leaves tab to the browser
             .tab, .back_tab => if (on_content and self.session.is_terminal) if (self.markdownView()) |view| {
-                try view.stepLink(allocator, root_focus, sc, key == .tab);
+                try view.stepLink(allocator, root_focus, sc, 0, 0, key == .tab);
             },
             else => {},
         }

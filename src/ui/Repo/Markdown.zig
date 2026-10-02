@@ -73,8 +73,9 @@ pub const View = struct {
 
     // focus the next or previous link in document order, scrolling it into
     // view; from the body, start at the first link in view. stepping past
-    // either end returns to the body.
-    pub fn stepLink(self: *View, allocator: std.mem.Allocator, root_focus: *Focus, scroll: *wgt.Scroll(ui.Widget), forward: bool) !void {
+    // either end returns to the body. `x` and `y` place the view in `scroll`'s
+    // content.
+    pub fn stepLink(self: *View, allocator: std.mem.Allocator, root_focus: *Focus, scroll: *wgt.Scroll(ui.Widget), x: isize, y: isize, forward: bool) !void {
         var stops: std.ArrayList(usize) = .empty;
         defer stops.deinit(allocator);
         try collectStops(allocator, &self.box, self.box.getFocus(), &stops);
@@ -84,14 +85,15 @@ pub const View = struct {
         const target: ?usize = if (current) |c|
             (if (forward) (if (c + 1 < stops.items.len) c + 1 else null) else (if (c > 0) c - 1 else null))
         else entry: {
-            const top: usize = @intCast(@max(scroll.y, 0));
+            // the visible rows, in the view's coordinates
+            const top = @max(scroll.y, 0) - y;
+            const bottom = if (scroll.grid) |g| top + @as(isize, @intCast(g.size.height - scroll.bar_h)) else std.math.maxInt(isize);
             if (forward) {
                 for (stops.items, 0..) |id, i| {
                     if ((children.get(id) orelse unreachable).rect.y >= top) break :entry i;
                 }
                 break :entry null;
             }
-            const bottom: usize = if (scroll.grid) |g| top + g.size.height - scroll.bar_h else std.math.maxInt(usize);
             var i = stops.items.len;
             while (i > 0) {
                 i -= 1;
@@ -103,7 +105,68 @@ pub const View = struct {
         const id = stops.items[target orelse return root_focus.setFocus(self.body.id)];
         root_focus.setFocus(id);
         const rect = (children.get(id) orelse unreachable).rect;
-        scroll.scrollToRect(.{ .x = @intCast(rect.x), .y = @intCast(rect.y), .size = rect.size });
+        scroll.scrollToRect(.{ .x = x + @as(isize, @intCast(rect.x)), .y = y + @as(isize, @intCast(rect.y)), .size = rect.size });
+    }
+};
+
+// word-wrapped markdown in a rounded border that turns double while focus is inside
+pub const Frame = struct {
+    box: wgt.Box(ui.Widget),
+
+    pub fn init(allocator: std.mem.Allocator, text: []const u8, label: []const u8, bottom_label: []const u8, page_arena: *std.heap.ArenaAllocator) !Frame {
+        const doc = try md.parseText(page_arena.allocator(), text);
+
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .single, .round_corners = true, .direction = .vert, .label = label, .bottom_label = bottom_label });
+        errdefer box.deinit(allocator);
+        var markdown = try View.init(allocator, doc, null, "", page_arena);
+        errdefer markdown.deinit(allocator);
+        try box.children.put(allocator, markdown.getFocus().id, .{ .widget = .{ .markdown = markdown }, .rect = null, .min_size = null });
+        box.getFocus().child_id = markdown.getFocus().id;
+        return .{ .box = box };
+    }
+
+    pub fn deinit(self: *Frame, allocator: std.mem.Allocator) void {
+        self.box.deinit(allocator);
+    }
+
+    pub fn build(self: *Frame, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
+        const focused = if (root_focus.grandchild_id) |id| self.markdownView().owns(id) else false;
+        self.box.options.border_style = if (focused) .double else .single;
+        try self.box.build(allocator, constraint, root_focus);
+    }
+
+    pub fn input(self: *Frame, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
+        _ = self;
+        _ = allocator;
+        _ = key;
+        _ = root_focus;
+    }
+
+    pub fn clearGrid(self: *Frame) void {
+        self.box.clearGrid();
+    }
+
+    pub fn getGrid(self: Frame) ?Grid {
+        return self.box.getGrid();
+    }
+
+    pub fn getFocus(self: *Frame) *Focus {
+        return self.box.getFocus();
+    }
+
+    // step between the links, `x` and `y` placing the frame in `scroll`'s content
+    pub fn stepLink(self: *Frame, allocator: std.mem.Allocator, root_focus: *Focus, scroll: *wgt.Scroll(ui.Widget), x: isize, y: isize, forward: bool) !void {
+        // the view sits inside the border
+        try self.markdownView().stepLink(allocator, root_focus, scroll, x + 1, y + 1, forward);
+    }
+
+    // where focus rests off the links
+    pub fn body(self: *Frame) *Focus {
+        return self.markdownView().body;
+    }
+
+    fn markdownView(self: *Frame) *View {
+        return &self.box.children.values()[0].widget.markdown;
     }
 };
 

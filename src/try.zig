@@ -475,15 +475,15 @@ pub fn main(init: std.process.Init) !void {
 
             // the timestamps issue's description, in paragraphs, so the
             // seeded conflict below can insert and delete among them
-            const tz_p1 = "All timestamps in the activity feed render in UTC regardless of the system timezone.";
-            const tz_p2 = "The tooltip on each entry repeats the same UTC value, so there is no way to see the local time without converting by hand.";
-            const tz_p3 = "A quick survey of other clients shows every one of them rendering local time by default.";
-            const tz_p4 = "Convert to local time and include the offset in tooltips.";
+            const tz_p1 = "All timestamps in the activity feed render in `UTC` regardless of the system timezone.";
+            const tz_p2 = "The tooltip on each entry repeats the same UTC value, so there is *no way* to see the local time without converting by hand.";
+            const tz_p3 = "A quick survey of [other clients](https://github.com/xit-vcs/haxy) shows every one of them rendering local time by default.";
+            const tz_p4 = "Convert to local time and include the **offset** in tooltips.";
 
             // the sync issue's description, in paragraphs, so each side of its
             // seeded conflict can rework a different one
-            const sync_p1 = "The sync engine only has unit tests with mocked transports.";
-            const sync_p2 = "Failures seen in production involve reconnects and partial writes, which the mocks can't reproduce.";
+            const sync_p1 = "The sync engine only has *unit tests* with mocked transports.";
+            const sync_p2 = "Failures seen in production involve reconnects and **partial writes**, which the mocks can't reproduce.";
             const sync_p3 = "Add end-to-end tests that run two instances against a real local server.";
 
             // seed issues so every repo's issue tracker has content
@@ -495,115 +495,115 @@ pub fn main(init: std.process.Init) !void {
             }{
                 .{
                     .title = "Crash on startup when config file is missing",
-                    .description = "Running the program without a config file present dereferences a null pointer and segfaults. Fall back to the built-in defaults and log a warning instead.",
+                    .description = "Running the program without a `config.toml` present dereferences a null pointer and segfaults. Fall back to the built-in defaults and log a **warning** instead.",
                     .labels = "bug priority-high crash",
                 },
                 .{
                     .title = "Support dark mode in the settings panel",
-                    .description = "The settings panel is always rendered with the light palette even when the rest of the app is in dark mode. Read the active theme and pick colors accordingly.",
+                    .description = "The settings panel is *always* rendered with the light palette even when the rest of the app is in dark mode. Read the active theme and pick colors accordingly.",
                     .labels = "enhancement ui theme",
                 },
                 .{
                     .title = "Memory leak when reconnecting after network failure",
-                    .description = "Each reconnect allocates a new connection state without freeing the previous one. After a flaky network session, memory usage grows by several megabytes per hour.",
+                    .description = "Each reconnect allocates a new connection state without freeing the previous one.\n\n> After a flaky network session, memory usage grows by several megabytes per hour.",
                     .labels = "bug memory networking",
                     .status = .closed,
                 },
                 .{
                     .title = "Document the plugin API",
-                    .description = "The plugin interface has no documentation beyond the header comments. Add a guide covering the lifecycle hooks, the event callbacks, and a minimal working plugin.",
+                    .description = "The plugin interface has no documentation beyond the header comments. Add a guide covering:\n\n- the lifecycle hooks\n- the event callbacks\n- a minimal working plugin",
                     .labels = "documentation plugins",
                 },
                 .{
                     .title = "Slow file indexing on large directories",
-                    .description = "Indexing a directory with more than 100k files takes several minutes because every entry is stat'd twice. Cache the first stat result and batch the reads.",
+                    .description = "Indexing a directory with more than 100k files takes several minutes because every entry is `stat`'d twice. Cache the first stat result and batch the reads.",
                     .labels = "performance indexing",
                 },
                 .{
                     .title = "Add keyboard shortcut for quick search",
-                    .description = "Opening the search box currently requires clicking the toolbar icon. Bind a shortcut and show it in the tooltip so keyboard users can search without the mouse.",
+                    .description = "Opening the search box currently requires clicking the toolbar icon. Bind a shortcut and show it in the tooltip so **keyboard users** can search without the mouse.",
                     .labels = "enhancement ux keyboard",
                 },
                 .{
                     .title = "Unicode filenames are garbled in the export dialog",
-                    .description = "Filenames containing non-ASCII characters display as replacement characters in the export dialog. The dialog decodes the path as Latin-1 instead of UTF-8.",
+                    .description = "Filenames containing non-ASCII characters display as replacement characters in the export dialog. The dialog decodes the path as *Latin-1* instead of *UTF-8*.",
                     .labels = "bug unicode i18n",
                 },
                 .{
                     .title = "Flaky test: integration suite times out on CI",
-                    .description = "The integration suite intermittently exceeds the CI time limit because the server fixture waits for a fixed 30 seconds. Poll for readiness instead of sleeping.",
+                    .description = "The integration suite intermittently exceeds the CI time limit because the server fixture waits for a fixed 30 seconds:\n\n```\nstd.Io.sleep(io, .fromSeconds(30), .awake);\n```\n\nPoll for readiness instead of sleeping.",
                     .labels = "bug testing ci",
                 },
                 .{
                     .title = "Upgrade bundled zlib to the latest release",
-                    .description = "The vendored zlib is two major releases behind and misses several upstream fixes. Update the bundled copy and re-run the compression benchmarks.",
+                    .description = "The vendored zlib is two major releases behind and misses several upstream fixes.\n\n- [ ] update the bundled copy\n- [ ] re-run the compression benchmarks",
                     .labels = "dependencies maintenance",
                 },
                 .{
                     .title = "Progress bar overshoots 100% during resumed downloads",
-                    .description = "Resuming a partial download counts the already-downloaded bytes twice, so the progress bar reads up to 150%. Subtract the resume offset from the total.",
+                    .description = "Resuming a partial download counts the already-downloaded bytes twice, so the progress bar reads up to **150%**. Subtract the resume offset from the total.",
                     .labels = "bug ui downloads",
                     .status = .closed,
                 },
                 .{
                     .title = "Config parser rejects trailing commas",
-                    .description = "A trailing comma after the last entry in a config block is reported as a syntax error. Most editors add one automatically, so accept it.",
+                    .description = "A trailing comma after the last entry in a config block is reported as a syntax error:\n\n```\n[server]\nport = 8080,\n```\n\nMost editors add one automatically, so accept it.",
                     .labels = "bug config parser",
                 },
                 .{
                     .title = "Add a --json flag to the status command",
-                    .description = "Scripts currently scrape the human-readable status output, which breaks whenever the format changes. Emit a stable machine-readable JSON form behind a flag.",
+                    .description = "Scripts currently scrape the human-readable `status` output, which breaks whenever the format changes. Emit a stable machine-readable JSON form behind a `--json` flag.",
                     .labels = "enhancement cli",
                 },
                 .{
                     .title = "Race condition between autosave and manual save",
-                    .description = "Saving manually while an autosave is in flight can interleave the two writes and corrupt the file. Serialize saves through a single queue.",
+                    .description = "Saving manually while an autosave is in flight can interleave the two writes and **corrupt the file**. Serialize saves through a single queue.",
                     .labels = "bug priority-high data-loss",
                 },
                 .{
                     .title = "Reduce binary size of release builds",
-                    .description = "The release binary has grown past 40 MB, mostly from debug info and an unused bundled font. Strip symbols and drop the font from the default build.",
+                    .description = "The release binary has grown past 40 MB, mostly from:\n\n1. debug info\n2. an unused bundled font\n\nStrip symbols and drop the font from the default build.",
                     .labels = "performance build",
                 },
                 .{
                     .title = "Tooltips flicker when the cursor moves between adjacent buttons",
-                    .description = "Moving the cursor across a toolbar hides and re-shows the tooltip for every button. Keep the tooltip open with a short grace period between neighbors.",
+                    .description = "Moving the cursor across a toolbar hides and re-shows the tooltip for *every* button. Keep the tooltip open with a short grace period between neighbors.",
                     .labels = "bug ui polish",
                 },
                 .{
                     .title = "Support environment variable expansion in config paths",
-                    .description = "Paths in the config file are taken literally, so shared configs can't refer to the home directory portably. Expand environment variables when loading.",
+                    .description = "Paths in the config file are taken literally, so shared configs can't refer to `$HOME` portably. Expand environment variables when loading.",
                     .labels = "enhancement config",
                 },
                 .{
                     .title = "Log rotation deletes the newest file instead of the oldest",
-                    .description = "When the log directory hits its size cap, the rotation logic sorts by name rather than mtime and removes the most recent log. Sort by modification time.",
+                    .description = "When the log directory hits its size cap, the rotation logic sorts by name rather than `mtime` and removes the **most recent** log. Sort by modification time.",
                     .labels = "bug logging",
                     .status = .closed,
                 },
                 .{
                     .title = "Add man pages for all subcommands",
-                    .description = "Only the top-level command has a man page. Generate one per subcommand from the existing help text as part of the release build.",
+                    .description = "Only the top-level command has a man page. Generate one per subcommand from the existing `--help` text as part of the release build.",
                     .labels = "documentation cli",
                 },
                 .{
                     .title = "High CPU usage while idle in the background",
-                    .description = "The main loop polls for file changes every 10 ms even when no window is visible. Switch to native file watching and idle at zero CPU.",
+                    .description = "The main loop polls for file changes every 10 ms even when no window is visible.\n\n> Switch to native file watching and idle at zero CPU.",
                     .labels = "performance priority-high",
                 },
                 .{
                     .title = "Paste from clipboard drops the final newline",
-                    .description = "Pasting text that ends with a newline silently trims it, which breaks pasted shell snippets. Preserve the clipboard content exactly.",
+                    .description = "Pasting text that ends with a newline silently trims it, which breaks pasted shell snippets. Preserve the clipboard content *exactly*.",
                     .labels = "bug editor clipboard",
                 },
                 .{
                     .title = "Improve error message for expired credentials",
-                    .description = "An expired token currently surfaces as a bare 401 with no guidance. Detect the expiry case and tell the user how to re-authenticate.",
+                    .description = "## Problem\n\nAn expired token currently surfaces as a bare `401` with no guidance.\n\n## Fix\n\nDetect the expiry case and tell the user how to re-authenticate, linking to the [setup guide](https://github.com/xit-vcs/haxy).",
                     .labels = "enhancement ux auth",
                 },
                 .{
                     .title = "Crash when window is resized during startup animation",
-                    .description = "Resizing the window while the splash animation is running dereferences a freed layout node. Cancel the animation before rebuilding the layout.",
+                    .description = "Resizing the window while the splash animation is running dereferences a **freed** layout node. Cancel the animation before rebuilding the layout.",
                     .labels = "bug crash ui",
                 },
                 .{
@@ -618,7 +618,7 @@ pub fn main(init: std.process.Init) !void {
                 },
                 .{
                     .title = "Deprecate the legacy plugin format",
-                    .description = "Both plugin formats are currently loaded, doubling the maintenance surface. Warn on legacy plugins this release and drop support in the next.",
+                    .description = "Both plugin formats are currently loaded, doubling the maintenance surface.\n\n- [ ] warn on legacy plugins this release\n- [ ] drop support in the next",
                     .labels = "maintenance plugins",
                 },
             };
@@ -680,7 +680,7 @@ pub fn main(init: std.process.Init) !void {
                     .author = .{ .name = user_data[1].name, .email = user_data[1].email },
                     .event = .{ .issue = .{
                         .title = sync_issue.title,
-                        .description = "The sync engine's coverage is unit tests only, with every transport mocked out." ++ "\n\n" ++
+                        .description = "The sync engine's coverage is *unit tests* only, with every transport mocked out." ++ "\n\n" ++
                             sync_p2 ++ "\n\n" ++ sync_p3,
                         .labels = sync_issue.labels,
                     } },
@@ -691,7 +691,7 @@ pub fn main(init: std.process.Init) !void {
                     .event = .{ .issue = .{
                         .title = desc_issue.title,
                         .description = tz_p1 ++ "\n\n" ++ tz_p2 ++ "\n\n" ++ tz_p4 ++ "\n\n" ++
-                            "The confusion is worst for teams spread across timezones, who each read a different wall-clock time from the same feed.",
+                            "> The confusion is worst for teams spread across timezones, who each read a different wall-clock time from the same feed.",
                         .labels = desc_issue.labels,
                     } },
                 } };
@@ -711,7 +711,7 @@ pub fn main(init: std.process.Init) !void {
                     .event = .{ .issue = .{
                         .title = sync_issue.title,
                         .description = sync_p1 ++ "\n\n" ++ sync_p2 ++ "\n\n" ++
-                            "Add end-to-end tests that drive two live instances against a local server on every CI run.",
+                            "Add end-to-end tests that drive two live instances against a local server on **every** CI run.",
                         .labels = sync_issue.labels,
                     } },
                 }, .{
@@ -721,8 +721,8 @@ pub fn main(init: std.process.Init) !void {
                     .event = .{ .issue = .{
                         .title = desc_issue.title,
                         .description = tz_p1 ++ "\n\n" ++ tz_p2 ++ "\n\n" ++
-                            "Most other clients already render local time by default, which makes our UTC output stand out as a bug." ++ "\n\n" ++ tz_p4 ++ "\n\n" ++
-                            "Log exports inherit the same UTC rendering, so downstream tooling has to guess the source timezone.",
+                            "Most other clients already render local time by default, which makes our `UTC` output stand out as a bug." ++ "\n\n" ++ tz_p4 ++ "\n\n" ++
+                            "Log exports inherit the same UTC rendering, so downstream tooling has to *guess* the source timezone.",
                         .labels = desc_issue.labels,
                     } },
                 } };
@@ -754,11 +754,11 @@ pub fn main(init: std.process.Init) !void {
             for (&comment_ids) |*id| id.* = evt.EventWithId.randomId(prng.random());
 
             const comment_bodies = [_][]const u8{
-                "I can take this. The compatibility scanner already reports which repositories still use the legacy format.",
-                "Can we keep loading legacy plugins for one release after the warning lands? That would give downstream maintainers time to migrate.",
-                "That sounds good. I'll include the scanner output in the warning so each affected plugin is named.",
-                "Please include the replacement manifest path too. That should make the warning actionable without opening the migration guide.",
-                "I'll add release-note text once the warning format is settled.",
+                "I can take this. The compatibility scanner already reports which repositories still use the **legacy** format.",
+                "Can we keep loading legacy plugins for *one release* after the warning lands? That would give downstream maintainers time to migrate.",
+                "That sounds good. I'll include the scanner output in the warning so each affected plugin is named:\n\n```\nwarning: plugins/foo.so uses the legacy format\n```",
+                "Please include the replacement manifest path too. That should make the warning actionable without opening the [migration guide](https://github.com/xit-vcs/haxy).",
+                "I'll add release-note text once the warning format is settled:\n\n- [x] draft the summary\n- [ ] list the affected plugins",
             };
 
             var comment_events: [comment_ids.len]evt.EventWithId = undefined;
@@ -788,27 +788,27 @@ pub fn main(init: std.process.Init) !void {
             }{
                 .{
                     .title = "How should plugins declare capabilities?",
-                    .description = "I'd like the manifest to make privileged capabilities explicit without making simple plugins verbose.",
+                    .description = "I'd like the manifest to make **privileged** capabilities explicit without making simple plugins verbose.",
                     .labels = "plugins design",
                 },
                 .{
                     .title = "Ideas for making large repositories faster",
-                    .description = "This is a place to collect profiling results and discuss which indexing work is worth pursuing first.",
+                    .description = "This is a place to collect *profiling results* and discuss which indexing work is worth pursuing first.",
                     .labels = "performance indexing",
                 },
                 .{
                     .title = "What should the next release focus on?",
-                    .description = "Let's compare the most important reliability fixes with the larger features already in progress.",
+                    .description = "Let's compare the most important reliability fixes with the larger features already in progress, starting from https://github.com/xit-vcs/haxy.",
                     .labels = "release planning",
                 },
                 .{
                     .title = "Improving keyboard navigation",
-                    .description = "Share workflows that still require a mouse and suggestions for making their focus behavior predictable.",
+                    .description = "Share workflows that still **require a mouse** and suggestions for making their focus behavior predictable.",
                     .labels = "ui keyboard accessibility",
                 },
                 .{
                     .title = "Configuration format discussion",
-                    .description = "Should the next configuration format favor strict validation or accept common conveniences such as trailing commas?",
+                    .description = "Should the next configuration format favor *strict validation* or accept common conveniences such as trailing commas?",
                     .labels = "config design",
                 },
             };
@@ -847,9 +847,9 @@ pub fn main(init: std.process.Init) !void {
                         else
                             std.fmt.bytesToHex(discussion_comment_ids[discussion_index][0], .lower),
                         .body = switch (comment_index) {
-                            0 => "My preference is to start with the smallest useful version and expand it after we have real usage to learn from.",
-                            1 => "It would help to write down the tradeoffs we are accepting so the decision is easy to revisit later.",
-                            2 => "Agreed. A narrow first version should also make it easier to keep the implementation understandable.",
+                            0 => "My preference is to start with the **smallest useful version** and expand it after we have real usage to learn from.",
+                            1 => "It would help to *write down* the tradeoffs we are accepting so the decision is easy to revisit later.",
+                            2 => "> A narrow first version\n\nAgreed. It should also make it easier to keep the implementation understandable.",
                             else => unreachable,
                         },
                     } },
@@ -992,9 +992,9 @@ const scatter_words = [_][]const u8{
 fn longDescription(allocator: std.mem.Allocator, initial: []const u8) ![]u8 {
     var writer = std.Io.Writer.Allocating.init(allocator);
     defer writer.deinit();
-    try writer.writer.print("{s}", .{initial});
+    try writer.writer.print("{s}\n", .{initial});
     for (0..ui.detail_preview_lines) |line|
-        try writer.writer.print("\n{d} {s}", .{ line, scatter_words[line % scatter_words.len] });
+        try writer.writer.print("\n- {d} {s}", .{ line, scatter_words[line % scatter_words.len] });
     return writer.toOwnedSlice();
 }
 
@@ -1174,39 +1174,39 @@ fn seedPatches(
     }{
         .{
             .title = "Draft a faster dependency scanner",
-            .description = "Rework dependency discovery so a large workspace can be scanned without repeatedly opening the same manifests.",
+            .description = "Rework dependency discovery so a **large workspace** can be scanned without repeatedly opening the same manifests.",
             .labels = "performance build",
             .status = null,
         },
         .{
             .title = "Remove the legacy configuration loader",
-            .description = "Delete the compatibility loader now that the replacement format has shipped and the migration warning has been available for a full release.",
+            .description = "Delete the compatibility loader now that the replacement format has shipped and the migration warning has been available for a *full release*.",
             .labels = "cleanup config",
             .status = .merged,
             .behind_master = true,
         },
         .{
             .title = "Cache parsed manifests between commands",
-            .description = "Keep parsed manifests in the command context so consecutive operations do not repeat identical filesystem and parsing work.",
+            .description = "Keep parsed manifests in the command `Context` so consecutive operations do not repeat identical filesystem and parsing work.",
             .labels = "performance cache",
             .status = .closed,
         },
         .{
             .title = "Add structured output to the inspect command",
-            .description = "Add a stable JSON representation of inspect results for scripts and editor integrations.",
+            .description = "Add a stable JSON representation of `inspect` results for scripts and editor integrations.",
             .labels = "enhancement cli",
             .status = .open,
         },
         .{
             .title = "Edit an adjacent line in alpha.txt",
-            .description = "This patch can be cleanly merged by haxy, while git throws a merge conflict!",
+            .description = "This patch can be cleanly merged by haxy, while git throws a **merge conflict**!",
             .labels = "merge",
             .status = .open,
             .alpha_edit = .{ .line = 2, .text = "adjust alpha beside the latest scatter edit" },
         },
         .{
             .title = "Edit a conflicting line in alpha.txt",
-            .description = "Both source and squash merges conflict with a different edit to the same line on master.",
+            .description = "Both source and squash merges conflict with a different edit to the *same line* on master.",
             .labels = "merge",
             .status = .open,
             .alpha_edit = .{ .line = 3, .text = "replace alpha with a conflicting edit" },
@@ -1294,11 +1294,11 @@ fn seedPatches(
     var comment_ids: [5][evt.event_id_size]u8 = undefined;
     for (&comment_ids) |*id| id.* = evt.EventWithId.randomId(random);
     const comment_bodies = [_][]const u8{
-        "This also needs to preserve the executable bit for files nested inside generated directories.",
-        "I tested the archive path and the direct-copy path; both currently lose the mode.",
-        "The archive writer is the right place to centralize it, since every exporter already goes through that layer.",
-        "Please include a regression fixture with a mix of executable and ordinary files.",
-        "I'll add that fixture and cover both supported archive formats.",
+        "This also needs to preserve the **executable bit** for files nested inside generated directories.",
+        "I tested both paths:\n\n- the archive path\n- the direct-copy path\n\nBoth currently lose the mode.",
+        "The `ArchiveWriter` is the right place to centralize it, since every exporter already goes through that layer.",
+        "Please include a regression fixture with a *mix* of executable and ordinary files.",
+        "I'll add that fixture and cover both supported archive formats:\n\n1. tar\n2. zip",
     };
     var comments: [comment_ids.len]evt.EventWithId = undefined;
     for (&comments, 0..) |*comment, i| {
@@ -1334,15 +1334,15 @@ fn seedPatches(
     ours_values[0].labels = "cleanup config breaking";
     const closed_description = try longDescription(
         patch_arena.allocator(),
-        "Cache parsed manifests for the lifetime of a command invocation and invalidate entries when their files change.",
+        "## Summary\n\nCache parsed manifests for the lifetime of a command invocation and invalidate entries when their files change.",
     );
     ours_values[1].description = closed_description;
-    ours_values[2].description = "Add JSON output to inspect with versioned field names and deterministic object ordering.";
+    ours_values[2].description = "Add JSON output to `inspect` with versioned field names and deterministic object ordering.";
     var theirs_values = values;
     theirs_values[0].title = "Delete compatibility configuration support";
     theirs_values[0].labels = "config maintenance";
-    theirs_values[1].description = "Keep a process-wide manifest cache shared by every command and refresh it after writes.";
-    theirs_values[2].description = "Expose inspect results as newline-delimited JSON so callers can stream large repositories.";
+    theirs_values[1].description = "Keep a process-wide manifest cache shared by **every** command and refresh it after writes.";
+    theirs_values[2].description = "Expose `inspect` results as newline-delimited JSON so callers can stream large repositories.";
 
     const seed_tip = (try target_repo.readRef(io, evt.events_ref)) orelse return error.NotFound;
     const other_ref = xit.ref.Ref{ .kind = .head, .name = "haxy/patch-other" };
@@ -1389,7 +1389,7 @@ fn seedPatches(
     try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .repo, .xit, .{}, io, allocator, target_repo, evt.events_ref, &.{});
     try pch.writeBranchPatch(.{ .server = .{ .users_dir = users_dir } }, .xit, .{}, io, allocator, target_repo, std.fmt.bytesToHex(evt.EventWithId.randomId(random), .lower), .{
         .title = "Merge the existing feature branch",
-        .description = "This patch tracks the feature branch in this repo without creating a fork.",
+        .description = "This patch tracks the `feature` branch in this repo without creating a fork.",
         .labels = "feature",
         .source_branch = "feature",
         .target_branch = "master",

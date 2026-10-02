@@ -9,6 +9,7 @@ const layout = xitui.layout;
 const Key = xitui.input.Key;
 const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
+const Markdown = @import("Markdown.zig");
 
 pub const page_size = 10;
 
@@ -212,10 +213,9 @@ pub const Item = struct {
         }
 
         const body_text = if (entry.comment.removed) "(removed)" else entry.comment.event.body;
-        var body_box = try wgt.TextBox.init(allocator, body_text, .{ .border_style = .single, .round_corners = true, .wrap_kind = .word });
-        errdefer body_box.deinit(allocator);
-        body_box.getFocus().mode = .all;
-        try box.children.put(allocator, body_box.getFocus().id, .{ .widget = .{ .text_box = body_box }, .rect = null, .min_size = null });
+        var body_frame = try Markdown.Frame.init(allocator, body_text, "", "", session.page_arena);
+        errdefer body_frame.deinit(allocator);
+        try box.children.put(allocator, body_frame.getFocus().id, .{ .widget = .{ .markdown_frame = body_frame }, .rect = null, .min_size = null });
 
         var gap = try wgt.Text.init(allocator, "");
         errdefer gap.deinit(allocator);
@@ -230,8 +230,8 @@ pub const Item = struct {
         return &self.box.children.values()[metadata_index].widget.box;
     }
 
-    fn body(self: *Item) *wgt.TextBox {
-        return &self.box.children.values()[body_index].widget.text_box;
+    pub fn body(self: *Item) *Markdown.Frame {
+        return &self.box.children.values()[body_index].widget.markdown_frame;
     }
 
     pub fn bodyFocused(self: *Item) bool {
