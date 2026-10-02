@@ -29,8 +29,8 @@ test "push small" {
 test "push creates missing repo under serve" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    // the server creates missing repositories as sha1
-    try testPushCreatesMissingRepo(.xit, .{ .wire = .ssh }, 3201, io, allocator);
+    try testPushCreatesMissingRepo(.xit, .{ .wire = .ssh }, .sha1, 3201, io, allocator);
+    try testPushCreatesMissingRepo(.xit, .{ .wire = .ssh }, .sha256, 3203, io, allocator);
 }
 
 test "push events" {
@@ -855,6 +855,7 @@ fn testPushFork(
 fn testPushCreatesMissingRepo(
     comptime repo_kind: rp.RepoKind,
     comptime transport_def: net.TransportDefinition,
+    comptime hash_kind: hash.HashKind,
     comptime port: u16,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -870,7 +871,7 @@ fn testPushCreatesMissingRepo(
     const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
-    var client_repo = try rp.Repo(repo_kind, .{ .is_test = true }).init(io, allocator, .{ .path = client_path });
+    var client_repo = try rp.Repo(repo_kind, .{ .is_test = true, .hash = hash_kind }).init(io, allocator, .{ .path = client_path });
     defer client_repo.deinit(io, allocator);
 
     const commit1 = blk: {
@@ -911,11 +912,11 @@ fn testPushCreatesMissingRepo(
         } } },
     );
 
-    // the push registered admin:server; resolve its on-disk directory
+    // the push registered admin:testrepo in the client's hash format; resolve its on-disk directory
     const server_path = (try repoOnDiskPath(io, allocator, temp_path, "testrepo", false)).?;
     defer allocator.free(server_path);
 
-    var server_repo = try rp.Repo(.xit, .{ .is_test = true }).open(io, allocator, .{ .path = server_path });
+    var server_repo = try rp.Repo(.xit, .{ .is_test = true, .hash = hash_kind }).open(io, allocator, .{ .path = server_path });
     defer server_repo.deinit(io, allocator);
     try std.testing.expect(try server_repo.isBare(io, allocator));
 

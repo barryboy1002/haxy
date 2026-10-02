@@ -7,18 +7,17 @@ const rp = @import("xit").repo;
 pub const RepoPath = union(enum) {
     ok: []const u8, // resolved on-disk path; the caller owns and frees it
     invalid, // a <owner>:<repo> path was expected but not given
-    not_found, // unknown owner, or the repo doesn't exist and we aren't creating
+    not_found, // unknown owner, or the repo doesn't exist
 };
 
 // resolve a requested repo path to its on-disk directory, parsed as
-// <owner>:<repo> through the event store, minting a repo event for a fresh push.
+// <owner>:<repo> through the event store.
 pub fn resolveRepoPath(
     io: std.Io,
     allocator: std.mem.Allocator,
     users_dir: []const u8,
     admin_repo_path: []const u8,
     requested: []const u8,
-    create_if_missing: bool,
 ) !RepoPath {
     const owner_repo = evt.parseOwnerRepoPath(requested) orelse return .invalid;
     const location = (try evt.resolveOrCreateRepo(
@@ -28,7 +27,7 @@ pub fn resolveRepoPath(
         admin_repo_path,
         owner_repo.owner,
         owner_repo.name,
-        if (create_if_missing) .{} else null,
+        null,
     )) orelse return .not_found;
     return .{ .ok = try evt.repoPath(allocator, users_dir, &location.owner_id, &location.repo_id) };
 }

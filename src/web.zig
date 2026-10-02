@@ -87,7 +87,7 @@ fn requestRepoSource(io: std.Io, allocator: std.mem.Allocator, host: Host, repo_
     return switch (host) {
         .server => |server| blk: {
             const identity = repoBaseIdentity(repo_base) orelse break :blk null;
-            const path = switch (try serve_common.resolveRepoPath(io, allocator, server.users_dir, server.admin_repo_path, identity, false)) {
+            const path = switch (try serve_common.resolveRepoPath(io, allocator, server.users_dir, server.admin_repo_path, identity)) {
                 .ok => |value| value,
                 .invalid, .not_found => break :blk null,
             };

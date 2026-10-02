@@ -381,13 +381,12 @@ fn runGitSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, exec: ss
         return runForkSession(handler, sess, repo_identity, parsed.service, protocol_version, &reader.interface, &writer.interface);
     }
 
-    const create_if_missing = parsed.service == .receive_pack;
-
     const owner_repo = evt.parseOwnerRepoPath(repo_identity) orelse return writeError(sess, "repo path must be <owner>:<repo>");
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
     const author = switch (try authorizeRepoKey(io, &author_arena, handler.admin_repo_path, handler.users_dir, owner_repo.owner, owner_repo.name, parsed.service, &sess.fingerprint)) {
         .allowed => |user| user,
+        .create => |creator| return runCreatingPush(handler, sess, &creator, owner_repo.name, protocol_version, &reader.interface, &writer.interface),
         .denied => return switch (parsed.service) {
             .upload_pack => writeError(sess, "unauthorized: this SSH key cannot read this repo"),
             .receive_pack => writeError(sess, "unauthorized: this SSH key cannot push to this repo"),
@@ -395,21 +394,63 @@ fn runGitSession(handler: *const SessionHandler, sess: *ssh.SessionCtx, exec: ss
         .not_found => return writeError(sess, "repo not found"),
     };
 
-    const repo_path = switch (try serve_common.resolveRepoPath(io, allocator, handler.users_dir, handler.admin_repo_path, repo_identity, create_if_missing)) {
+    const repo_path = switch (try serve_common.resolveRepoPath(io, allocator, handler.users_dir, handler.admin_repo_path, repo_identity)) {
         .ok => |p| p,
         .invalid => unreachable, // parsed above
         .not_found => return writeError(sess, "repo not found"),
     };
     defer allocator.free(repo_path);
 
-    if (try serveIfExists(repo_path, handler.users_dir, &reader.interface, &writer.interface, io, allocator, parsed.service, protocol_version, author, handler.err, sess)) return;
+    var any_repo = try rp.AnyRepo(.xit, any_repo_opts).open(io, allocator, .{ .path = repo_path });
+    defer any_repo.deinit(io, allocator);
 
-    if (!create_if_missing) return writeError(sess, "repo not found");
+    switch (any_repo) {
+        inline else => |*repo| switch (parsed.service) {
+            .upload_pack => {
+                var sideband = progress.Sideband{ .writer = &writer.interface, .sess = sess };
+                try repo.uploadPack(io, allocator, &reader.interface, &writer.interface, .{ .protocol_version = protocol_version }, &sideband);
+            },
+            .receive_pack => try push.receivePackAndConsume(repo.self_repo_opts, io, allocator, repo, &reader.interface, &writer.interface, .{ .protocol_version = protocol_version }, author, handler.users_dir, handler.err, sess),
+        },
+    }
+}
 
-    // create the on-disk repo for the just-minted event and serve the push
-    var repo = try rp.Repo(.xit, any_repo_opts.toRepoOpts()).init(io, allocator, .{ .path = repo_path, .bare = true });
-    defer repo.deinit(io, allocator);
-    try servePack(repo.self_repo_opts, &repo, handler.users_dir, &reader.interface, &writer.interface, io, allocator, parsed.service, protocol_version, author, handler.err, sess);
+// push to a repo that doesn't exist yet, creating it in the hash format the
+// client's first command names
+fn runCreatingPush(
+    handler: *const SessionHandler,
+    sess: *ssh.SessionCtx,
+    creator: *const RepoCreator,
+    name: []const u8,
+    protocol_version: xit.net_server_common.ProtocolVersion,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+) !void {
+    const allocator = sess.conn.allocator;
+    const io = sess.conn.io;
+
+    evt.Repo.validateName(name) catch return writeError(sess, "invalid repo name");
+
+    try xit.net_server_receive_pack.advertiseUncreated(.xit, writer, .{ .protocol_version = protocol_version });
+    try writer.flush();
+    // a client with nothing to push creates nothing
+    const hash_kind = (try xit.net_server_receive_pack.peekObjectFormat(reader)) orelse return;
+
+    const location = evt.createRepo(io, allocator, handler.users_dir, &creator.owner_id, creator.owner, name, "", .private, hash_kind) catch |err| switch (err) {
+        error.NameTaken => return writeError(sess, "repo was just created by another push, try again"),
+        else => |e| return e,
+    };
+    const repo_path = try evt.repoPath(allocator, handler.users_dir, &location.owner_id, &location.repo_id);
+    defer allocator.free(repo_path);
+
+    switch (hash_kind) {
+        inline else => |kind| {
+            var repo = try rp.Repo(.xit, any_repo_opts.toRepoOptsWithHash(kind)).open(io, allocator, .{ .path = repo_path });
+            defer repo.deinit(io, allocator);
+            // stateless since the advertisement already went out
+            try push.receivePackAndConsume(repo.self_repo_opts, io, allocator, &repo, reader, writer, .{ .protocol_version = protocol_version, .is_stateless = true }, creator.owner, handler.users_dir, handler.err, sess);
+        },
+    }
 }
 
 // serve a patch draft: anyone may fetch it, only its author may push to it
@@ -475,59 +516,6 @@ fn runForkSession(
     }
 }
 
-// serve an existing repo at `repo_path`, or return false if none is there
-fn serveIfExists(
-    repo_path: []const u8,
-    users_dir: []const u8,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    service: GitService,
-    protocol_version: xit.net_server_common.ProtocolVersion,
-    author: ?evt.CommitAuthor,
-    error_writer: *std.Io.Writer,
-    sess: ?*ssh.SessionCtx,
-) !bool {
-    // a bare open() creates the directory while probing for the repo, so only
-    // attempt it when the path already exists
-    std.Io.Dir.accessAbsolute(io, repo_path, .{}) catch return false;
-
-    var any_repo = rp.AnyRepo(.xit, any_repo_opts).open(io, allocator, .{ .path = repo_path }) catch |err| switch (err) {
-        error.RepoNotFound => return false,
-        else => |e| return e,
-    };
-    defer any_repo.deinit(io, allocator);
-
-    switch (any_repo) {
-        inline else => |*repo| try servePack(repo.self_repo_opts, repo, users_dir, reader, writer, io, allocator, service, protocol_version, author, error_writer, sess),
-    }
-    return true;
-}
-
-fn servePack(
-    comptime repo_opts: rp.RepoOpts(.xit),
-    repo: *rp.Repo(.xit, repo_opts),
-    users_dir: []const u8,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    service: GitService,
-    protocol_version: xit.net_server_common.ProtocolVersion,
-    author: ?evt.CommitAuthor,
-    error_writer: *std.Io.Writer,
-    sess: ?*ssh.SessionCtx,
-) !void {
-    switch (service) {
-        .upload_pack => {
-            var sideband = progress.Sideband{ .writer = writer, .sess = sess };
-            try repo.uploadPack(io, allocator, reader, writer, .{ .protocol_version = protocol_version }, &sideband);
-        },
-        .receive_pack => try push.receivePackAndConsume(repo_opts, io, allocator, repo, reader, writer, .{ .protocol_version = protocol_version }, author, users_dir, error_writer, sess),
-    }
-}
-
 fn parseGitCommand(allocator: std.mem.Allocator, command: []const u8) !ParsedGitCommand {
     var tokens = try std.process.Args.IteratorGeneral(.{ .single_quotes = true }).init(allocator, command);
     defer tokens.deinit();
@@ -546,7 +534,13 @@ fn parseGitCommand(allocator: std.mem.Allocator, command: []const u8) !ParsedGit
     return .{ .service = service, .dir = try allocator.dupe(u8, dir_token) };
 }
 
-const RepoAuthorization = union(enum) { allowed: ?evt.CommitAuthor, denied, not_found };
+const RepoAuthorization = union(enum) { allowed: ?evt.CommitAuthor, create: RepoCreator, denied, not_found };
+
+// the owner of a repo a push may create
+const RepoCreator = struct {
+    owner_id: [evt.event_id_size]u8,
+    owner: evt.CommitAuthor,
+};
 
 fn authorizeRepoKey(
     io: std.Io,
@@ -569,9 +563,10 @@ fn authorizeRepoKey(
     // no viewer yet, so this carries the base role
     const repo = (try evt.readRepoByOwnerAndName(io, allocator, arena, moment, users_dir, owner_name, repo_name, null)) orelse {
         if (service == .upload_pack) return .not_found;
-        const owner = (try evt.User.readByName(io, allocator, admin_repo_path, arena, owner_name)) orelse return .not_found;
+        const owner_id = (try evt.User.readIdByName(evt.AdminDB, evt.admin_repo_opts.hash, moment, owner_name)) orelse return .not_found;
+        const owner = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, moment, arena, &owner_id)) orelse unreachable;
         return if (isKeyInAuthorizedKeys(owner.event.ssh_keys, fingerprint))
-            .{ .allowed = .{ .name = owner.event.name, .email = owner.event.email } }
+            .{ .create = .{ .owner_id = owner_id, .owner = .{ .name = owner.event.name, .email = owner.event.email } } }
         else
             .denied;
     };
