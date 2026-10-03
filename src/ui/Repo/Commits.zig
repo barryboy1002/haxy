@@ -234,7 +234,7 @@ fn commitEntry(
     const text, const truncated = try readMessage(repo_kind, repo_opts, aa, commit_object, full_message);
     return .{
         .oid = try aa.dupe(u8, &commit_object.oid),
-        .parent_oid = if (md.firstParent()) |parent| try aa.dupe(u8, parent) else "0" ** xit.hash.hexLen(repo_opts.hash),
+        .parent_oid = if (md.firstParent()) |parent| try aa.dupe(u8, parent) else &@as([xit.hash.hexLen(repo_opts.hash)]u8, @splat('0')),
         .date = try formatDate(aa, md.timestamp),
         .message = text,
         .message_truncated = truncated,
@@ -301,7 +301,7 @@ fn formatDate(arena: std.mem.Allocator, timestamp: u64) ![]const u8 {
     const epoch_secs = std.time.epoch.EpochSeconds{ .secs = timestamp };
     const year_day = epoch_secs.getEpochDay().calculateYearDay();
     const month_day = year_day.calculateMonthDay();
-    return std.fmt.allocPrint(arena, "{d:0>4}-{d:0>2}-{d:0>2}", .{
+    return arena.print("{d:0>4}-{d:0>2}-{d:0>2}", .{
         year_day.year,
         month_day.month.numeric(),
         month_day.day_index + 1,
@@ -630,13 +630,13 @@ pub const View = struct {
                 var row = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
                 errdefer row.deinit(allocator);
                 const diff_route = self.data.handle.location.commitDiffRoute(commit.oid, commit.parent_oid) orelse return error.RouteTooLong;
-                try addLink(allocator, &row, "view diff", try std.fmt.allocPrint(pa.allocator(), "a:{s}", .{try diff_route.toUrl(pa)}));
+                try addLink(allocator, &row, "view diff", try pa.allocator().print("a:{s}", .{try diff_route.toUrl(pa)}));
                 try addLink(allocator, &row, "view files at this commit", try filesObjectLink(pa, self.data.handle.location, commit.oid));
                 row.getFocus().child_id = row.children.keys()[0];
                 try inner.children.put(allocator, row.getFocus().id, .{ .widget = .{ .box = row }, .rect = null, .min_size = null });
             }
             if (commit.merge) if (self.data.handle.location.commitsMergeRoute(commit.oid)) |route| {
-                try addLink(allocator, inner, "view commits from this merge", try std.fmt.allocPrint(pa.allocator(), "a:{s}", .{try route.toUrl(pa)}));
+                try addLink(allocator, inner, "view commits from this merge", try pa.allocator().print("a:{s}", .{try route.toUrl(pa)}));
             };
             if (commit.author != .unknown or commit.committer != .unknown) {
                 var row = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
@@ -811,7 +811,7 @@ pub const View = struct {
 fn commitsLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []const u8) ![]const u8 {
     const route = data.handle.location.commitsRoute(.object, oid, data.base_oid) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+    return page_arena.allocator().print("a:{s}", .{url});
 }
 
 // this list's page starting at `oid`: a repo's branch or tag keeps its ref (and
@@ -829,7 +829,7 @@ fn pageRoute(data: *const Self, oid: []const u8) ?ui.RoutablePage {
 fn nextPageLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []const u8) ![]const u8 {
     const route = pageRoute(data, oid) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+    return page_arena.allocator().print("a:{s}", .{url});
 }
 
 // the "a:" link to the files tab at commit `oid` (an object ref), at its root
@@ -837,7 +837,7 @@ fn nextPageLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []
 fn filesObjectLink(page_arena: *std.heap.ArenaAllocator, location: ui.RoutablePage.RepoLocation, oid: []const u8) ![]const u8 {
     const route = location.filesRoute(.object, oid, "", 0) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+    return page_arena.allocator().print("a:{s}", .{url});
 }
 
 // the in-page "ai:" anchor for selecting a commit, showing its whole message
@@ -847,19 +847,19 @@ fn commitRowLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, commit
     // survives following the row
     if (data.search != null) {
         const route = pageRoute(data, commit.oid) orelse return error.RouteTooLong;
-        return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{try route.toUrl(page_arena)});
+        return page_arena.allocator().print("ai:{s}", .{try route.toUrl(page_arena)});
     }
     const route = (if (message)
         data.handle.location.commitMessageRoute(.object, commit.oid, data.base_oid)
     else
         data.handle.location.commitsRoute(.object, commit.oid, data.base_oid)) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{url});
+    return page_arena.allocator().print("ai:{s}", .{url});
 }
 
 // the "a:" link to the page showing `oid`'s message on its own.
 fn messageLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, oid: []const u8) ![]const u8 {
     const route = data.handle.location.commitMessageRoute(.object, oid, data.base_oid) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+    return page_arena.allocator().print("a:{s}", .{url});
 }

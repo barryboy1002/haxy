@@ -58,7 +58,7 @@ pub fn prepare(
     var source_object = try obj.Object(repo_kind, repo_opts).initCommit(state.readOnly(), io, allocator, source_oid);
     defer source_object.deinit();
     const revision = Self{ .base_oid = try allocator.dupe(u8, base_oid), .source_oid = try allocator.dupe(u8, source_oid), .message = message };
-    const identity = try std.fmt.allocPrint(allocator, "{s} <{s}>", .{ author.name, author.email });
+    const identity = try allocator.print("{s} <{s}>", .{ author.name, author.email });
     defer allocator.free(identity);
     const squash = try writeSquashCommit(repo_kind, repo_opts, state, io, allocator, revision, &source_object.content.commit.tree, identity, identity, timestamp);
     var id: [evt.event_id_size]u8 = undefined;

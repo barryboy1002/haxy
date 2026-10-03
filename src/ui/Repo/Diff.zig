@@ -46,7 +46,7 @@ pub const Route = union(enum) {
 
     fn link(self: Route, arena: *std.heap.ArenaAllocator, start: usize, path: []const u8) ![]const u8 {
         const route = self.page(start, path) orelse return error.RouteTooLong;
-        return std.fmt.allocPrint(arena.allocator(), "a:{s}", .{try route.toUrl(arena)});
+        return arena.allocator().print("a:{s}", .{try route.toUrl(arena)});
     }
 };
 

@@ -38,7 +38,7 @@ pub const View = struct {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer box.deinit(allocator);
         const route = ui.RoutablePage.repoRepoRoute(data.identity) orelse return error.RouteTooLong;
-        box.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), "form:{s}", .{try route.toUrl(session.page_arena)}) };
+        box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("form:{s}", .{try route.toUrl(session.page_arena)}) };
 
         const saved_fields = if (session.formFeedback(.repo_settings)) |saved| saved.fields else null;
 

@@ -107,8 +107,8 @@ pub fn handleConnection(
     host: Host,
     err: *std.Io.Writer,
 ) !void {
-    var send_buffer = [_]u8{0} ** 4096;
-    var recv_buffer = [_]u8{0} ** 4096;
+    var send_buffer: [4096]u8 = @splat(0);
+    var recv_buffer: [4096]u8 = @splat(0);
     var conn_br = stream.reader(io, &recv_buffer);
     var conn_bw = stream.writer(io, &send_buffer);
     var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
@@ -157,11 +157,11 @@ fn handleRequest(
             .server => |server| {
                 // "repo/new" and "user/new" come before "new", which would claim them
                 const PostRoute = enum { login, logout, @"repo/new", @"user/new", repo, new, edit, remove, open, close, resolve, publish, merge, squash, attach, undo, clear };
-                inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
-                    const suffix = "/" ++ field.name;
+                inline for (@typeInfo(PostRoute).@"enum".field_names) |name| {
+                    const suffix = "/" ++ name;
                     if (std.mem.endsWith(u8, path, suffix)) {
                         const base = path[0 .. path.len - suffix.len];
-                        return switch (@field(PostRoute, field.name)) {
+                        return switch (@field(PostRoute, name)) {
                             .login => handleLogin(io, request, allocator, base, server.admin_repo_path, server.session_store),
                             .logout => handleLogout(request, base, server.session_store),
                             .@"repo/new" => handleRepoNew(io, request, allocator, path, server.admin_repo_path, server.users_dir, server.session_store),
@@ -185,11 +185,11 @@ fn handleRequest(
             },
             .local => |local| {
                 const PostRoute = enum { new, edit, remove, open, close, resolve, sync, attach, undo, clear };
-                inline for (@typeInfo(PostRoute).@"enum".fields) |field| {
-                    const suffix = "/" ++ field.name;
+                inline for (@typeInfo(PostRoute).@"enum".field_names) |name| {
+                    const suffix = "/" ++ name;
                     if (std.mem.endsWith(u8, path, suffix)) {
                         const base = path[0 .. path.len - suffix.len];
-                        return switch (@field(PostRoute, field.name)) {
+                        return switch (@field(PostRoute, name)) {
                             .new => handleNew(io, request, allocator, base, host),
                             .edit => handleEdit(io, request, allocator, base, host),
                             .remove => handleRemove(io, request, allocator, base, host),
@@ -329,7 +329,7 @@ fn handleRequest(
         defer allocator.free(html);
 
         const expired_form_cookie = if (form_cookie_seen)
-            try std.fmt.allocPrint(allocator, form_flash_cookie ++ "=; Path={s}; Max-Age=0", .{path})
+            try allocator.print(form_flash_cookie ++ "=; Path={s}; Max-Age=0", .{path})
         else
             null;
         defer if (expired_form_cookie) |cookie| allocator.free(cookie);
@@ -375,7 +375,7 @@ fn handleLogin(
     // on success, return to the page the login came from (base, or "/" at the
     // root); on failure, stay on its user tab to surface the error.
     const success_location: []const u8 = if (base.len == 0) "/" else base;
-    const failure_location = try std.fmt.allocPrint(arena.allocator(), "{s}/user", .{base});
+    const failure_location = try arena.allocator().print("{s}/user", .{base});
 
     switch (result) {
         .success => |user_id| {
@@ -397,7 +397,7 @@ fn handleLogin(
 
 fn respondFormFailure(request: *std.http.Server.Request, allocator: std.mem.Allocator, session_store: SessionStore, location: []const u8, feedback: ui.Session.FormFeedback) !void {
     const token = try session_store.createFlash(allocator, feedback);
-    const cookie = try std.fmt.allocPrint(allocator, form_flash_cookie ++ "={s}; Path={s}; HttpOnly; SameSite=Strict", .{ token, location });
+    const cookie = try allocator.print(form_flash_cookie ++ "={s}; Path={s}; HttpOnly; SameSite=Strict", .{ token, location });
     defer allocator.free(cookie);
     try request.respond("", .{
         .status = .see_other,
@@ -420,7 +420,7 @@ fn respondThreadFormFailure(request: *std.http.Server.Request, allocator: std.me
                 else => false,
             };
             if (!required_title) return error.InvalidFormFeedback;
-            const cookie = try std.fmt.allocPrint(allocator, local_flash_cookie ++ "=" ++ local_required_title_prefix ++ "{s}; Path=/; HttpOnly; SameSite=Strict", .{@tagName(tag)});
+            const cookie = try allocator.print(local_flash_cookie ++ "=" ++ local_required_title_prefix ++ "{s}; Path=/; HttpOnly; SameSite=Strict", .{@tagName(tag)});
             defer allocator.free(cookie);
             try request.respond("", .{
                 .status = .see_other,
@@ -651,7 +651,7 @@ fn handleRepoNew(
         } } });
     };
 
-    const location = try std.fmt.allocPrint(allocator, "/{s}:{s}", .{ user.event.name, name });
+    const location = try allocator.print("/{s}:{s}", .{ user.event.name, name });
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -749,7 +749,7 @@ fn handleUserNew(
     const token = try session_store.create(&user_id);
     var cookie_buf: [256]u8 = undefined;
     const cookie = try std.fmt.bufPrint(&cookie_buf, session_cookie_fmt, .{token});
-    const location = try std.fmt.allocPrint(allocator, "/{s}", .{name});
+    const location = try allocator.print("/{s}", .{name});
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -805,7 +805,7 @@ fn handleThreadNew(
             .discuss => "discussions",
             else => unreachable,
         };
-        const form_location = try std.fmt.allocPrint(allocator, "{s}/{s}/new", .{ base, list_name });
+        const form_location = try allocator.print("{s}/{s}/new", .{ base, list_name });
         defer allocator.free(form_location);
         if (!evt.titleValid(title)) {
             return respondThreadFormFailure(request, allocator, host, form_location, requiredTitleFeedback(kind, title, labels, description, target_branch, source_branch));
@@ -838,11 +838,11 @@ fn handleThreadNew(
         };
         const user_id = actor.user_id orelse return respondLoginRequired(request);
         if (!evt.Patch.branchValid(target_branch) or !try request_repo.source.hasBranch(io, allocator, target_branch)) {
-            const form_location = try std.fmt.allocPrint(allocator, "{s}/patches/new", .{base});
+            const form_location = try allocator.print("{s}/patches/new", .{base});
             defer allocator.free(form_location);
             return respondThreadFormFailure(request, allocator, host, form_location, patchFeedback(.invalid_target_branch, title, labels, description, target_branch, null));
         }
-        const repo_id = evt.parseEventId(std.fs.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
+        const repo_id = evt.parseEventId(std.Io.Dir.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
         const repo_user_id = actor.repo_user_id orelse unreachable;
         const fork_path = try fork.create(.{}, io, allocator, server.users_dir, .{
             .id = event_id_hex,
@@ -883,7 +883,7 @@ fn handleThreadNew(
                         result catch |err| {
                             if (kind != .patch) return err;
                             const failure = ui.Session.FormFeedback.PatchFailure.fromError(err) orelse return err;
-                            const form_location = try std.fmt.allocPrint(allocator, "{s}/patches/new", .{base});
+                            const form_location = try allocator.print("{s}/patches/new", .{base});
                             defer allocator.free(form_location);
                             return respondThreadFormFailure(request, allocator, host, form_location, patchFeedback(failure, title, labels, description, target_branch, source_branch));
                         };
@@ -893,7 +893,7 @@ fn handleThreadNew(
         }
     }
 
-    const location = try std.fmt.allocPrint(allocator, "{s}/{s}:{s}", .{ base, @tagName(kind), &event_id_hex });
+    const location = try allocator.print("{s}/{s}:{s}", .{ base, @tagName(kind), &event_id_hex });
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -944,7 +944,7 @@ fn handlePatchPublish(
 
     const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondRemoveNotFound(request);
     defer request_repo.deinit(allocator);
-    const repo_id = evt.parseEventId(std.fs.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
+    const repo_id = evt.parseEventId(std.Io.Dir.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
     var target_repo = try rp.AnyRepo(.xit, .{}).open(io, allocator, request_repo.source.localInitOpts());
     defer target_repo.deinit(io, allocator);
     var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
@@ -1007,7 +1007,7 @@ fn handlePatchMerge(
         else => return err,
     };
 
-    const location = try std.fmt.allocPrint(allocator, "{s}/patch:{s}", .{ parts.repo_base, &id });
+    const location = try allocator.print("{s}/patch:{s}", .{ parts.repo_base, &id });
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -1045,7 +1045,7 @@ fn handleCommentNew(
     defer allocator.free(body);
 
     if (!evt.Comment.fieldsValid(body)) {
-        const form_location = try std.fmt.allocPrint(allocator, "{s}/new", .{base});
+        const form_location = try allocator.print("{s}/new", .{base});
         defer allocator.free(form_location);
         try request.respond("", .{
             .status = .see_other,
@@ -1077,7 +1077,7 @@ fn handleCommentNew(
         },
     }
 
-    const location = try std.fmt.allocPrint(allocator, "{s}/{s}:{s}/comment:{s}", .{ parts.repo_base, @tagName(parts.thread_kind), &thread_id_hex, &event_id_hex });
+    const location = try allocator.print("{s}/{s}:{s}/comment:{s}", .{ parts.repo_base, @tagName(parts.thread_kind), &thread_id_hex, &event_id_hex });
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -1158,7 +1158,7 @@ fn sendAttachment(
     const content_type = attachmentContentType(record.name);
     const encoded_name = try ui.urlEncodeRef(allocator, record.name);
     defer allocator.free(encoded_name);
-    const disposition = try std.fmt.allocPrint(allocator, "{s}; filename*=UTF-8''{s}", .{ if (content_type == null) "attachment" else "inline", encoded_name });
+    const disposition = try allocator.print("{s}; filename*=UTF-8''{s}", .{ if (content_type == null) "attachment" else "inline", encoded_name });
     defer allocator.free(disposition);
 
     var send_buf: [8192]u8 = undefined;
@@ -1370,7 +1370,7 @@ fn handleCommentEdit(
     defer allocator.free(body);
 
     if (!evt.Comment.fieldsValid(body)) {
-        const form_location = try std.fmt.allocPrint(allocator, "{s}/edit", .{base});
+        const form_location = try allocator.print("{s}/edit", .{base});
         defer allocator.free(form_location);
         try request.respond("", .{
             .status = .see_other,
@@ -1470,12 +1470,12 @@ fn handleRemove(
 
             // a draft lives in its author's user repo
             if (try evt.readForkById(io, allocator, &author_arena, server.users_dir, &user_id, &parts.id)) |fork_record| {
-                const repo_id = evt.parseEventId(std.fs.path.basename(source.path)) catch return respondRemoveNotFound(request);
+                const repo_id = evt.parseEventId(std.Io.Dir.path.basename(source.path)) catch return respondRemoveNotFound(request);
                 if (!fork_record.removed and fork_record.event.stage == .draft and std.mem.eql(u8, fork_record.event.repo_id, &repo_id)) {
                     const id = std.fmt.bytesToHex(parts.id, .lower);
                     try fork.remove(io, allocator, server.users_dir, &user_id, &id, author);
 
-                    const location = try std.fmt.allocPrint(allocator, "{s}/patches/drafts", .{parts.repo_base});
+                    const location = try allocator.print("{s}/patches/drafts", .{parts.repo_base});
                     defer allocator.free(location);
                     try request.respond("", .{
                         .status = .see_other,
@@ -1506,7 +1506,7 @@ fn handleRemove(
     }
 
     const id = std.fmt.bytesToHex(parts.id, .lower);
-    const location = try std.fmt.allocPrint(allocator, "{s}/event:{s}/kind:{s}", .{ parts.repo_base, &id, @tagName(parts.kind) });
+    const location = try allocator.print("{s}/event:{s}/kind:{s}", .{ parts.repo_base, &id, @tagName(parts.kind) });
     defer allocator.free(location);
     try request.respond("", .{
         .status = .see_other,
@@ -1639,7 +1639,7 @@ fn handleThreadEdit(
         else => unreachable,
     };
     if (!valid) {
-        const form_location = try std.fmt.allocPrint(allocator, "{s}/edit", .{base});
+        const form_location = try allocator.print("{s}/edit", .{base});
         defer allocator.free(form_location);
         if (!evt.titleValid(title)) {
             return respondThreadFormFailure(request, allocator, host, form_location, requiredTitleFeedback(parts.thread_kind, title, labels, description, target_branch, null));
@@ -1661,11 +1661,11 @@ fn handleThreadEdit(
             .local => unreachable,
         };
         if (!evt.Patch.branchValid(target_branch) or !try request_repo.source.hasBranch(io, allocator, target_branch)) {
-            const form_location = try std.fmt.allocPrint(allocator, "{s}/edit", .{base});
+            const form_location = try allocator.print("{s}/edit", .{base});
             defer allocator.free(form_location);
             return respondThreadFormFailure(request, allocator, host, form_location, patchFeedback(.invalid_target_branch, title, labels, description, target_branch, null));
         }
-        const repo_id = evt.parseEventId(std.fs.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
+        const repo_id = evt.parseEventId(std.Io.Dir.path.basename(request_repo.source.path)) catch return respondRemoveNotFound(request);
         var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
         defer admin_repo.deinit(io, allocator);
         const id = std.fmt.bytesToHex(parts.thread_id, .lower);
@@ -1722,7 +1722,7 @@ fn handleThreadEdit(
         else => {
             if (parts.thread_kind != .patch) return err;
             const failure = ui.Session.FormFeedback.PatchFailure.fromError(err) orelse return err;
-            const form_location = try std.fmt.allocPrint(allocator, "{s}/edit", .{base});
+            const form_location = try allocator.print("{s}/edit", .{base});
             defer allocator.free(form_location);
             return respondThreadFormFailure(request, allocator, host, form_location, patchFeedback(failure, title, labels, description, target_branch, null));
         },
@@ -1768,7 +1768,7 @@ fn handleThreadResolve(
     var hunks: std.ArrayList([]const u8) = .empty;
     var hunk_index: usize = 0;
     while (true) : (hunk_index += 1) {
-        const name = try std.fmt.allocPrint(aa, "d{d}", .{hunk_index});
+        const name = try aa.print("d{d}", .{hunk_index});
         const submitted = (try parseFormField(aa, body, name)) orelse break;
         try hunks.append(aa, try std.mem.replaceOwned(u8, aa, submitted, "\r\n", "\n"));
     }
@@ -1817,7 +1817,7 @@ fn handleThreadResolve(
         },
         // invalid fields send the user back to the resolve form
         error.InvalidFields => {
-            const form_location = try std.fmt.allocPrint(allocator, "{s}/resolve", .{base});
+            const form_location = try allocator.print("{s}/resolve", .{base});
             defer allocator.free(form_location);
             try request.respond("", .{
                 .status = .see_other,
@@ -1842,7 +1842,7 @@ fn handleUndo(io: std.Io, request: *std.http.Server.Request, allocator: std.mem.
     const target = route.repo_undo;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const repo_base = if (target.name.len == 0) "" else try std.fmt.allocPrint(arena.allocator(), "/{s}", .{target.name.slice()});
+    const repo_base = if (target.name.len == 0) "" else try arena.allocator().print("/{s}", .{target.name.slice()});
     _ = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner)) orelse return;
     const resolved = (try requestRepoSource(io, allocator, host, repo_base)) orelse return respondRepoNotFound(request);
     defer resolved.deinit(allocator);
@@ -1886,8 +1886,7 @@ fn handleSync(
                 return std.ascii.isAlphanumeric(c) or c == '-' or c == '.' or c == '_' or c == '~';
             }
         }.isUnreserved);
-        const cookie = try std.fmt.allocPrint(
-            allocator,
+        const cookie = try allocator.print(
             local_flash_cookie ++ "=" ++ local_sync_failure_prefix ++ "{s}; Path=/; HttpOnly; SameSite=Strict",
             .{encoded.written()},
         );
@@ -2448,7 +2447,7 @@ const ansi_palette = [16]Grid.Color.Rgb{
 fn colorRgb(color: Grid.Color) Grid.Color.Rgb {
     return switch (color) {
         .rgb => |c| c,
-        .ansi => |a| ansi_palette[@intFromEnum(a)],
+        .ansi => |a| ansi_palette[@backingInt(a)],
         .indexed => |n| if (n < 16)
             ansi_palette[n]
         else if (n < 232) blk: {

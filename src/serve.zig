@@ -55,7 +55,7 @@ pub fn run(
 ) !void {
     // create the data dir
 
-    const data_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, options.data_dir });
+    const data_dir_path = try std.Io.Dir.path.resolveAlloc(allocator, &.{ cwd_path, options.data_dir });
     defer allocator.free(data_dir_path);
 
     const data_dir = try std.Io.Dir.cwd().createDirPathOpen(io, data_dir_path, .{});
@@ -63,14 +63,14 @@ pub fn run(
 
     // create the users dir
 
-    const users_dir = try std.fs.path.resolve(allocator, &.{ data_dir_path, "users" });
+    const users_dir = try std.Io.Dir.path.resolveAlloc(allocator, &.{ data_dir_path, "users" });
     defer allocator.free(users_dir);
 
     try std.Io.Dir.cwd().createDirPath(io, users_dir);
 
     // the admin repo path is where the user/repo metadata events live
 
-    const admin_repo_path = try std.fs.path.resolve(allocator, &.{ data_dir_path, "admin" });
+    const admin_repo_path = try std.Io.Dir.path.resolveAlloc(allocator, &.{ data_dir_path, "admin" });
     defer allocator.free(admin_repo_path);
 
     // create the admin repo on first run

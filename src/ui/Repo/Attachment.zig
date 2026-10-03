@@ -62,10 +62,10 @@ pub fn appendRows(
         });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
-        tb.getFocus().kind = .{ .custom = try std.fmt.allocPrint(pa, "{s}{s}", .{ ui.raw_link_prefix, try url(session.page_arena, identity, &entry.id) }) };
+        tb.getFocus().kind = .{ .custom = try pa.print("{s}{s}", .{ ui.raw_link_prefix, try url(session.page_arena, identity, &entry.id) }) };
         try row.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
 
-        row.getFocus().kind = .{ .custom = try std.fmt.allocPrint(pa, "form:{s}/attachment:{s}/remove", .{ parent_url, &entry.id }) };
+        row.getFocus().kind = .{ .custom = try pa.print("form:{s}/attachment:{s}/remove", .{ parent_url, &entry.id }) };
         var remove = try wgt.TextBox.init(allocator, "✕", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
         errdefer remove.deinit(allocator);
         remove.getFocus().mode = .all;
@@ -98,7 +98,7 @@ pub fn removeId(row: *wgt.Box(ui.Widget)) ?[evt.event_id_size]u8 {
 // the url an attachment's bytes are served from
 pub fn url(page_arena: *std.heap.ArenaAllocator, identity: []const u8, id: []const u8) ![]const u8 {
     return if (identity.len == 0)
-        try std.fmt.allocPrint(page_arena.allocator(), "/attachment:{s}", .{id})
+        try page_arena.allocator().print("/attachment:{s}", .{id})
     else
-        try std.fmt.allocPrint(page_arena.allocator(), "/{s}/attachment:{s}", .{ identity, id });
+        try page_arena.allocator().print("/{s}/attachment:{s}", .{ identity, id });
 }

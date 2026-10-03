@@ -552,7 +552,7 @@ test "merge" {
             const issue_id_set = try Repo.DB.SortedSet(.read_only).init(issue_id_set_cursor);
             try std.testing.expectEqual(6, try issue_id_set.count());
 
-            var found = [_]bool{false} ** 6;
+            var found: [6]bool = @splat(false);
             var iter = try issue_id_set.iteratorFromIndex(0);
             while (try iter.next()) |id_cursor_val| {
                 var id_cursor = id_cursor_val;

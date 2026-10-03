@@ -432,7 +432,7 @@ fn windowLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: 
     const window = ui.RoutablePage.repoRefsRoute(identity, kind, encoded) orelse return error.RouteTooLong;
     const route = window.withSearch(search) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+    return page_arena.allocator().print("a:{s}", .{url});
 }
 
 // the "a:" link to the files tab at ref `name` (a branch or tag) within
@@ -447,5 +447,5 @@ fn refLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, kind: ui.
     const value = try ui.urlEncodeRef(aa, name);
     const route = ui.RoutablePage.repoFilesRoute(identity, ref_or_oid, value, "", 0) orelse return error.RouteTooLong;
     const url = try route.toUrl(page_arena);
-    return std.fmt.allocPrint(aa, "a:{s}", .{url});
+    return aa.print("a:{s}", .{url});
 }

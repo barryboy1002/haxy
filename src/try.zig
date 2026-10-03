@@ -61,14 +61,14 @@ pub fn main(init: std.process.Init) !void {
             \\-----END OPENSSH PRIVATE KEY-----
             \\
         );
-        if (.windows != builtin.os.tag) {
-            try priv_key_file.setPermissions(io, @enumFromInt(0o600));
+        if (.windows != builtin.target.os.tag) {
+            try priv_key_file.setPermissions(io, @fromBackingInt(@intCast(0o600)));
         }
     }
 
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
-    const key_path = try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "key" });
+    const key_path = try std.Io.Dir.path.join(allocator, &.{ cwd_path, temp_dir_name, "key" });
     defer allocator.free(key_path);
 
     var cli = false;
@@ -85,8 +85,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     var serve_options = try hx.command.parseServeOptions(allocator, serve_args.items);
-    const git_ssh_prefix = if (builtin.mode == .Debug)
-        try std.fmt.allocPrint(allocator, "GIT_SSH_COMMAND='ssh -i \"{s}\" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR' \\\r\n", .{key_path})
+    const git_ssh_prefix = if (builtin.mode == .debug)
+        try allocator.print("GIT_SSH_COMMAND='ssh -i \"{s}\" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR' \\\r\n", .{key_path})
     else
         "";
     defer if (git_ssh_prefix.len != 0) allocator.free(git_ssh_prefix);
@@ -94,13 +94,13 @@ pub fn main(init: std.process.Init) !void {
     serve_options.fallback_on_address_in_use = true;
 
     const server_path = if (std.mem.eql(u8, serve_options.data_dir, "."))
-        try std.fs.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" })
+        try std.Io.Dir.path.join(allocator, &.{ cwd_path, temp_dir_name, "server" })
     else
-        try std.fs.path.resolve(allocator, &.{ cwd_path, serve_options.data_dir });
+        try std.Io.Dir.path.resolveAlloc(allocator, &.{ cwd_path, serve_options.data_dir });
     defer allocator.free(server_path);
     serve_options.data_dir = server_path;
 
-    const work_path = try std.fs.path.join(allocator, &.{ server_path, "admin" });
+    const work_path = try std.Io.Dir.path.join(allocator, &.{ server_path, "admin" });
     defer allocator.free(work_path);
 
     const Repo = rp.Repo(.xit, evt.admin_repo_opts);
@@ -229,7 +229,7 @@ pub fn main(init: std.process.Init) !void {
             };
         }
         // commit the seed events and consume them into the database
-        const users_dir = try std.fs.path.join(arena.allocator(), &.{ server_path, "users" });
+        const users_dir = try std.Io.Dir.path.join(arena.allocator(), &.{ server_path, "users" });
         try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &events_to_consume);
 
         // admin is granted ownership of every repo, so it has full privileges
@@ -281,7 +281,7 @@ pub fn main(init: std.process.Init) !void {
         // every repo gets the same generated history, so build it once into a
         // template repo and copy that to each repo's location below rather than
         // redoing the expensive commit work for every repo.
-        const template_path = try std.fs.path.join(arena.allocator(), &.{ cwd_path, temp_dir_name, "template" });
+        const template_path = try std.Io.Dir.path.join(arena.allocator(), &.{ cwd_path, temp_dir_name, "template" });
         {
             var template_repo = try rp.Repo(.xit, .{}).init(io, allocator, .{ .path = template_path });
             defer template_repo.deinit(io, allocator);
@@ -905,7 +905,7 @@ pub fn main(init: std.process.Init) !void {
 
     // let the native TUI's page builders open the on-disk repos for the file tree
     session.io = io;
-    session.users_dir = try std.fs.path.join(session_arena.allocator(), &.{ server_path, "users" });
+    session.users_dir = try std.Io.Dir.path.join(session_arena.allocator(), &.{ server_path, "users" });
 
     // leave a one-shot session for the first browser to hit the web ui, so it
     // starts logged in as admin
@@ -1100,7 +1100,7 @@ fn seedPatchRevision(
     defer fork_dir.close(io);
     var writer = std.Io.Writer.Allocating.init(allocator);
     defer writer.deinit();
-    if (std.fs.path.dirname(path)) |dir| try fork_dir.createDirPath(io, dir);
+    if (std.Io.Dir.path.dirname(path)) |dir| try fork_dir.createDirPath(io, dir);
     for (contents, 0..) |content, i| {
         {
             const file = try fork_dir.createFile(io, path, .{});
@@ -1213,7 +1213,7 @@ fn seedPatches(
         },
     };
 
-    const users_dir = try std.fs.path.join(allocator, &.{ server_path, "users" });
+    const users_dir = try std.Io.Dir.path.join(allocator, &.{ server_path, "users" });
     defer allocator.free(users_dir);
     const patch_author = evt.CommitAuthor{ .name = "admin", .email = "admin@example.test" };
     var patch_ids: [patch_data.len][evt.event_id_size]u8 = undefined;
@@ -1424,7 +1424,7 @@ fn seedPush(io: std.Io, allocator: std.mem.Allocator, repo: *rp.Repo(.xit, .{}),
 
             // a null tree keeps the parent's content, so the branch advances
             // without the fixture having to build one
-            const author_line = try std.fmt.allocPrint(aa, "{s} <{s}>", .{ ctx.author.name, ctx.author.email });
+            const author_line = try aa.print("{s} <{s}>", .{ ctx.author.name, ctx.author.email });
             const feature_old = (try rf.readRecur(.xit, opts, state.readOnly(), ctx.io, .{ .ref = .{ .kind = .head, .name = "feature" } })) orelse return error.NotFound;
             const feature_new = try obj.writeCommit(.xit, opts, state, ctx.io, ctx.allocator, .{
                 .message = "Revise the feature branch",
@@ -1444,7 +1444,7 @@ fn seedPush(io: std.Io, allocator: std.mem.Allocator, repo: *rp.Repo(.xit, .{}),
                 },
                 .{
                     .ref_name = try aa.dupe(u8, "refs/heads/docs"),
-                    .old_oid = try aa.dupe(u8, "0" ** hash.hexLen(opts.hash)),
+                    .old_oid = try aa.dupe(u8, &@as([hash.hexLen(opts.hash)]u8, @splat('0'))),
                     .new_oid = try aa.dupe(u8, &docs_new),
                 },
             };

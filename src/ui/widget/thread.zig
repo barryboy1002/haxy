@@ -122,7 +122,7 @@ pub fn readConflict(
 
 fn revisionSummary(allocator: std.mem.Allocator, revision_maybe: ?evt.Patch.Revision) ![]const u8 {
     const revision = revision_maybe orelse return "(none)";
-    return std.fmt.allocPrint(allocator, "squash {s}\nsource {s}", .{ revision.squash_oid, revision.source_oid });
+    return allocator.print("squash {s}\nsource {s}", .{ revision.squash_oid, revision.source_oid });
 }
 
 fn readFieldOid(
@@ -198,7 +198,7 @@ pub fn loadLabels(
         const key = try pair.key_cursor.readBytesAlloc(aa, null);
         const space = std.mem.indexOfScalar(u8, key, ' ') orelse continue;
         const label = key[0..space];
-        if (labels.getLastOrNull()) |last| {
+        if (labels.last()) |last| {
             if (std.mem.eql(u8, last, label)) continue;
         }
         try labels.append(aa, label);
@@ -645,7 +645,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
 
         fn entryStatus(entry: Entry) Status {
             if (comptime has_status) return Data.statusKind(entry.record.event);
-            return @enumFromInt(0);
+            return @fromBackingInt(@intCast(0));
         }
 
         fn entryDraft(entry: Entry) bool {
@@ -695,7 +695,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
         fn listLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status: Status, label: []const u8, id: []const u8, search: []const u8) ![]const u8 {
             var route = listRoute(identity, status, label, id) orelse return error.RouteTooLong;
             if (search.len != 0) route = route.withSearch(search) orelse return error.RouteTooLong;
-            return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
+            return page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
         }
 
         fn labelLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status: Status, label: []const u8, search: []const u8) ![]const u8 {
@@ -735,14 +735,14 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 if (supports_forks and self.session.data.current_page.parent() == .fork) {
                     // the fork page's own tabs show the diff and commits
                     const route = ui.RoutablePage.repoPatchesRoute(self.data.identity, .open, "", entry.id) orelse return error.RouteTooLong;
-                    try addToolButton(allocator, row, "view on target repo", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                    try addToolButton(allocator, row, "view on target repo", "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                 } else if (supports_forks) {
                     if (try Data.diffRoute(self.data.identity, entry)) |route| {
-                        try addToolButton(allocator, row, "view diff", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                        try addToolButton(allocator, row, "view diff", "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     }
                     if (try Data.commitsRoute(self.data.identity, entry)) |route| {
-                        const label = if (entry.commit_count) |count| try std.fmt.allocPrint(pa, "view commits ({d})", .{count}) else "view commits";
-                        try addToolButton(allocator, row, label, "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                        const label = if (entry.commit_count) |count| try pa.print("view commits ({d})", .{count}) else "view commits";
+                        try addToolButton(allocator, row, label, "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     }
                 }
 
@@ -755,45 +755,45 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
                 if (comptime supports_merge) {
                     if (Data.canMerge(entry, self.session)) {
                         const route = mergeRoute(self.data.identity, entry.id) orelse return error.RouteTooLong;
-                        try addToolButton(allocator, row, "merge", mergeBottomLabel(entry.mergeability.status()), try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                        try addToolButton(allocator, row, "merge", mergeBottomLabel(entry.mergeability.status()), try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     }
                 }
 
                 if (supports_drafts and entryDraft(entry)) {
                     const route = publishRoute(self.data.identity, entry.id) orelse return error.RouteTooLong;
-                    try addToolButton(allocator, row, "publish", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                    try addToolButton(allocator, row, "publish", "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     const edit_route = ui.RoutablePage.repoThreadEditRoute(kind, self.data.identity, entry.id) orelse return error.RouteTooLong;
-                    try addToolButton(allocator, row, "edit", "", try std.fmt.allocPrint(pa, "a:{s}", .{try edit_route.toUrl(self.session.page_arena)}));
+                    try addToolButton(allocator, row, "edit", "", try pa.print("a:{s}", .{try edit_route.toUrl(self.session.page_arena)}));
                     const remove_route = ui.RoutablePage.repoThreadRemoveRoute(kind, self.data.identity, entry.id, "") orelse return error.RouteTooLong;
-                    try addToolButton(allocator, row, "✕", "", try std.fmt.allocPrint(pa, "a:{s}", .{try remove_route.toUrl(self.session.page_arena)}));
+                    try addToolButton(allocator, row, "✕", "", try pa.print("a:{s}", .{try remove_route.toUrl(self.session.page_arena)}));
                 } else {
                     if (!self.session.is_terminal and !entryConflicted(entry)) {
                         const label = "add attachment";
                         const action = if (self.data.identity.len == 0)
-                            try std.fmt.allocPrint(pa, "{s}/{s}:{s}/attach", .{ ui.file_input_prefix, @tagName(kind), entry.id })
+                            try pa.print("{s}/{s}:{s}/attach", .{ ui.file_input_prefix, @tagName(kind), entry.id })
                         else
-                            try std.fmt.allocPrint(pa, "{s}/{s}/{s}:{s}/attach", .{ ui.file_input_prefix, self.data.identity, @tagName(kind), entry.id });
+                            try pa.print("{s}/{s}/{s}:{s}/attach", .{ ui.file_input_prefix, self.data.identity, @tagName(kind), entry.id });
                         try addToolButton(allocator, row, label, "", action);
                     }
 
                     if (supports_conflicts and entryConflicted(entry)) {
                         const route = resolveRoute(self.data.identity, entry.id, "") orelse return error.RouteTooLong;
-                        try addToolButton(allocator, row, "resolve conflict", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                        try addToolButton(allocator, row, "resolve conflict", "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     } else {
                         if (has_status) {
                             if (statusChange(entryStatus(entry))) |change| {
                                 const route = ui.RoutablePage.repoThreadCommentsRoute(kind, self.data.identity, entry.id, 0) orelse return error.RouteTooLong;
-                                row.getFocus().kind = .{ .custom = try std.fmt.allocPrint(pa, "form:{s}/{s}", .{ try route.toUrl(self.session.page_arena), change.action }) };
+                                row.getFocus().kind = .{ .custom = try pa.print("form:{s}/{s}", .{ try route.toUrl(self.session.page_arena), change.action }) };
                                 try addToolButton(allocator, row, change.action, "", "submit");
                             }
                         }
 
                         const route = ui.RoutablePage.repoThreadEditRoute(kind, self.data.identity, entry.id) orelse return error.RouteTooLong;
-                        try addToolButton(allocator, row, "edit", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                        try addToolButton(allocator, row, "edit", "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                     }
 
                     const route = ui.RoutablePage.repoThreadRemoveRoute(kind, self.data.identity, entry.id, "") orelse return error.RouteTooLong;
-                    try addToolButton(allocator, row, "✕", "", try std.fmt.allocPrint(pa, "a:{s}", .{try route.toUrl(self.session.page_arena)}));
+                    try addToolButton(allocator, row, "✕", "", try pa.print("a:{s}", .{try route.toUrl(self.session.page_arena)}));
                 }
             }
 
@@ -869,7 +869,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
             errdefer description.deinit(allocator);
             if (preview_end != null) {
                 const route = ui.RoutablePage.repoThreadDescriptionRoute(kind, self.data.identity, entry.id) orelse return error.RouteTooLong;
-                description.body().kind = .{ .custom = try std.fmt.allocPrint(self.session.page_arena.allocator(), "a:{s}", .{try route.toUrl(self.session.page_arena)}) };
+                description.body().kind = .{ .custom = try self.session.page_arena.allocator().print("a:{s}", .{try route.toUrl(self.session.page_arena)}) };
             }
             try inner_box.children.put(allocator, description.getFocus().id, .{ .widget = .{ .markdown_frame = description }, .rect = null, .min_size = null });
             self.description_id = description.getFocus().id;
@@ -1432,7 +1432,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
         const header_index: usize = 0;
         const stack_index: usize = 1;
         // indices within the stack, 1:1 with the header tabs.
-        const status_count = @typeInfo(Status).@"enum".fields.len;
+        const status_count = @typeInfo(Status).@"enum".field_names.len;
         const labels_view_index: usize = status_count;
         // the new-thread form, or the edit, comment, or resolve form when the page was
         // loaded at one of their urls.
@@ -1455,8 +1455,8 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             if (std.mem.eql(u8, name, "conflicts")) return conflict_view_index;
             if (std.mem.eql(u8, name, "drafts")) return drafts_view_index;
             if (std.mem.eql(u8, name, "description")) unreachable;
-            inline for (@typeInfo(Status).@"enum".fields, 0..) |field, index| {
-                if (std.mem.eql(u8, name, field.name)) return index;
+            inline for (@typeInfo(Status).@"enum".field_names, 0..) |status_name, index| {
+                if (std.mem.eql(u8, name, status_name)) return index;
             }
             unreachable;
         }
@@ -1473,7 +1473,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
         // the status a status split lists; the conflicts split has none (its
         // threads carry their own).
         fn splitStatus(index: usize) Status {
-            return @enumFromInt(index);
+            return @fromBackingInt(@intCast(index));
         }
 
         fn entryConflicted(entry: Entry) bool {
@@ -1482,7 +1482,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
 
         fn entryStatus(entry: Entry) Status {
             if (comptime has_status) return Data.statusKind(entry.record.event);
-            return @enumFromInt(0);
+            return @fromBackingInt(@intCast(0));
         }
 
         fn entryDraft(entry: Entry) bool {
@@ -1518,7 +1518,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
         fn listLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status: Status, label: []const u8, id: []const u8, search: []const u8) ![]const u8 {
             var route = listRoute(identity, status, label, id) orelse return error.RouteTooLong;
             if (search.len != 0) route = route.withSearch(search) orelse return error.RouteTooLong;
-            return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
+            return page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
         }
 
         fn rowLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, id: []const u8) ![]const u8 {
@@ -1532,19 +1532,19 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     ui.RoutablePage.repoThreadCommentsRoute(kind, data.identity, id, data.comments_start)
             else
                 ui.RoutablePage.repoThreadCommentsRoute(kind, data.identity, id, 0)) orelse return error.RouteTooLong;
-            return std.fmt.allocPrint(page_arena.allocator(), "ai:{s}", .{try route.toUrl(page_arena)});
+            return page_arena.allocator().print("ai:{s}", .{try route.toUrl(page_arena)});
         }
 
         fn windowLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, status_maybe: ?Status, drafts: bool, id: []const u8) ![]const u8 {
             if (supports_conflicts and status_maybe == null and !drafts) {
                 const route = conflictsRoute(data.identity, id) orelse return error.RouteTooLong;
-                return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
+                return page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
             }
             if (drafts and id.len == 0) {
                 const route = draftsRoute(data.identity) orelse return error.RouteTooLong;
-                return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
+                return page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
             }
-            return listLink(page_arena, data.identity, status_maybe orelse @enumFromInt(0), data.label, id, data.search orelse "");
+            return listLink(page_arena, data.identity, status_maybe orelse @fromBackingInt(@intCast(0)), data.label, id, data.search orelse "");
         }
 
         fn labelLink(page_arena: *std.heap.ArenaAllocator, identity: []const u8, status: Status, label: []const u8, search: []const u8) ![]const u8 {
@@ -1572,8 +1572,8 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             }
             const stack = &outer.children.values()[stack_index].widget.stack;
 
-            inline for (@typeInfo(Status).@"enum".fields) |field| {
-                var split = try initSplit(allocator, session, data, @enumFromInt(field.value), false);
+            inline for (@typeInfo(Status).@"enum".field_values) |value| {
+                var split = try initSplit(allocator, session, data, @fromBackingInt(@intCast(value)), false);
                 errdefer split.deinit(allocator);
                 try stack.children.put(allocator, split.getFocus().id, .{ .box = split });
             }
@@ -1586,9 +1586,9 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                 defer items.deinit(allocator);
                 // when filtered, the first item clears the filter
                 if (data.label.len != 0)
-                    try items.append(allocator, .{ .text = "✕", .link = try listLink(session.page_arena, data.identity, @enumFromInt(0), "", "", data.search orelse "") });
+                    try items.append(allocator, .{ .text = "✕", .link = try listLink(session.page_arena, data.identity, @fromBackingInt(@intCast(0)), "", "", data.search orelse "") });
                 for (data.labels) |label|
-                    try items.append(allocator, .{ .text = label, .link = try labelLink(session.page_arena, data.identity, @enumFromInt(0), label, data.search orelse "") });
+                    try items.append(allocator, .{ .text = label, .link = try labelLink(session.page_arena, data.identity, @fromBackingInt(@intCast(0)), label, data.search orelse "") });
                 try tf.setItems(allocator, items.items);
                 try stack.children.put(allocator, tf.getFocus().id, .{ .word_flow = tf });
             }
@@ -1606,7 +1606,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                         .merge => mergeRoute(data.identity, data.selected_id),
                     } orelse return error.RouteTooLong;
                     const page_url = try route.toUrl(session.page_arena);
-                    const action = try std.fmt.allocPrint(aa, "form:{s}", .{page_url});
+                    const action = try aa.print("form:{s}", .{page_url});
                     const event_name = if (data.comment_id.len == 0) thread_name else "comment";
                     var label_buf: ["remove ".len + @max(thread_name.len, "comment".len)]u8 = undefined;
                     var buttons: [2]ConfirmationButton = undefined;
@@ -1627,7 +1627,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                             buttons[1] = .{
                                 .label = "squash and merge patch",
                                 .bottom_label = mergeBottomLabel(availability.squash),
-                                .action = if (availability.squash == .clean) try std.fmt.allocPrint(aa, "{s}{s}/squash", .{ ui.submit_action_prefix, page_url }) else "",
+                                .action = if (availability.squash == .clean) try aa.print("{s}{s}/squash", .{ ui.submit_action_prefix, page_url }) else "",
                             };
                             button_count += 1;
                         } else unreachable;
@@ -1642,7 +1642,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     else
                         ui.RoutablePage.repoThreadCommentNewRoute(kind, data.identity, data.selected_id, data.comment_id) orelse return error.RouteTooLong;
                     const page_url = try route.toUrl(session.page_arena);
-                    const action = try std.fmt.allocPrint(session.page_arena.allocator(), "form:{s}", .{page_url});
+                    const action = try session.page_arena.allocator().print("form:{s}", .{page_url});
                     const page = data.comment_page;
                     const top_level = if (page) |p| std.mem.eql(u8, &p.selected.comment.event.parent_id, &p.selected.comment.event.thread_id) else false;
                     const parent_route = if (editing)
@@ -1692,7 +1692,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                         ui.RoutablePage.repoThreadEditRoute(kind, data.identity, data.selected_id) orelse return error.RouteTooLong
                     else
                         ui.RoutablePage.repoThreadNewRoute(kind, data.identity) orelse return error.RouteTooLong;
-                    const action = try std.fmt.allocPrint(aa, "form:{s}", .{try route.toUrl(session.page_arena)});
+                    const action = try aa.print("form:{s}", .{try route.toUrl(session.page_arena)});
                     const record = if (data.view == .edit)
                         (if (data.selectedThread()) |entry| &entry.record else null)
                     else
@@ -1753,7 +1753,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                         try addRow(allocator, &list_box, "← previous", "", try windowLink(session.page_arena, data, status_maybe, drafts, prev));
                     for (win.items) |entry| {
                         const label: []const u8 = if (entry.comments.count > 0)
-                            try std.fmt.allocPrint(session.page_arena.allocator(), " {d} comments ", .{entry.comments.count})
+                            try session.page_arena.allocator().print(" {d} comments ", .{entry.comments.count})
                         else
                             "";
                         try addRow(allocator, &list_box, entry.record.event.title, label, try rowLink(session.page_arena, data, entry.id));
@@ -1862,7 +1862,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                 var parent = try ui.authorBox(allocator, session.page_arena, author);
                 errdefer parent.deinit(allocator);
                 parent.options.label = " replying to ";
-                parent.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), "a:{s}", .{try parent_route.toUrl(session.page_arena)}) };
+                parent.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("a:{s}", .{try parent_route.toUrl(session.page_arena)}) };
                 try box.children.put(allocator, parent.getFocus().id, .{ .widget = .{ .text_box = parent }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
                 box.getFocus().child_id = parent.getFocus().id;
             }
@@ -1943,7 +1943,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .vert });
             errdefer box.deinit(allocator);
             const route = resolveRoute(data.identity, data.selected_id, data.theirs_picks) orelse return error.RouteTooLong;
-            box.getFocus().kind = .{ .custom = try std.fmt.allocPrint(aa, "form:{s}", .{try route.toUrl(session.page_arena)}) };
+            box.getFocus().kind = .{ .custom = try aa.print("form:{s}", .{try route.toUrl(session.page_arena)}) };
 
             if (conflict.title) |*fc| {
                 try addLabel(allocator, &box, "title conflict:");
@@ -1987,8 +1987,8 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                             const author = if (auto.theirs) desc.theirs_author else desc.ours_author;
                             const verb: []const u8 = if (auto.text == null) "removed" else "edited";
                             const label = switch (author) {
-                                .user_name, .email => |name| try std.fmt.allocPrint(aa, " {s} by {s} ", .{ verb, name }),
-                                .unknown => try std.fmt.allocPrint(aa, " {s} by {s} ", .{ verb, if (auto.theirs) @as([]const u8, "them") else "us" }),
+                                .user_name, .email => |name| try aa.print(" {s} by {s} ", .{ verb, name }),
+                                .unknown => try aa.print(" {s} by {s} ", .{ verb, if (auto.theirs) @as([]const u8, "them") else "us" }),
                             };
                             var tb = try wgt.TextBox.init(allocator, auto.text orelse "(removed)", .{ .border_style = .single, .round_corners = true, .wrap_kind = .word, .label = label });
                             errdefer tb.deinit(allocator);
@@ -1999,7 +1999,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                             // a blank row on each side sets the group apart from
                             // the flowing shared and auto-resolved chunks
                             if (chunk_index > 0) try addGap(allocator, &box);
-                            const name = try std.fmt.allocPrint(aa, "d{d}", .{hunk_index});
+                            const name = try aa.print("d{d}", .{hunk_index});
                             hunk_index += 1;
                             const picked_theirs = data.theirsPicked(name);
                             try addVersionRow(allocator, &box, try sideLabel(aa, desc.ours_author, true), hunk.ours orelse "", try useThisLink(session, data, name, false));
@@ -2098,7 +2098,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
         // the label of one side's version box, naming its author
         fn sideLabel(aa: std.mem.Allocator, author: ui.Author, ours: bool) ![]const u8 {
             return switch (author) {
-                .user_name, .email => |name| try std.fmt.allocPrint(aa, " edited by {s} ", .{name}),
+                .user_name, .email => |name| try aa.print(" edited by {s} ", .{name}),
                 .unknown => if (ours) " current version " else " their version ",
             };
         }
@@ -2119,7 +2119,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                 try picks.appendSlice(aa, name);
             }
             const route = resolveRoute(data.identity, data.selected_id, picks.items) orelse return error.RouteTooLong;
-            return std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)});
+            return aa.print("a:{s}", .{try route.toUrl(session.page_arena)});
         }
 
         fn addRow(allocator: std.mem.Allocator, box: *wgt.Box(Widget), text: []const u8, bottom_label: []const u8, link: []const u8) !void {
@@ -2405,7 +2405,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
         fn submitSearch(self: *This, text: []const u8) !void {
             if (text.len == 0 and self.data.search == null) return;
             const selected = self.header().getSelectedIndex() orelse 0;
-            const status: Status = if (selected < status_count) splitStatus(selected) else @enumFromInt(0);
+            const status: Status = if (selected < status_count) splitStatus(selected) else @fromBackingInt(@intCast(0));
             const route = listRoute(self.data.identity, status, self.data.label, "") orelse return;
             try self.session.navigate(route.withSearch(text) orelse return);
         }
@@ -2772,7 +2772,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             labels_input.clear(allocator);
             description_input.clear(allocator);
 
-            const route = listRoute(self.data.identity, @enumFromInt(0), "", &event_id_hex) orelse return;
+            const route = listRoute(self.data.identity, @fromBackingInt(@intCast(0)), "", &event_id_hex) orelse return;
             try self.session.navigate(route);
         }
 
@@ -2885,7 +2885,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     if (!entryDraft(entry.*)) return;
                     const author = ((try self.session.authorize(self.data.identity, .read)) orelse return).author;
                     try self.data.publishDraft(self.session, allocator, author, entry.id);
-                    const route = listRoute(self.data.identity, @enumFromInt(0), "", entry.id) orelse return;
+                    const route = listRoute(self.data.identity, @fromBackingInt(@intCast(0)), "", entry.id) orelse return;
                     try self.session.navigate(route);
                 } else unreachable,
                 .merge => if (comptime supports_merge) {

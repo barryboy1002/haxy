@@ -88,7 +88,7 @@ fn runServer(
     comptime port: u16,
 ) !std.process.Child {
     {
-        const priv_key_path = try std.fs.path.join(allocator, &.{ temp_path, "key" });
+        const priv_key_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "key" });
         defer allocator.free(priv_key_path);
         const priv_key_file = try std.Io.Dir.cwd().createFile(io, priv_key_path, .{});
         defer priv_key_file.close(io);
@@ -102,12 +102,12 @@ fn runServer(
             \\-----END OPENSSH PRIVATE KEY-----
             \\
         );
-        if (.windows != builtin.os.tag) {
-            try priv_key_file.setPermissions(io, @enumFromInt(0o600));
+        if (.windows != builtin.target.os.tag) {
+            try priv_key_file.setPermissions(io, @fromBackingInt(@intCast(0o600)));
         }
     }
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         // openssh needs an acl granting access only to the current user.
         // use cwd so the temp path doesn't need powershell quoting.
         var permissions_process = try std.process.spawn(io, .{
@@ -139,7 +139,7 @@ fn runServer(
 
     const cwd_path = try std.process.currentPathAlloc(io, allocator);
     defer allocator.free(cwd_path);
-    const haxy_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out/bin/haxy" });
+    const haxy_path = try std.Io.Dir.path.join(allocator, &.{ cwd_path, "zig-out/bin/haxy" });
     defer allocator.free(haxy_path);
 
     const http_listen_arg = std.fmt.comptimePrint("127.0.0.1:{}", .{port});
@@ -204,7 +204,7 @@ fn testFetch(
     // add a tag
     _ = try server_repo.addTag(io, allocator, .{ .name = "1.0.0", .message = "hi" });
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     var client_repo = try rp.Repo(repo_kind, .{ .hash = hash_kind, .is_test = true }).init(io, allocator, .{ .path = client_path });
@@ -220,7 +220,7 @@ fn testFetch(
     }
 
     // create refspec with oid as a test
-    const oid_refspec = try std.fmt.allocPrint(allocator, "+{s}:refs/heads/foo", .{&commit1});
+    const oid_refspec = try allocator.print("+{s}:refs/heads/foo", .{&commit1});
     defer allocator.free(oid_refspec);
 
     const refspecs = &.{
@@ -318,7 +318,7 @@ fn testPush(
         defer export_file.close(io);
     }
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     var client_repo = try rp.Repo(repo_kind, .{ .hash = hash_kind, .is_test = true }).init(io, allocator, .{ .path = client_path });
@@ -527,9 +527,9 @@ fn testPushFork(
     const other_path = (try repoOnDiskPath(io, allocator, temp_path, "other", true)).?;
     defer allocator.free(other_path);
 
-    const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
+    const admin_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
-    const users_dir = try std.fs.path.join(allocator, &.{ temp_path, "users" });
+    const users_dir = try std.Io.Dir.path.join(allocator, &.{ temp_path, "users" });
     defer allocator.free(users_dir);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -563,7 +563,7 @@ fn testPushFork(
     };
     defer allocator.free(draft_path);
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
     const ssh_cmd = (try sshCommand(true, allocator, temp_path, port)).?;
     defer allocator.free(ssh_cmd);
@@ -586,7 +586,7 @@ fn testPushFork(
         break :blk try client.commit(io, allocator, .{ .message = "add feature" });
     };
 
-    const remote_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:target+{s}", .{&fork_id_hex});
+    const remote_url = try allocator.print("git@localhost:admin:target+{s}", .{&fork_id_hex});
     defer allocator.free(remote_url);
     try client.addRemote(io, allocator, .{ .name = "patch", .value = remote_url });
     try client.push(io, allocator, "patch", "master:patch", false, .{ .wire = .{ .ssh = .{ .command = ssh_cmd } } });
@@ -645,7 +645,7 @@ fn testPushFork(
         } }, .{ .name = "admin", .email = "admin@example.test" });
     }
 
-    const feature_remote_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:target+{s}", .{&fork_id_hex});
+    const feature_remote_url = try allocator.print("git@localhost:admin:target+{s}", .{&fork_id_hex});
     defer allocator.free(feature_remote_url);
     try client.addRemote(io, allocator, .{ .name = "patch-to-feature", .value = feature_remote_url });
 
@@ -782,12 +782,12 @@ fn testPushFork(
         try std.testing.expectEqualStrings(&second_patch_oid, imported.patch_oid);
     }
 
-    const other_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:other+{s}", .{&fork_id_hex});
+    const other_url = try allocator.print("git@localhost:admin:other+{s}", .{&fork_id_hex});
     defer allocator.free(other_url);
     try client.addRemote(io, allocator, .{ .name = "other", .value = other_url });
     // early rejections need no input. give ssh eof so windows openssh
     // doesn't hang closing stdin before forwarding the error.
-    const reject_ssh_cmd = try std.fmt.allocPrint(allocator, "{s} -n", .{ssh_cmd});
+    const reject_ssh_cmd = try allocator.print("{s} -n", .{ssh_cmd});
     defer allocator.free(reject_ssh_cmd);
     try std.testing.expectError(error.ServerReportedError, client.push(io, allocator, "other", "master:patch", false, .{ .wire = .{ .ssh = .{ .command = reject_ssh_cmd } } }));
 
@@ -800,7 +800,7 @@ fn testPushFork(
         defer user_repo.deinit(io, allocator);
         try evt.remove(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, &repo_id, .repo, .{ .name = "admin", .email = "admin@example.test" });
     }
-    const clone_path = try std.fs.path.join(allocator, &.{ temp_path, "fork-clone" });
+    const clone_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "fork-clone" });
     defer allocator.free(clone_path);
     var fork_clone = try rp.Repo(.xit, .{ .hash = hash_kind, .is_test = true }).clone(
         io,
@@ -846,7 +846,7 @@ fn testPushFork(
         });
     }
 
-    const denied_url = try std.fmt.allocPrint(allocator, "git@localhost:admin:target+{s}", .{&fork_id_hex});
+    const denied_url = try allocator.print("git@localhost:admin:target+{s}", .{&fork_id_hex});
     defer allocator.free(denied_url);
     try client.addRemote(io, allocator, .{ .name = "denied", .value = denied_url });
     try std.testing.expectError(error.ServerReportedError, client.push(io, allocator, "denied", "master:patch", false, .{ .wire = .{ .ssh = .{ .command = reject_ssh_cmd } } }));
@@ -868,7 +868,7 @@ fn testPushCreatesMissingRepo(
     var server_process = try runServer(io, allocator, temp_path, port);
     defer _ = server_process.kill(io);
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     var client_repo = try rp.Repo(repo_kind, .{ .is_test = true, .hash = hash_kind }).init(io, allocator, .{ .path = client_path });
@@ -953,7 +953,7 @@ fn testPushEvents(
     var server_repo = try ServerRepo.init(io, allocator, .{ .bare = true, .path = server_path });
     defer server_repo.deinit(io, allocator);
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     var client_repo = try rp.Repo(repo_kind, .{ .hash = hash_kind, .is_test = true }).init(io, allocator, .{ .path = client_path });
@@ -1118,7 +1118,7 @@ fn testClone(
         defer export_file.close(io);
     }
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     // get remote url
@@ -1133,7 +1133,7 @@ fn testClone(
     if (shell_out_to_git) {
         const ssh_cmd = (try sshCommand(true, allocator, temp_path, port)).?;
         defer allocator.free(ssh_cmd);
-        const ssh_config_arg = try std.fmt.allocPrint(allocator, "core.sshCommand={s}", .{ssh_cmd});
+        const ssh_config_arg = try allocator.print("core.sshCommand={s}", .{ssh_cmd});
         defer allocator.free(ssh_config_arg);
 
         {
@@ -1303,7 +1303,7 @@ fn testClone(
         const client_repo = &@field(clone_result, @tagName(hash_kind));
 
         // make sure HEAD points to the right default branch
-        var current_branch_buffer = [_]u8{0} ** rf.MAX_REF_CONTENT_SIZE;
+        var current_branch_buffer: [rf.MAX_REF_CONTENT_SIZE]u8 = @splat(0);
         const head = try client_repo.head(io, &current_branch_buffer);
         try std.testing.expectEqualStrings("main", head.ref.name);
 
@@ -1352,7 +1352,7 @@ fn testFetchLarge(
         try server_repo.addConfig(io, allocator, .{ .name = "uploadpack.allowrefinwant", .value = "true" });
     }
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     var client_repo = try rp.Repo(repo_kind, .{ .hash = hash_kind, .is_test = true }).init(io, allocator, .{ .path = client_path });
@@ -1375,7 +1375,7 @@ fn testFetchLarge(
     if (shell_out_to_git) {
         const ssh_cmd = (try sshCommand(true, allocator, temp_path, port)).?;
         defer allocator.free(ssh_cmd);
-        const ssh_config_arg = try std.fmt.allocPrint(allocator, "core.sshCommand={s}", .{ssh_cmd});
+        const ssh_config_arg = try allocator.print("core.sshCommand={s}", .{ssh_cmd});
         defer allocator.free(ssh_config_arg);
 
         {
@@ -1488,7 +1488,7 @@ fn testPushLarge(
         defer export_file.close(io);
     }
 
-    const client_path = try std.fs.path.join(allocator, &.{ temp_path, "client" });
+    const client_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "client" });
     defer allocator.free(client_path);
 
     var client_repo = try rp.Repo(repo_kind, .{ .hash = hash_kind, .is_test = true }).init(io, allocator, .{ .path = client_path });
@@ -1562,7 +1562,7 @@ fn testPushLarge(
     if (shell_out_to_git) {
         const ssh_cmd = (try sshCommand(true, allocator, temp_path, port)).?;
         defer allocator.free(ssh_cmd);
-        const ssh_config_arg = try std.fmt.allocPrint(allocator, "core.sshCommand={s}", .{ssh_cmd});
+        const ssh_config_arg = try allocator.print("core.sshCommand={s}", .{ssh_cmd});
         defer allocator.free(ssh_config_arg);
 
         // shell out to git so it will send delta objects
@@ -1628,7 +1628,7 @@ const admin_ssh_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeIs8mJqigBZ5y84J4CO
 // create the admin event repo with a user holding the dev SSH public key, plus
 // that user's repo
 fn setupAdmin(io: std.Io, allocator: std.mem.Allocator, data_path: []const u8) !void {
-    const admin_repo_path = try std.fs.path.join(allocator, &.{ data_path, "admin" });
+    const admin_repo_path = try std.Io.Dir.path.join(allocator, &.{ data_path, "admin" });
     defer allocator.free(admin_repo_path);
 
     var repo = try rp.Repo(.xit, evt.admin_repo_opts).init(io, allocator, .{ .bare = true, .path = admin_repo_path });
@@ -1643,7 +1643,7 @@ fn setupAdmin(io: std.Io, allocator: std.mem.Allocator, data_path: []const u8) !
     var password_hash_buf: [evt.User.password_hash_max_len]u8 = undefined;
     const password_hash = try evt.User.hashPassword("password", &password_hash_buf, io);
 
-    const users_dir = try std.fs.path.join(allocator, &.{ data_path, "users" });
+    const users_dir = try std.Io.Dir.path.join(allocator, &.{ data_path, "users" });
     defer allocator.free(users_dir);
     try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .admin, .xit, evt.admin_repo_opts, io, allocator, &repo, evt.events_ref, &[_]evt.EventWithId{.{
         .id = std.fmt.bytesToHex(user_id, .lower),
@@ -1671,9 +1671,9 @@ fn repoOnDiskPath(
     repo_name: []const u8,
     create: bool,
 ) !?[]u8 {
-    const admin_repo_path = try std.fs.path.join(allocator, &.{ data_path, "admin" });
+    const admin_repo_path = try std.Io.Dir.path.join(allocator, &.{ data_path, "admin" });
     defer allocator.free(admin_repo_path);
-    const users_dir = try std.fs.path.join(allocator, &.{ data_path, "users" });
+    const users_dir = try std.Io.Dir.path.join(allocator, &.{ data_path, "users" });
     defer allocator.free(users_dir);
 
     const location = (try evt.resolveOrCreateRepo(
@@ -1698,9 +1698,9 @@ fn remoteUrl(
     return switch (transport_def) {
         .file => unreachable,
         .wire => |wire_kind| switch (wire_kind) {
-            .http => try std.fmt.allocPrint(allocator, "http://localhost:{}/admin:{s}", .{ port, repo_name }),
-            .raw => try std.fmt.allocPrint(allocator, "git://localhost:{}/admin:{s}", .{ port, repo_name }),
-            .ssh => try std.fmt.allocPrint(allocator, "git@localhost:admin:{s}", .{repo_name}),
+            .http => try allocator.print("http://localhost:{}/admin:{s}", .{ port, repo_name }),
+            .raw => try allocator.print("git://localhost:{}/admin:{s}", .{ port, repo_name }),
+            .ssh => try allocator.print("git@localhost:admin:{s}", .{repo_name}),
         },
     };
 }
@@ -1716,12 +1716,12 @@ fn sshCommand(
 ) !?[]u8 {
     if (!is_ssh) return null;
 
-    const priv_key_path = try std.fs.path.join(allocator, &.{ temp_path, "key" });
+    const priv_key_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "key" });
     defer allocator.free(priv_key_path);
 
-    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, priv_key_path, '\\', '/');
-    const null_path = if (builtin.os.tag == .windows) "NUL" else "/dev/null";
-    return try std.fmt.allocPrint(allocator, "ssh -p {} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile={s} -o LogLevel=ERROR -o IdentitiesOnly=yes -i \"{s}\"", .{ port + 1, null_path, priv_key_path });
+    if (builtin.target.os.tag == .windows) std.mem.replaceScalar(u8, priv_key_path, '\\', '/');
+    const null_path = if (builtin.target.os.tag == .windows) "NUL" else "/dev/null";
+    return try allocator.print("ssh -p {} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile={s} -o LogLevel=ERROR -o IdentitiesOnly=yes -i \"{s}\"", .{ port + 1, null_path, priv_key_path });
 }
 
 const ServerFiles = union(enum) {
@@ -1757,7 +1757,7 @@ fn commitServer(repo: anytype, io: std.Io, allocator: std.mem.Allocator, files: 
             defer dir.close(ctx.io);
             var entries = dir.iterate();
             while (try entries.next(ctx.io)) |entry| {
-                const child = try std.fs.path.join(ctx.allocator, &.{ path, entry.name });
+                const child = try std.Io.Dir.path.join(ctx.allocator, &.{ path, entry.name });
                 defer ctx.allocator.free(child);
                 switch (entry.kind) {
                     .directory => try ctx.addDir(state, index, child),

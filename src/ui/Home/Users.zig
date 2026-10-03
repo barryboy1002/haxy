@@ -108,19 +108,19 @@ pub const View = struct {
             if (data.start > 0) {
                 var prev = route;
                 prev.home_users.start = data.start -| page_size;
-                try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:{s}", .{try prev.toUrl(&arena)}) });
+                try items.append(aa, .{ .text = "← previous", .link = try aa.print("a:{s}", .{try prev.toUrl(&arena)}) });
             }
             for (data.users) |user|
                 // clicking a user opens their page; the "a:" prefix makes the web
                 // renderer emit an <a href="/foo"> anchor.
                 try items.append(aa, .{
                     .text = user.name,
-                    .link = try std.fmt.allocPrint(aa, "a:/{s}", .{user.name}),
+                    .link = try aa.print("a:/{s}", .{user.name}),
                 });
             if (data.next_start) |next_start| {
                 var next = route;
                 next.home_users.start = next_start;
-                try items.append(aa, .{ .text = "next →", .link = try std.fmt.allocPrint(aa, "a:{s}", .{try next.toUrl(&arena)}) });
+                try items.append(aa, .{ .text = "next →", .link = try aa.print("a:{s}", .{try next.toUrl(&arena)}) });
             }
             try list.setItems(allocator, items.items);
 

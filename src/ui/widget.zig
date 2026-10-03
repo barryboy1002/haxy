@@ -257,10 +257,10 @@ pub fn initNoCommits(allocator: std.mem.Allocator, session: *ui.Session, handle:
             .fork => unreachable,
         };
         const aa = session.page_arena.allocator();
-        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}", .{ port, identity });
+        const url = try aa.print("ssh://localhost:{d}/{s}", .{ port, identity });
         break :blk try CopyableText.init(allocator, session, &.{.{
             .text = url,
-            .copyable_text = try std.fmt.allocPrint(aa, "git remote add origin {s}", .{url}),
+            .copyable_text = try aa.print("git remote add origin {s}", .{url}),
             .label = " git remote add origin ",
         }}, 0);
     } else null else null;
@@ -1061,7 +1061,7 @@ pub const Radio = struct {
             var option = try wgt.TextBox.init(allocator, value, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
             errdefer option.deinit(allocator);
             option.getFocus().mode = .all;
-            option.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), ui.radio_prefix ++ "{s}={s}", .{ name, value }) };
+            option.getFocus().kind = .{ .custom = try session.page_arena.allocator().print(ui.radio_prefix ++ "{s}={s}", .{ name, value }) };
             if (std.mem.eql(u8, value, initial)) box.getFocus().child_id = option.getFocus().id;
             try box.children.put(allocator, option.getFocus().id, .{ .widget = .{ .text_box = option }, .rect = null, .min_size = .{ .width = try xitui.width.displayWidth(value) + 2, .height = 3 } });
         }
@@ -1911,32 +1911,32 @@ pub const CopyableText = struct {
         switch (handle.location) {
             .repo => |identity| {
                 if (session.data.git_http_port) |port| {
-                    const url = try std.fmt.allocPrint(aa, "http://localhost:{d}/{s}", .{ port, identity });
+                    const url = try aa.print("http://localhost:{d}/{s}", .{ port, identity });
                     choices[count] = .{
                         .selector = "http",
                         .text = url,
-                        .copyable_text = try std.fmt.allocPrint(aa, "git clone {s}", .{url}),
+                        .copyable_text = try aa.print("git clone {s}", .{url}),
                         .label = " clone ",
                     };
                     count += 1;
                 }
                 if (session.data.git_ssh_port) |port| {
                     ssh_index = count;
-                    const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}", .{ port, identity });
+                    const url = try aa.print("ssh://localhost:{d}/{s}", .{ port, identity });
                     choices[count] = .{
                         .selector = "ssh",
                         .text = url,
-                        .copyable_text = try std.fmt.allocPrint(aa, "{s}git clone {s}", .{ session.data.git_ssh_prefix, url }),
+                        .copyable_text = try aa.print("{s}git clone {s}", .{ session.data.git_ssh_prefix, url }),
                         .label = " clone ",
                     };
                     count += 1;
                 }
             },
             .fork => |f| if (session.data.git_ssh_port) |port| {
-                const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}+{s}", .{ port, f.identity, f.id });
+                const url = try aa.print("ssh://localhost:{d}/{s}+{s}", .{ port, f.identity, f.id });
                 choices[count] = .{
                     .text = url,
-                    .copyable_text = try std.fmt.allocPrint(aa, "{s}git clone {s}", .{ session.data.git_ssh_prefix, url }),
+                    .copyable_text = try aa.print("{s}git clone {s}", .{ session.data.git_ssh_prefix, url }),
                     .label = " clone ",
                 };
                 count += 1;

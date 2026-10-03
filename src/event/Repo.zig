@@ -32,7 +32,7 @@ pub const Role = enum {
     owner,
 
     pub fn atLeast(self: Role, min: Role) bool {
-        return @intFromEnum(self) >= @intFromEnum(min);
+        return @backingInt(self) >= @backingInt(min);
     }
 
     // whether a user may change an event: anyone's with the write role,

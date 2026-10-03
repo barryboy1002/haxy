@@ -194,7 +194,7 @@ pub const Item = struct {
                 errdefer parent.deinit(allocator);
                 parent.getFocus().mode = .all;
                 const route = commentsRoute(thread_kind, identity, &entry.comment.event.thread_id, &entry.comment.event.parent_id, 0) orelse return error.RouteTooLong;
-                parent.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), "a:{s}", .{try route.toUrl(session.page_arena)}) };
+                parent.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)}) };
                 try bar.children.put(allocator, parent.getFocus().id, .{ .widget = .{ .text_box = parent }, .rect = null, .min_size = .{ .width = @max(parent_text.len, " replying to ".len) + 2, .height = null } });
             }
 
@@ -356,6 +356,6 @@ pub fn linkBox(allocator: std.mem.Allocator, session: *ui.Session, text: []const
     var box = try wgt.TextBox.init(allocator, text, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
     errdefer box.deinit(allocator);
     box.getFocus().mode = .all;
-    box.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), "a:{s}", .{try route.toUrl(session.page_arena)}) };
+    box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)}) };
     return box;
 }

@@ -13,7 +13,7 @@ comptime {
 // a post-auth session with deterministic ciphers, for exercising the packet
 // pump independently of the full handshake below. initialize in place.
 const TestSession = struct {
-    const key = [_]u8{0x5a} ** 64;
+    const key: [64]u8 = @splat(0x5a);
     const Channel = @typeInfo(@FieldType(proto.SessionCtx, "channel")).pointer.child;
     reader: std.Io.Reader = undefined,
     output: [2048]u8 = undefined,
@@ -157,7 +157,7 @@ test "Escape timeout preserves partial packets, arrow keys, and buffered input" 
 }
 
 test "fingerprint format matches openssh layout" {
-    const seed = [_]u8{0x42} ** Ed25519.KeyPair.seed_length;
+    const seed: [Ed25519.KeyPair.seed_length]u8 = @splat(0x42);
     const keypair = try Ed25519.KeyPair.generateDeterministic(seed);
 
     // SSH wire-format pubkey blob: string "ssh-ed25519" || string raw_pubkey.
@@ -252,7 +252,7 @@ test "initial strict kex rejects ignored packets" {
 test "ignored packets do not count as connection activity" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    const key_material = [_]u8{0x5A} ** 64;
+    const key_material: [64]u8 = @splat(0x5A);
 
     var sender = proto.Cipher.init(&key_material, 0);
     var encoded_buf: [128]u8 = undefined;
@@ -353,7 +353,7 @@ test "SSH-2 negotiation: walk through every step (banner -> KEX -> auth -> chann
     //   5. replies KEX_ECDH_REPLY with K_S (host key blob), q_s, signature
     //
     // client verifies the signature against K_S — MITM defense.
-    const client_eph = try newClientEphemeral();
+    const client_eph = newClientEphemeral();
     {
         var pkt: std.ArrayList(u8) = .empty;
         defer pkt.deinit(allocator);
@@ -674,7 +674,7 @@ test "auth + channel layer failure modes" {
         const skex = try proto.readPlainPacket(allocator, cr);
         defer allocator.free(skex);
 
-        const eph = try newClientEphemeral();
+        const eph = newClientEphemeral();
         {
             var pkt: std.ArrayList(u8) = .empty;
             defer pkt.deinit(allocator);
@@ -763,7 +763,7 @@ test "auth + channel layer failure modes" {
             try std.testing.expectEqualSlices(u8, pubkey_blob.items, accepted_blob);
         }
 
-        const wrong_session = [_]u8{0xFF} ** Sha256.digest_length;
+        const wrong_session: [Sha256.digest_length]u8 = @splat(0xFF);
         for ([_]struct {
             sign_session: []const u8,
             sign_user: []const u8,
@@ -994,16 +994,16 @@ const ServerTask = struct {
 // deterministic keys so failures don't depend on RNG state.
 
 fn newHostKey() !proto.HostKey {
-    const seed = [_]u8{0xAA} ** Ed25519.KeyPair.seed_length;
+    const seed: [Ed25519.KeyPair.seed_length]u8 = @splat(0xAA);
     return .{ .keypair = try Ed25519.KeyPair.generateDeterministic(seed) };
 }
 
 fn newUserKeypair() !Ed25519.KeyPair {
-    const seed = [_]u8{0xBB} ** Ed25519.KeyPair.seed_length;
+    const seed: [Ed25519.KeyPair.seed_length]u8 = @splat(0xBB);
     return try Ed25519.KeyPair.generateDeterministic(seed);
 }
 
-fn newClientEphemeral() !X25519.KeyPair {
-    const seed = [_]u8{0xCC} ** X25519.seed_length;
-    return try X25519.KeyPair.generateDeterministic(seed);
+fn newClientEphemeral() X25519.KeyPair {
+    const seed: [X25519.seed_length]u8 = @splat(0xCC);
+    return X25519.KeyPair.generateDeterministic(seed);
 }

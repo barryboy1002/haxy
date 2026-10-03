@@ -946,27 +946,27 @@ pub fn appendDetails(self: *const Self, allocator: std.mem.Allocator, box: *wgt.
 
     if (status_kind != .merged and entry.fork_exists) if (session.data.git_ssh_port) |port| {
         var buffer: [ui.RoutablePage.repo_identity_max_len]u8 = undefined;
-        const url = try std.fmt.allocPrint(aa, "ssh://localhost:{d}/{s}+{s}", .{ port, try forkIdentity(&buffer, self.identity, entry), entry.id });
-        const push_command = try std.fmt.allocPrint(aa, "git push {s} HEAD:patch", .{url});
-        const clone_command = try std.fmt.allocPrint(aa, "git clone {s}", .{url});
-        const merge_command = try std.fmt.allocPrint(aa, "git fetch '{s}' refs/heads/patch && git merge FETCH_HEAD", .{url});
+        const url = try aa.print("ssh://localhost:{d}/{s}+{s}", .{ port, try forkIdentity(&buffer, self.identity, entry), entry.id });
+        const push_command = try aa.print("git push {s} HEAD:patch", .{url});
+        const clone_command = try aa.print("git clone {s}", .{url});
+        const merge_command = try aa.print("git fetch '{s}' refs/heads/patch && git merge FETCH_HEAD", .{url});
         const choices: [3]ui.widget.CopyableText.Choice = .{
             .{
                 .selector = "push",
                 .text = push_command,
-                .copyable_text = try std.fmt.allocPrint(aa, "{s}{s}", .{ session.data.git_ssh_prefix, push_command }),
+                .copyable_text = try aa.print("{s}{s}", .{ session.data.git_ssh_prefix, push_command }),
                 .label = " push to this patch from existing repo ",
             },
             .{
                 .selector = "clone",
                 .text = clone_command,
-                .copyable_text = try std.fmt.allocPrint(aa, "{s}{s}", .{ session.data.git_ssh_prefix, clone_command }),
+                .copyable_text = try aa.print("{s}{s}", .{ session.data.git_ssh_prefix, clone_command }),
                 .label = " clone this patch ",
             },
             .{
                 .selector = "merge",
                 .text = merge_command,
-                .copyable_text = try std.fmt.allocPrint(aa, "{s}{s}", .{ session.data.git_ssh_prefix, merge_command }),
+                .copyable_text = try aa.print("{s}{s}", .{ session.data.git_ssh_prefix, merge_command }),
                 .label = " merge this patch locally ",
             },
         };
@@ -1021,7 +1021,7 @@ pub fn initHeader(allocator: std.mem.Allocator, session: *ui.Session, data: *con
         const labels_link = try ui.inPageTabLink(session, labels_route, page_selected and selected_index == View.viewIndex(.labels));
         const label = if (data.label.len == 0) labels_tab_label else blk: {
             const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.label));
-            break :blk try std.fmt.allocPrint(aa, labels_tab_label ++ " ({s})", .{decoded});
+            break :blk try aa.print(labels_tab_label ++ " ({s})", .{decoded});
         };
         try header.addTab(allocator, label, labels_link, View.viewIndex(.labels));
     }

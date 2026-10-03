@@ -399,9 +399,9 @@ pub const View = struct {
                     // a search result shows its file name, with its directory
                     // in the bottom label.
                     const label = if (data.find != null)
-                        std.fs.path.basenamePosix(entry.name)
+                        std.Io.Dir.path.basenamePosix(entry.name)
                     else if (entry.is_dir)
-                        try std.fmt.allocPrint(aa, "{s}/", .{entry.name})
+                        try aa.print("{s}/", .{entry.name})
                     else
                         entry.name;
                     const bottom_label = if (data.find != null) try resultDirLabel(aa, entry.name) else "";
@@ -730,7 +730,7 @@ pub const View = struct {
         const page_arena = self.session.page_arena;
         const path = try childDir(page_arena.allocator(), self.data.dir, entry.name);
         const route = self.data.filesRoute(path, target_start) orelse return error.RouteTooLong;
-        const link = try std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
+        const link = try page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
         var tb = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
@@ -972,7 +972,7 @@ fn numberedContent(arena: std.mem.Allocator, lines: []const []const u8, start: u
     var out: std.ArrayList(u8) = .empty;
     for (lines, 0..) |line, i| {
         if (i != 0) try out.append(arena, '\n');
-        const num_str = try std.fmt.allocPrint(arena, "{d}", .{start + i + 1});
+        const num_str = try arena.print("{d}", .{start + i + 1});
         try out.appendSlice(arena, indent[0 .. width - num_str.len]);
         try out.appendSlice(arena, num_str);
         try out.append(arena, ' ');
@@ -991,7 +991,7 @@ fn readmeIndex(entries: []const Entry) ?usize {
 }
 
 fn isMarkdown(name: []const u8) bool {
-    const extension = std.fs.path.extension(name);
+    const extension = std.Io.Dir.path.extension(name);
     return std.ascii.eqlIgnoreCase(extension, ".md") or std.ascii.eqlIgnoreCase(extension, ".markdown");
 }
 
@@ -1012,7 +1012,7 @@ fn selectedFileIndex(data: *const Self) ?usize {
 // following it navigates to that directory's listing.
 fn dirLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8) ![]const u8 {
     const route = data.filesRoute(path, 0) orelse return error.RouteTooLong;
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{try route.toUrl(page_arena)});
+    return page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
 }
 
 // a link to the file's route. a preloaded file gets an "ai:" link
@@ -1022,7 +1022,7 @@ fn dirLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []cons
 fn fileLink(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8, loaded: bool, line: usize) ![]const u8 {
     const route = data.filesRoute(path, line) orelse return error.RouteTooLong;
     const prefix = if (loaded) "ai:" else "a:";
-    return std.fmt.allocPrint(page_arena.allocator(), "{s}{s}", .{ prefix, try route.toUrl(page_arena) });
+    return page_arena.allocator().print("{s}{s}", .{ prefix, try route.toUrl(page_arena) });
 }
 
 // the url `line` value for a content window: its first line's 1-based number,
@@ -1033,7 +1033,7 @@ fn lineNumber(window_start: usize) usize {
 
 // `dir`/`name`, or just `name` at the root.
 pub fn childDir(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]const u8 {
-    return if (dir.len == 0) name else std.fmt.allocPrint(arena, "{s}/{s}", .{ dir, name });
+    return if (dir.len == 0) name else arena.print("{s}/{s}", .{ dir, name });
 }
 
 // `dir` with its last segment removed ("" when `dir` has a single segment).
@@ -1050,7 +1050,7 @@ fn resultDirLabel(aa: std.mem.Allocator, path: []const u8) ![]const u8 {
     // the row's border and the label's padding take two columns each
     const max_width = View.list_max_width - 4;
     var width = try xitui.width.displayWidth(dir);
-    if (width <= max_width) return std.fmt.allocPrint(aa, " {s} ", .{dir});
+    if (width <= max_width) return aa.print(" {s} ", .{dir});
 
     const ellipsis = "..";
     var iter = (try std.unicode.Utf8View.init(dir)).iterator();
@@ -1060,5 +1060,5 @@ fn resultDirLabel(aa: std.mem.Allocator, path: []const u8) ![]const u8 {
         width -= xitui.width.cellWidth(try std.unicode.utf8Decode(slice));
         start += slice.len;
     }
-    return std.fmt.allocPrint(aa, " " ++ ellipsis ++ "{s} ", .{dir[start..]});
+    return aa.print(" " ++ ellipsis ++ "{s} ", .{dir[start..]});
 }

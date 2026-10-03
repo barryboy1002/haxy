@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main_wasm.zig"),
                 .target = wasm_target,
-                .optimize = .ReleaseSmall,
+                .optimize = .small,
             }),
         });
         exe.root_module.addImport("xit", xit_dep.module("xit"));
@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/main.zig"),
                 .target = target,
                 // default to ReleaseSafe unless an explicit -Doptimize is passed
-                .optimize = if (b.user_input_options.contains("optimize")) optimize else .ReleaseSafe,
+                .optimize = if (b.user_input_options.contains("optimize")) optimize else .safe,
             }),
             .use_llvm = true,
         });
@@ -113,9 +113,7 @@ pub fn build(b: *std.Build) void {
 
         const run_cmd = b.addRunArtifact(exe);
         run_cmd.step.dependOn(&try_install.step);
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+        run_cmd.addPassthruArgs();
 
         const run_step = b.step("try", "Try the app");
         run_step.dependOn(&run_cmd.step);
@@ -128,7 +126,7 @@ pub fn build(b: *std.Build) void {
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = target,
-                .optimize = .Debug,
+                .optimize = .debug,
             }),
             .use_llvm = true,
         });
@@ -161,7 +159,9 @@ pub fn build(b: *std.Build) void {
 // the generated module stable when directory iteration order changes.
 fn ansiArtModule(b: *std.Build) *std.Build.Module {
     const io = b.graph.io;
-    var dir = b.build_root.handle.openDir(io, "src/embed/ansi", .{ .iterate = true }) catch |err| {
+    b.dependOnDirectoryContents(b.path("src/embed/ansi"));
+    b.dependOnFileContents(b.path("src/embed/not-found.txt"));
+    var dir = b.root.openDir(io, "src/embed/ansi", .{ .iterate = true }) catch |err| {
         std.debug.panic("unable to open src/embed/ansi: {t}", .{err});
     };
     defer dir.close(io);
@@ -170,7 +170,7 @@ fn ansiArtModule(b: *std.Build) *std.Build.Module {
     var iter = dir.iterate();
     while (iter.next(io) catch |err| std.debug.panic("unable to read src/embed/ansi: {t}", .{err})) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".txt")) continue;
-        names.append(b.allocator, b.dupe(entry.name)) catch @panic("OOM");
+        names.append(b.allocator, b.graph.dupeString(entry.name)) catch @panic("OOM");
     }
     std.mem.sort([]const u8, names.items, {}, struct {
         fn lessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
@@ -181,12 +181,15 @@ fn ansiArtModule(b: *std.Build) *std.Build.Module {
 
     const contents = b.allocator.alloc([]const u8, names.items.len) catch @panic("OOM");
     for (names.items, contents) |name, *content| {
+        b.dependOnFileContents(b.path(b.fmt("src/embed/ansi/{s}", .{name})));
         content.* = dir.readFileAlloc(io, name, b.allocator, .limited(16 * 1024 * 1024)) catch |err| {
             std.debug.panic("unable to read src/embed/ansi/{s}: {t}", .{ name, err });
         };
     }
 
-    const not_found = b.build_root.handle.readFileAlloc(io, "src/embed/not-found.txt", b.allocator, .limited(16 * 1024 * 1024)) catch unreachable;
+    var embed_dir = b.root.openDir(io, "src/embed", .{}) catch unreachable;
+    defer embed_dir.close(io);
+    const not_found = embed_dir.readFileAlloc(io, "not-found.txt", b.allocator, .limited(16 * 1024 * 1024)) catch unreachable;
 
     const options = b.addOptions();
     options.addOption([]const []const u8, "art", contents);

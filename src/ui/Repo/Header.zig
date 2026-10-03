@@ -81,7 +81,7 @@ pub const View = struct {
         const bottom_label = try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), ref_name);
         const changes_label = switch (page.changes) {
             .diff => diff_tab_label,
-            .commits => |c| if (c.commit_count) |count| try std.fmt.allocPrint(aa, commits_tab_label ++ " ({d})", .{count}) else commits_tab_label,
+            .commits => |c| if (c.commit_count) |count| try aa.print(commits_tab_label ++ " ({d})", .{count}) else commits_tab_label,
         };
         const changes_label_width = try xitui.width.displayWidth(changes_label);
         var first_group_width = try data.title.width();
@@ -92,7 +92,7 @@ pub const View = struct {
         if (session.data.host_kind == .server) {
             var text_buf: [evt.User.name_max_len + 1]u8 = undefined;
             const text = try std.fmt.bufPrint(&text_buf, "{s}/", .{data.owner_name});
-            const link = try std.fmt.allocPrint(aa, "a:/{s}", .{data.owner_name});
+            const link = try aa.print("a:/{s}", .{data.owner_name});
 
             var text_box = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
@@ -107,13 +107,13 @@ pub const View = struct {
         }
 
         // local routes carry no identity, so their urls come out elided
-        const identity = if (session.data.host_kind == .local) "" else try std.fmt.allocPrint(aa, "{s}:{s}", .{ data.owner_name, data.name });
+        const identity = if (session.data.host_kind == .local) "" else try aa.print("{s}:{s}", .{ data.owner_name, data.name });
 
         // title links to the repo's files root (the bare route, so it resolves
         // to the default branch).
         {
             const files_root_route = ui.RoutablePage.repoFilesRoute(identity, null, "", "", 0) orelse return error.RouteTooLong;
-            const title_link = try std.fmt.allocPrint(aa, "a:{s}", .{try files_root_route.toUrl(session.page_arena)});
+            const title_link = try aa.print("a:{s}", .{try files_root_route.toUrl(session.page_arena)});
             var title_view = try ui.Title.View.init(allocator, &data.title);
             errdefer title_view.deinit(allocator);
             title_view.getFocus().mode = .all;

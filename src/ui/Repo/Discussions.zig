@@ -241,7 +241,7 @@ pub fn initHeader(allocator: std.mem.Allocator, session: *ui.Session, data: *con
         const labels_link = try ui.inPageTabLink(session, labels_route, page_selected and selected_index == View.viewIndex(.labels));
         const label = if (data.label.len == 0) labels_tab_label else blk: {
             const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.label));
-            break :blk try std.fmt.allocPrint(aa, labels_tab_label ++ " ({s})", .{decoded});
+            break :blk try aa.print(labels_tab_label ++ " ({s})", .{decoded});
         };
         try header.addTab(allocator, label, labels_link, View.viewIndex(.labels));
     }

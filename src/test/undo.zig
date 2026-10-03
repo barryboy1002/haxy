@@ -20,7 +20,7 @@ test "undo history paginates backwards and undo appends a restorable state" {
     const initial = try Undo.init(opts, &arena, &repo, null, "", null, .{ .location = .{ .repo = "" } });
     try std.testing.expectEqual(1, initial.count);
     for (0..25) |index| {
-        const value = try std.fmt.allocPrint(arena.allocator(), "{d}", .{index});
+        const value = try arena.allocator().print("{d}", .{index});
         try repo.addConfig(io, allocator, .{ .name = "undo.value", .value = value });
     }
     const first = try Undo.init(opts, &arena, &repo, null, "", null, .{ .location = .{ .repo = "" } });
@@ -61,14 +61,14 @@ test "repo undo visibility and fresh owner authorization" {
     defer arena.deinit();
     const aa = arena.allocator();
     const base = try temp.dir.realPathFileAlloc(io, ".", aa);
-    const admin_path = try std.fs.path.join(aa, &.{ base, "admin" });
-    const users_dir = try std.fs.path.join(aa, &.{ base, "users" });
+    const admin_path = try std.Io.Dir.path.join(aa, &.{ base, "admin" });
+    const users_dir = try std.Io.Dir.path.join(aa, &.{ base, "users" });
     var admin = try xit.repo.Repo(.xit, evt.admin_repo_opts).init(io, allocator, .{ .path = admin_path });
     defer admin.deinit(io, allocator);
-    const owner = [_]u8{1} ** evt.event_id_size;
-    const writer = [_]u8{2} ** evt.event_id_size;
-    const reader = [_]u8{3} ** evt.event_id_size;
-    const repo_id = [_]u8{4} ** evt.event_id_size;
+    const owner: [evt.event_id_size]u8 = @splat(1);
+    const writer: [evt.event_id_size]u8 = @splat(2);
+    const reader: [evt.event_id_size]u8 = @splat(3);
+    const repo_id: [evt.event_id_size]u8 = @splat(4);
     const author: evt.CommitAuthor = .{ .name = "test", .email = "test@example.test" };
     const writer_hex = std.fmt.bytesToHex(writer, .lower);
     var repo_event: evt.Repo = .{ .user_id = &owner, .name = "demo", .description = "", .read_access = .public };

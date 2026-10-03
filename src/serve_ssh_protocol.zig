@@ -123,7 +123,7 @@ pub const HostKey = struct {
     keypair: Ed25519.KeyPair,
 
     pub fn loadOrGenerate(io: std.Io, allocator: std.mem.Allocator, data_dir_path: []const u8) !HostKey {
-        const path = try std.fs.path.join(allocator, &.{ data_dir_path, host_key_file_name });
+        const path = try std.Io.Dir.path.join(allocator, &.{ data_dir_path, host_key_file_name });
         defer allocator.free(path);
 
         const cwd = std.Io.Dir.cwd();
@@ -141,7 +141,7 @@ pub const HostKey = struct {
         defer allocator.free(text);
         defer std.crypto.secureZero(u8, text);
         // owner-only from the start — never a window where the key is readable
-        const permissions: std.Io.File.Permissions = if (builtin.os.tag == .windows) .default_file else @enumFromInt(0o600);
+        const permissions: std.Io.File.Permissions = if (builtin.target.os.tag == .windows) .default_file else @fromBackingInt(@intCast(0o600));
         // linked into place only once complete, and never over an existing key
         var atomic_file = try cwd.createFileAtomic(io, path, .{ .permissions = permissions });
         defer atomic_file.deinit(io);
@@ -776,10 +776,15 @@ pub fn handleConnection(
     defer std.crypto.secureZero(u8, std.mem.asBytes(&conn.cs_cipher));
     defer std.crypto.secureZero(u8, std.mem.asBytes(&conn.sc_cipher));
 
-    errdefer |err| disconnectOnError(&conn, err);
+    authAndRunChannels(&conn, handler) catch |err| {
+        disconnectOnError(&conn, err);
+        return err;
+    };
+}
 
-    const fingerprint = try runAuth(&conn);
-    try runChannelLayer(&conn, &fingerprint, handler);
+fn authAndRunChannels(conn: *Conn, handler: anytype) !void {
+    const fingerprint = try runAuth(conn);
+    try runChannelLayer(conn, &fingerprint, handler);
 }
 
 /// tell the peer why we're hanging up (RFC 4253 §11.1), best effort. protocol
@@ -1872,7 +1877,7 @@ fn verifyRsa(comptime Hash: type, algo: []const u8, pubkey_blob: []const u8, sig
     const pk = rsa.PublicKey.fromBytes(e, n) catch return false;
     switch (n.len) {
         inline 256, 384, 512 => |len| {
-            rsa.PKCS1v1_5Signature.verify(len, sig[0..len].*, signed, pk, Hash) catch return false;
+            rsa.PKCS1v1_5Signature.verify(len, sig[0..len], signed, pk, Hash) catch return false;
             return true;
         },
         else => return false,
@@ -2239,7 +2244,7 @@ test "pty dimensions have bounded axes, preserving normal and zero sizes" {
 test "channel close before shell or exec is acknowledged" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x5a} ** 64;
+    const key: [64]u8 = @splat(0x5a);
     var encoded: [256]u8 = undefined;
     var encoded_writer = std.Io.Writer.fixed(&encoded);
     var sender = Cipher.init(&key, 0);
@@ -2272,7 +2277,7 @@ test "channel close before shell or exec is acknowledged" {
         }
     };
     var handler = Handler{};
-    try runChannelLayer(&conn, &([_]u8{0} ** fingerprint_len), &handler);
+    try runChannelLayer(&conn, &@as([fingerprint_len]u8, @splat(0)), &handler);
     var output_reader = std.Io.Reader.fixed(writer.buffered());
     var receiver = Cipher.init(&key, 0);
     const confirmation = try receiver.readPacket(allocator, &output_reader);

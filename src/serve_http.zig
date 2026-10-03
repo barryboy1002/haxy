@@ -51,8 +51,8 @@ fn handleConnection(
     stream: std.Io.net.Stream,
     err: *std.Io.Writer,
 ) !void {
-    var send_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
-    var recv_buffer = [_]u8{0} ** any_repo_opts.net_buffer_size;
+    var send_buffer: [any_repo_opts.net_buffer_size]u8 = @splat(0);
+    var recv_buffer: [any_repo_opts.net_buffer_size]u8 = @splat(0);
     var conn_br = stream.reader(io, &recv_buffer);
     var conn_bw = stream.writer(io, &send_buffer);
     var http_server = std.http.Server.init(&conn_br.interface, &conn_bw.interface);
@@ -254,7 +254,7 @@ fn decodeAndValidateRepoPath(allocator: std.mem.Allocator, encoded: []const u8) 
     errdefer allocator.free(mutable);
     const decoded = std.Uri.percentDecodeInPlace(mutable);
 
-    var iter = std.fs.path.componentIterator(decoded);
+    var iter = std.Io.Dir.path.componentIterator(decoded);
     while (iter.next()) |component| {
         if (component.name.len == 0 or std.mem.eql(u8, component.name, ".") or std.mem.eql(u8, component.name, "..")) {
             return error.InvalidRepoPath;

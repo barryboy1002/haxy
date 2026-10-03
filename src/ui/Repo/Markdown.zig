@@ -235,7 +235,7 @@ const Builder = struct {
                     const marker = if (item.task) |checked|
                         (if (checked) "☑ " else "☐ ")
                     else if (list.ordered)
-                        try std.fmt.allocPrint(b.page_arena.allocator(), "{[n]d:>[w]}. ", .{ .n = list.start + i, .w = number_width })
+                        try b.page_arena.allocator().print("{[n]d:>[w]}. ", .{ .n = list.start + i, .w = number_width })
                     else
                         "• ";
                     const gutter = gutter: {
@@ -248,7 +248,7 @@ const Builder = struct {
                 try put(allocator, box, .{ .box = list_box });
             },
             // wider than any pane, and clipped to the width
-            .rule => try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, "─" ** 512, .{ .border_style = null, .wrap_kind = .none, .style = .{ .dim = true } }) }),
+            .rule => try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, std.mem.asBytes(&@as([512]["─".len]u8, @splat("─".*))), .{ .border_style = null, .wrap_kind = .none, .style = .{ .dim = true } }) }),
             .raw => |lines| {
                 const text = try std.mem.join(b.page_arena.allocator(), "\n", lines);
                 try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, text, .{ .border_style = null, .wrap_kind = .none }) });
@@ -280,7 +280,7 @@ const Builder = struct {
     fn resolveLink(b: Builder, dest: []const u8) ![]const u8 {
         const aa = b.page_arena.allocator();
         for ([_][]const u8{ "http:", "https:", "mailto:" }) |scheme| {
-            if (std.ascii.startsWithIgnoreCase(dest, scheme)) return std.fmt.allocPrint(aa, "{s}{s}", .{ ui.raw_link_prefix, dest });
+            if (std.ascii.startsWithIgnoreCase(dest, scheme)) return aa.print("{s}{s}", .{ ui.raw_link_prefix, dest });
         }
         if (hasScheme(dest) or std.mem.startsWith(u8, dest, "//")) return "";
         const data = b.data orelse return "";
@@ -305,7 +305,7 @@ const Builder = struct {
         }
         const path = try std.mem.join(aa, "/", segments.items);
         const route = data.filesRoute(path, 0) orelse return "";
-        return std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(b.page_arena)});
+        return aa.print("a:{s}", .{try route.toUrl(b.page_arena)});
     }
 };
 
@@ -357,7 +357,7 @@ pub const Heading = struct {
 
         // the bold fallback leads with the level's #s, so levels stay apart
         const marked = try page_arena.allocator().alloc(RichText.Span, spans.len + 1);
-        marked[0] = .{ .text = try std.fmt.allocPrint(page_arena.allocator(), "{s} ", .{"######"[0..level]}), .style = .{ .bold = true } };
+        marked[0] = .{ .text = try page_arena.allocator().print("{s} ", .{"######"[0..level]}), .style = .{ .bold = true } };
         @memcpy(marked[1..], spans);
         var text = try RichText.init(allocator, marked);
         errdefer text.deinit(allocator);

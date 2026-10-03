@@ -20,11 +20,11 @@ test "user and repo" {
 
     const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
     const Repo = rp.Repo(.xit, repo_opts);
-    const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
+    const admin_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
     var repo = try Repo.init(io, allocator, .{ .path = admin_path });
     defer repo.deinit(io, allocator);
-    const user_path = try std.fs.path.join(allocator, &.{ temp_path, "user" });
+    const user_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "user" });
     defer allocator.free(user_path);
     var user_repo = try Repo.init(io, allocator, .{ .path = user_path });
     defer user_repo.deinit(io, allocator);
@@ -210,11 +210,11 @@ test "repos and users paginate newest first" {
 
     const repo_opts: rp.RepoOpts(.xit) = .{ .is_test = true };
     const Repo = rp.Repo(.xit, repo_opts);
-    const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
+    const admin_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
     var admin = try Repo.init(io, allocator, .{ .path = admin_path });
     defer admin.deinit(io, allocator);
-    const user_path = try std.fs.path.join(allocator, &.{ temp_path, "user" });
+    const user_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "user" });
     defer allocator.free(user_path);
     var repo = try Repo.init(io, allocator, .{ .path = user_path });
     defer repo.deinit(io, allocator);
@@ -311,9 +311,9 @@ test "fork query and removal lifecycle" {
     const temp_path = try temp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    const users_dir = try std.fs.path.join(allocator, &.{ temp_path, "users" });
+    const users_dir = try std.Io.Dir.path.join(allocator, &.{ temp_path, "users" });
     defer allocator.free(users_dir);
-    const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
+    const admin_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

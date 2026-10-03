@@ -60,8 +60,8 @@ pub const View = struct {
         errdefer tab_ids.deinit(allocator);
 
         const aa = session.page_arena.allocator();
-        const fork_identity = try std.fmt.allocPrint(aa, "{s}:{s}", .{ data.forker_name, data.name });
-        const commits_label = if (commit_count) |count| try std.fmt.allocPrint(aa, commits_tab_label ++ " ({d})", .{count}) else commits_tab_label;
+        const fork_identity = try aa.print("{s}:{s}", .{ data.forker_name, data.name });
+        const commits_label = if (commit_count) |count| try aa.print(commits_tab_label ++ " ({d})", .{count}) else commits_tab_label;
         var first_group_width = try data.title.width();
 
         try ui.widget.addBackButton(allocator, &title_box, session);
@@ -73,7 +73,7 @@ pub const View = struct {
             var forker = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
             errdefer forker.deinit(allocator);
             forker.getFocus().mode = .all;
-            forker.getFocus().kind = .{ .custom = try std.fmt.allocPrint(aa, "a:/{s}", .{data.forker_name}) };
+            forker.getFocus().kind = .{ .custom = try aa.print("a:/{s}", .{data.forker_name}) };
             first_group_width += try xitui.width.displayWidth(text) + 2;
             try title_box.children.put(allocator, forker.getFocus().id, .{ .widget = .{ .text_box = forker }, .rect = null, .min_size = null });
         }
@@ -84,7 +84,7 @@ pub const View = struct {
             var title = try ui.Title.View.init(allocator, &data.title);
             errdefer title.deinit(allocator);
             title.getFocus().mode = .all;
-            title.getFocus().kind = .{ .custom = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)}) };
+            title.getFocus().kind = .{ .custom = try aa.print("a:{s}", .{try route.toUrl(session.page_arena)}) };
             try title_box.children.put(allocator, title.getFocus().id, .{ .widget = .{ .title = title }, .rect = null, .min_size = null });
         }
 

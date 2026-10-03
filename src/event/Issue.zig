@@ -28,7 +28,7 @@ pub const Status = enum {
 
     const longest_len = blk: {
         var len: usize = 0;
-        for (@typeInfo(Status).@"enum".fields) |field| len = @max(len, field.name.len);
+        for (@typeInfo(Status).@"enum".field_names) |name| len = @max(len, name.len);
         break :blk len;
     };
 };

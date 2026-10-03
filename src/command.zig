@@ -29,8 +29,8 @@ fn commandHelp(command_kind: CommandKind) Help {
 pub fn printHelp(cmd_kind_maybe: ?CommandKind, writer: *std.Io.Writer) !void {
     const print_indent = comptime blk: {
         var indent = 0;
-        for (0..@typeInfo(CommandKind).@"enum".fields.len) |i| {
-            indent = @max(commandHelp(@enumFromInt(i)).name.len, indent);
+        for (0..@typeInfo(CommandKind).@"enum".field_names.len) |i| {
+            indent = @max(commandHelp(@fromBackingInt(@intCast(i))).name.len, indent);
         }
         indent += 2;
         break :blk indent;
@@ -56,8 +56,8 @@ pub fn printHelp(cmd_kind_maybe: ?CommandKind, writer: *std.Io.Writer) !void {
         }
     } else {
         try writer.print("help: haxy <command> [<args>]\n\n", .{});
-        inline for (@typeInfo(CommandKind).@"enum".fields) |field| {
-            const help = commandHelp(@enumFromInt(field.value));
+        inline for (@typeInfo(CommandKind).@"enum".field_values) |value| {
+            const help = commandHelp(@fromBackingInt(@intCast(value)));
             // name and description
             try writer.print("{s}", .{help.name});
             for (0..print_indent - help.name.len) |_| try writer.print(" ", .{});
@@ -139,9 +139,9 @@ pub const CommandArgs = struct {
             const command_name = args_slice[0];
             const extra_args = args_slice[1..];
 
-            const command_kind: ?CommandKind = inline for (0..@typeInfo(CommandKind).@"enum".fields.len) |i| {
-                if (std.mem.eql(u8, command_name, commandHelp(@enumFromInt(i)).name)) {
-                    break @enumFromInt(i);
+            const command_kind: ?CommandKind = inline for (0..@typeInfo(CommandKind).@"enum".field_names.len) |i| {
+                if (std.mem.eql(u8, command_name, commandHelp(@fromBackingInt(@intCast(i))).name)) {
+                    break @fromBackingInt(@intCast(i));
                 }
             } else null;
 

@@ -147,7 +147,7 @@ fn testDiff(comptime kind: xit.repo.RepoKind) !void {
     try std.testing.expectEqual(0, (try Diff.init(kind, opts, &arena, &repo, io, allocator, unchanged.repo_diff)).window.hunks.len);
 
     // a zero base includes files that were already present in the first commit
-    const zero = [_]u8{'0'} ** xit.hash.hexLen(opts.hash);
+    const zero: [xit.hash.hexLen(opts.hash)]u8 = @splat('0');
     const created = ui.RoutablePage.repoDiffRoute("alice:project", .object, &head, 0, "shared.txt", &zero) orelse return error.BadRoute;
     const created_diff = try Diff.init(kind, opts, &arena, &repo, io, allocator, created.repo_diff);
     try std.testing.expectEqual(1, created_diff.window.hunks.len);
@@ -325,9 +325,9 @@ test "sync creates missing event branches and preserves head" {
     const temp_path = try temp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    const local_path = try std.fs.path.join(allocator, &.{ temp_path, "local" });
+    const local_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "local" });
     defer allocator.free(local_path);
-    const remote_path = try std.fs.path.join(allocator, &.{ temp_path, "remote" });
+    const remote_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "remote" });
     defer allocator.free(remote_path);
 
     const Repo = xit.repo.Repo(.git, .{});
@@ -350,7 +350,7 @@ test "sync creates missing event branches and preserves head" {
         _ = try local.commit(io, allocator, .{ .message = "master" });
         try local.addRemote(io, allocator, .{ .name = "origin", .value = remote_path });
 
-        const id = [_]u8{1} ** evt.event_id_size;
+        const id: [evt.event_id_size]u8 = @splat(1);
         try evt.consume(.local, .repo, .git, .{}, io, allocator, &local, evt.events_ref, &.{.{
             .id = std.fmt.bytesToHex(id, .lower),
             .author = .{ .name = "haxy", .email = "user@haxy" },
@@ -362,7 +362,7 @@ test "sync creates missing event branches and preserves head" {
     {
         var local = try Repo.open(io, allocator, .{ .path = local_path });
         defer local.deinit(io, allocator);
-        const id = [_]u8{2} ** evt.event_id_size;
+        const id: [evt.event_id_size]u8 = @splat(2);
         try evt.consume(.local, .repo, .git, .{}, io, allocator, &local, evt.events_ref, &.{.{
             .id = std.fmt.bytesToHex(id, .lower),
             .author = .{ .name = "haxy", .email = "user@haxy" },
@@ -372,7 +372,7 @@ test "sync creates missing event branches and preserves head" {
     {
         var remote = try RemoteRepo.open(io, allocator, .{ .path = remote_path });
         defer remote.deinit(io, allocator);
-        const id = [_]u8{3} ** evt.event_id_size;
+        const id: [evt.event_id_size]u8 = @splat(3);
         try evt.consume(.local, .repo, .git, .{}, io, allocator, &remote, evt.events_ref, &.{.{
             .id = std.fmt.bytesToHex(id, .lower),
             .author = .{ .name = "haxy", .email = "user@haxy" },

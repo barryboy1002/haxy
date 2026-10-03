@@ -236,7 +236,7 @@ pub fn init(
         // repo's directory rather than the route.
         repo = .{ .event = .{
             .user_id = "",
-            .name = try arena.allocator().dupe(u8, std.fs.path.basename(local.path)),
+            .name = try arena.allocator().dupe(u8, std.Io.Dir.path.basename(local.path)),
             .description = "",
         } };
         owner_name = "";
@@ -468,7 +468,7 @@ pub const View = struct {
             // the header shows new repo with a login, and new user without one
             // and user only outside local mode, so keep the stack's children
             // 1:1 with the tabs by skipping the same views.
-            const identity = try std.fmt.allocPrint(session.page_arena.allocator(), "{s}:{s}", .{ data.header.owner_name, data.header.name });
+            const identity = try session.page_arena.allocator().print("{s}:{s}", .{ data.header.owner_name, data.header.name });
             if (session.data.user_id != null) {
                 const route = ui.RoutablePage{ .repo_repo_new = ui.RoutablePage.Array(ui.RoutablePage.repo_route_max_len).from(identity) orelse return error.RouteTooLong };
                 var new_repo_view = try ui.NewRepo.View.init(allocator, session, route);

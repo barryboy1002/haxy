@@ -24,7 +24,7 @@ pub const View = struct {
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, route: ui.RoutablePage) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
         errdefer box.deinit(allocator);
-        box.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), "form:{s}", .{try route.toUrl(session.page_arena)}) };
+        box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("form:{s}", .{try route.toUrl(session.page_arena)}) };
 
         const saved_fields = if (session.formFeedback(.repo)) |saved| saved.fields else null;
 
@@ -158,7 +158,7 @@ pub const View = struct {
         name_input.clear(allocator);
         description_input.clear(allocator);
 
-        const identity = try std.fmt.allocPrint(self.session.page_arena.allocator(), "{s}:{s}", .{ user.event.name, name });
+        const identity = try self.session.page_arena.allocator().print("{s}:{s}", .{ user.event.name, name });
         try self.session.navigate(ui.RoutablePage.repoFilesRoute(identity, null, "", "", 0) orelse return);
     }
 

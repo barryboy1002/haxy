@@ -45,7 +45,7 @@ fn testBranchPatch(comptime kind: rp.RepoKind, comptime hash_kind: hash.HashKind
     try repo.add(io, allocator, &.{"base.txt"});
     const base = try repo.commit(io, allocator, .{ .message = "base" });
     try repo.addBranch(io, .{ .name = "feature" });
-    const id = [_]u8{7} ** evt.event_id_size;
+    const id: [evt.event_id_size]u8 = @splat(7);
     const patch = evt.Patch{ .title = "branch patch", .labels = "feature", .description = "existing branch", .source_branch = "feature", .target_branch = "master" };
 
     // the same branch cannot be both source and target
@@ -182,7 +182,7 @@ fn testBranchMerge(selection: evt.Patch.MergeRevision) !void {
         var restored = try repo.switchDir(io, allocator, .{ .target = .{ .ref = .{ .kind = .head, .name = "master" } } });
         defer restored.deinit();
     }
-    const id = [_]u8{9} ** evt.event_id_size;
+    const id: [evt.event_id_size]u8 = @splat(9);
     const id_hex = std.fmt.bytesToHex(id, .lower);
     const before_new = try repo.core.db.rootCursor().count();
     try pch.writeBranchPatch(.{ .server = .{ .users_dir = path } }, .xit, opts, io, allocator, &repo, id_hex, .{
@@ -374,11 +374,11 @@ test "patch event conflicts, stacking, and gc" {
     const temp_path = try temp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    const upstream_path = try std.fs.path.join(allocator, &.{ temp_path, "upstream" });
+    const upstream_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "upstream" });
     defer allocator.free(upstream_path);
-    const target_path = try std.fs.path.join(allocator, &.{ temp_path, "target" });
+    const target_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "target" });
     defer allocator.free(target_path);
-    const source_path = try std.fs.path.join(allocator, &.{ temp_path, "source" });
+    const source_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "source" });
     defer allocator.free(source_path);
 
     //
@@ -813,13 +813,13 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
     const temp_path = try temp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    const users_dir = try std.fs.path.join(allocator, &.{ temp_path, "users" });
+    const users_dir = try std.Io.Dir.path.join(allocator, &.{ temp_path, "users" });
     defer allocator.free(users_dir);
-    const admin_path = try std.fs.path.join(allocator, &.{ temp_path, "admin" });
+    const admin_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "admin" });
     defer allocator.free(admin_path);
-    const upstream_path = try std.fs.path.join(allocator, &.{ temp_path, "upstream" });
+    const upstream_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "upstream" });
     defer allocator.free(upstream_path);
-    const source_path = try std.fs.path.join(allocator, &.{ temp_path, "source" });
+    const source_path = try std.Io.Dir.path.join(allocator, &.{ temp_path, "source" });
     defer allocator.free(source_path);
 
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1269,7 +1269,7 @@ fn testMergeability(
     // a missing fork disables merging without changing the accepted events
     const draft_path = try fork.forkPath(allocator, users_dir, forker_id, id);
     defer allocator.free(draft_path);
-    const away_path = try std.fmt.allocPrint(allocator, "{s}.away", .{draft_path});
+    const away_path = try allocator.print("{s}.away", .{draft_path});
     defer allocator.free(away_path);
     {
         try std.Io.Dir.renameAbsolute(draft_path, away_path, io);

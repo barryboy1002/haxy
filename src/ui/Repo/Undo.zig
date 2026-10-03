@@ -96,8 +96,8 @@ pub fn init(comptime opts: rp.RepoOpts(.xit), arena: *std.heap.ArenaAllocator, r
             .description = shown.description,
             .buttons = shown.buttons,
             .timestamp = if (record) |value| try formatTimestamp(aa, value.timestamp) else "timestamp unavailable",
-            .link = try std.fmt.allocPrint(aa, "ai:{s}", .{url}),
-            .form = try std.fmt.allocPrint(aa, "form:{s}/undo", .{url}),
+            .link = try aa.print("ai:{s}", .{url}),
+            .form = try aa.print("form:{s}/undo", .{url}),
             .undone = row_undone,
         });
     }
@@ -154,7 +154,7 @@ fn eventDetail(
     if (count == 0) return .{ .action = "events", .description = "merged the event history" };
     const buttons = try aa.dupe(DetailButton, &.{try eventsButton(arena, identity, history_index, count)});
     return .{
-        .action = try std.fmt.allocPrint(aa, "events ({d})", .{count}),
+        .action = try aa.print("events ({d})", .{count}),
         .description = "updated the event database",
         .buttons = buttons,
     };
@@ -188,7 +188,7 @@ fn undoneButton(
     return .{
         .label = if (target.redo) " what was redone " else " what was undone ",
         .text = if (detail) |value| value.action else try formatRecord(opts, arena, core, target.record),
-        .link = try std.fmt.allocPrint(arena.allocator(), "a:{s}", .{try route.toUrl(arena)}),
+        .link = try arena.allocator().print("a:{s}", .{try route.toUrl(arena)}),
     };
 }
 
@@ -199,8 +199,8 @@ fn eventsButton(arena: *std.heap.ArenaAllocator, identity: []const u8, history_i
     const route = ui.RoutablePage.repoEventsRoute(identity, .active, null, "", history_index) orelse return error.RouteTooLong;
     return .{
         .label = " events ",
-        .text = try std.fmt.allocPrint(aa, "view events ({d})", .{count}),
-        .link = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(arena)}),
+        .text = try aa.print("view events ({d})", .{count}),
+        .link = try aa.print("a:{s}", .{try route.toUrl(arena)}),
     };
 }
 
@@ -241,9 +241,9 @@ fn pushRefs(arena: *std.heap.ArenaAllocator, identity: []const u8, payload: []co
 
         const action = if (removed) "removed" else if (created) "created" else "changed";
         try buttons.append(aa, .{
-            .label = try std.fmt.allocPrint(aa, " {s} {s} ", .{ if (head) "branch" else "tag", action }),
+            .label = try aa.print(" {s} {s} ", .{ if (head) "branch" else "tag", action }),
             .text = try aa.dupe(u8, name),
-            .link = if (route) |value| try std.fmt.allocPrint(aa, "a:{s}", .{try value.toUrl(arena)}) else null,
+            .link = if (route) |value| try aa.print("a:{s}", .{try value.toUrl(arena)}) else null,
         });
     }
 }
@@ -315,7 +315,7 @@ pub fn formatTimestamp(aa: std.mem.Allocator, timestamp: i64) ![]const u8 {
     const month = year.calculateMonthDay();
     const day = seconds.getDaySeconds();
     const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-    return std.fmt.allocPrint(aa, "{s} {d}, {d}, {d:0>2}:{d:0>2}:{d:0>2} UTC", .{ months[month.month.numeric() - 1], month.day_index + 1, year.year, day.getHoursIntoDay(), day.getMinutesIntoHour(), day.getSecondsIntoMinute() });
+    return aa.print("{s} {d}, {d}, {d:0>2}:{d:0>2}:{d:0>2} UTC", .{ months[month.month.numeric() - 1], month.day_index + 1, year.year, day.getHoursIntoDay(), day.getMinutesIntoHour(), day.getSecondsIntoMinute() });
 }
 
 pub fn execute(io: std.Io, allocator: std.mem.Allocator, source: ui.RepoSource, index: u64) !void {
@@ -404,7 +404,7 @@ pub const View = struct {
             var header = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
             errdefer header.deinit(allocator);
             const route = ui.RoutablePage.repoUndoClearRoute(data.identity) orelse return error.RouteTooLong;
-            const link = try std.fmt.allocPrint(session.page_arena.allocator(), "a:{s}", .{try route.toUrl(session.page_arena)});
+            const link = try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)});
             try addText(allocator, &header, "clear undo history", link, .single);
             header.getFocus().child_id = header.children.keys()[0];
             // a row taller than the header, leaving a blank line beneath it
@@ -432,7 +432,7 @@ pub const View = struct {
                 }
                 if (data.next) |next| {
                     const route = ui.RoutablePage.repoUndoRoute(data.identity, next) orelse return error.RouteTooLong;
-                    try addText(allocator, &rows, "next →", try std.fmt.allocPrint(session.page_arena.allocator(), "a:{s}", .{try route.toUrl(session.page_arena)}), .hidden);
+                    try addText(allocator, &rows, "next →", try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)}), .hidden);
                 }
                 if (data.items.len == 0) try addText(allocator, &rows, "no undo history", null, .hidden);
                 rows.getFocus().child_id = rows.children.keys()[0];
@@ -467,7 +467,7 @@ pub const View = struct {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
         const route = ui.RoutablePage.repoUndoClearRoute(data.identity) orelse return error.RouteTooLong;
-        box.getFocus().kind = .{ .custom = try std.fmt.allocPrint(session.page_arena.allocator(), "form:{s}", .{try route.toUrl(session.page_arena)}) };
+        box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("form:{s}", .{try route.toUrl(session.page_arena)}) };
 
         var prompt = try wgt.Text.init(allocator, "are you sure?");
         errdefer prompt.deinit(allocator);
@@ -565,7 +565,7 @@ pub const View = struct {
         } else for (item.buttons) |detail_button| {
             try addLabeled(allocator, details, detail_button.label, detail_button.text, detail_button.link);
         }
-        if (failure) |message| try addText(allocator, details, try std.fmt.allocPrint(self.session.page_arena.allocator(), "error: {s}", .{message}), null, .single);
+        if (failure) |message| try addText(allocator, details, try self.session.page_arena.allocator().print("error: {s}", .{message}), null, .single);
         self.shown_failure = failure;
         details.getFocus().kind = if (enabled) .{ .custom = item.form } else .container;
         details.getFocus().child_id = details.children.keys()[0];
@@ -583,7 +583,7 @@ pub const View = struct {
         if (self.data.items.len == 0) {
             const failure = self.session.data.undo_failure orelse self.data.failure;
             if (!std.meta.eql(self.shown_failure, failure)) {
-                const message = if (failure) |name| try std.fmt.allocPrint(self.session.page_arena.allocator(), "error: {s}", .{name}) else "no undo history";
+                const message = if (failure) |name| try self.session.page_arena.allocator().print("error: {s}", .{name}) else "no undo history";
                 try rows.children.values()[0].widget.text_box.setContent(allocator, message);
                 self.shown_failure = failure;
             }

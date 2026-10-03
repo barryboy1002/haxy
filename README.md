@@ -47,7 +47,7 @@ The main difference between Haxy and [Radicle](https://radicle.dev/) is that Hax
 
 ## How to fire this puppy up and get 'er done
 
-To build, install zig 0.16.0 and do `zig build` and you'll find the binary at `zig-out/bin/haxy`. On a production server you would run this binary with the `serve` subcommand. To run it in local mode, just run it with no subcommand in any git repo.
+To build, install zig 0.17.0 and do `zig build` and you'll find the binary at `zig-out/bin/haxy`. On a production server you would run this binary with the `serve` subcommand. To run it in local mode, just run it with no subcommand in any git repo.
 
 The easiest way to try Haxy out is like this:
 

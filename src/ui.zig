@@ -13,7 +13,7 @@ const Grid = xitui.grid.Grid;
 const Focus = xitui.focus.Focus;
 // the random page art and the not-found page's fixed art. wasm receives its art
 // from the server, so it links none.
-const ansi_art = if (builtin.cpu.arch == .wasm32) struct {
+const ansi_art = if (builtin.target.cpu.arch == .wasm32) struct {
     const art: []const []const u8 = &.{};
     const not_found: []const u8 = "";
 } else @import("ansi_art");
@@ -284,10 +284,10 @@ pub const RoutablePage = union(enum) {
         // the single branch:/tag:/object: param, null when none is set
         fn ref(self: Params) error{BadUrl}!?RefParam {
             var result: ?RefParam = null;
-            inline for (@typeInfo(RefOrOid).@"enum".fields) |field| {
-                if (self.values.get(@field(ParamKey, field.name))) |value| {
+            inline for (@typeInfo(RefOrOid).@"enum".field_names) |name| {
+                if (self.values.get(@field(ParamKey, name))) |value| {
                     if (result != null) return error.BadUrl;
-                    result = .{ .kind = @field(RefOrOid, field.name), .value = value };
+                    result = .{ .kind = @field(RefOrOid, name), .value = value };
                 }
             }
             return result;
@@ -1063,12 +1063,12 @@ pub const RoutablePage = union(enum) {
                 break :blk out.written();
             },
             .user_forks => |u| if (u.start == 0)
-                try std.fmt.allocPrint(arena.allocator(), "/{s}/forks", .{u.name.slice()})
+                try arena.allocator().print("/{s}/forks", .{u.name.slice()})
             else
-                try std.fmt.allocPrint(arena.allocator(), "/{s}/forks/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
-            .user_repo_new => |name| try std.fmt.allocPrint(arena.allocator(), "/{s}/repo/new", .{name.slice()}),
-            .user_user_new => |name| try std.fmt.allocPrint(arena.allocator(), "/{s}/user/new", .{name.slice()}),
-            .user_user => |name| try std.fmt.allocPrint(arena.allocator(), "/{s}/user", .{name.slice()}),
+                try arena.allocator().print("/{s}/forks/" ++ start_seg ++ "{d}", .{ u.name.slice(), u.start }),
+            .user_repo_new => |name| try arena.allocator().print("/{s}/repo/new", .{name.slice()}),
+            .user_user_new => |name| try arena.allocator().print("/{s}/user/new", .{name.slice()}),
+            .user_user => |name| try arena.allocator().print("/{s}/user", .{name.slice()}),
             .repo_files => |f| blk: {
                 const prefix = try repoUrlPrefix(arena, f.name.slice());
                 if (f.ref_kind == null and f.patchrev_id.len == 0 and f.find.len == 0 and f.line == 0) break :blk if (prefix.len == 0) "/" else prefix;
@@ -1113,29 +1113,29 @@ pub const RoutablePage = union(enum) {
             },
             .repo_issues => |i| blk: {
                 const prefix = try repoUrlPrefix(arena, i.name.slice());
-                if (i.view == .edit) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/edit", .{ prefix, i.selected.slice() });
-                if (i.view == .description) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/description", .{ prefix, i.selected.slice() });
+                if (i.view == .edit) break :blk try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/edit", .{ prefix, i.selected.slice() });
+                if (i.view == .description) break :blk try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/description", .{ prefix, i.selected.slice() });
                 if (i.view == .resolve) break :blk if (i.theirs.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/resolve", .{ prefix, i.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/resolve", .{ prefix, i.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/" ++ theirs_seg ++ "{s}/resolve", .{ prefix, i.selected.slice(), i.theirs.slice() });
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/" ++ theirs_seg ++ "{s}/resolve", .{ prefix, i.selected.slice(), i.theirs.slice() });
                 if (i.view == .new_comment) break :blk if (i.comment.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/new", .{ prefix, i.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/new", .{ prefix, i.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/new", .{ prefix, i.selected.slice(), i.comment.slice() });
-                if (i.view == .edit_comment) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/edit", .{ prefix, i.selected.slice(), i.comment.slice() });
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/new", .{ prefix, i.selected.slice(), i.comment.slice() });
+                if (i.view == .edit_comment) break :blk try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/edit", .{ prefix, i.selected.slice(), i.comment.slice() });
                 if (i.view == .remove) break :blk if (i.comment.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/remove", .{ prefix, i.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/remove", .{ prefix, i.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/remove", .{ prefix, i.selected.slice(), i.comment.slice() });
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/remove", .{ prefix, i.selected.slice(), i.comment.slice() });
                 if (i.view == .conflicts) break :blk if (i.selected.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/issues/conflicts", .{prefix})
+                    try arena.allocator().print("{s}/issues/conflicts", .{prefix})
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/issues/" ++ start_seg ++ "{s}/conflicts", .{ prefix, i.selected.slice() });
+                    try arena.allocator().print("{s}/issues/" ++ start_seg ++ "{s}/conflicts", .{ prefix, i.selected.slice() });
                 if (i.comment.len != 0) break :blk if (i.comments_start == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}", .{ prefix, i.selected.slice(), i.comment.slice() })
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}", .{ prefix, i.selected.slice(), i.comment.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/" ++ start_seg ++ "{d}", .{ prefix, i.selected.slice(), i.comment.slice(), i.comments_start });
+                    try arena.allocator().print("{s}/" ++ issue_seg ++ "{s}/" ++ comment_seg ++ "{s}/" ++ start_seg ++ "{d}", .{ prefix, i.selected.slice(), i.comment.slice(), i.comments_start });
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
                 // the list the thread is selected in stays filtered, so paging
                 // and reloading keep the label and the query
@@ -1151,31 +1151,31 @@ pub const RoutablePage = union(enum) {
             },
             .repo_patches => |p| blk: {
                 const prefix = try repoUrlPrefix(arena, p.name.slice());
-                if (p.view == .edit) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/edit", .{ prefix, p.selected.slice() });
-                if (p.view == .publish) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/publish", .{ prefix, p.selected.slice() });
-                if (p.view == .merge) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/merge", .{ prefix, p.selected.slice() });
-                if (p.view == .description) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/description", .{ prefix, p.selected.slice() });
+                if (p.view == .edit) break :blk try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/edit", .{ prefix, p.selected.slice() });
+                if (p.view == .publish) break :blk try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/publish", .{ prefix, p.selected.slice() });
+                if (p.view == .merge) break :blk try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/merge", .{ prefix, p.selected.slice() });
+                if (p.view == .description) break :blk try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/description", .{ prefix, p.selected.slice() });
                 if (p.view == .resolve) break :blk if (p.theirs.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/resolve", .{ prefix, p.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/resolve", .{ prefix, p.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/" ++ theirs_seg ++ "{s}/resolve", .{ prefix, p.selected.slice(), p.theirs.slice() });
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/" ++ theirs_seg ++ "{s}/resolve", .{ prefix, p.selected.slice(), p.theirs.slice() });
                 if (p.view == .new_comment) break :blk if (p.comment.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/new", .{ prefix, p.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/new", .{ prefix, p.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/new", .{ prefix, p.selected.slice(), p.comment.slice() });
-                if (p.view == .edit_comment) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/edit", .{ prefix, p.selected.slice(), p.comment.slice() });
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/new", .{ prefix, p.selected.slice(), p.comment.slice() });
+                if (p.view == .edit_comment) break :blk try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/edit", .{ prefix, p.selected.slice(), p.comment.slice() });
                 if (p.view == .remove) break :blk if (p.comment.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/remove", .{ prefix, p.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/remove", .{ prefix, p.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/remove", .{ prefix, p.selected.slice(), p.comment.slice() });
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/remove", .{ prefix, p.selected.slice(), p.comment.slice() });
                 if (p.view == .conflicts) break :blk if (p.selected.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/patches/conflicts", .{prefix})
+                    try arena.allocator().print("{s}/patches/conflicts", .{prefix})
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/patches/" ++ start_seg ++ "{s}/conflicts", .{ prefix, p.selected.slice() });
+                    try arena.allocator().print("{s}/patches/" ++ start_seg ++ "{s}/conflicts", .{ prefix, p.selected.slice() });
                 if (p.comment.len != 0) break :blk if (p.comments_start == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}", .{ prefix, p.selected.slice(), p.comment.slice() })
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}", .{ prefix, p.selected.slice(), p.comment.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/" ++ start_seg ++ "{d}", .{ prefix, p.selected.slice(), p.comment.slice(), p.comments_start });
+                    try arena.allocator().print("{s}/" ++ patch_seg ++ "{s}/" ++ comment_seg ++ "{s}/" ++ start_seg ++ "{d}", .{ prefix, p.selected.slice(), p.comment.slice(), p.comments_start });
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
                 // the list the thread is selected in stays filtered, so paging
                 // and reloading keep the label and the query
@@ -1191,21 +1191,21 @@ pub const RoutablePage = union(enum) {
             },
             .repo_discussions => |t| blk: {
                 const prefix = try repoUrlPrefix(arena, t.name.slice());
-                if (t.view == .edit) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/edit", .{ prefix, t.selected.slice() });
-                if (t.view == .description) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/description", .{ prefix, t.selected.slice() });
+                if (t.view == .edit) break :blk try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/edit", .{ prefix, t.selected.slice() });
+                if (t.view == .description) break :blk try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/description", .{ prefix, t.selected.slice() });
                 if (t.view == .new_comment) break :blk if (t.comment.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/new", .{ prefix, t.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/new", .{ prefix, t.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/new", .{ prefix, t.selected.slice(), t.comment.slice() });
-                if (t.view == .edit_comment) break :blk try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/edit", .{ prefix, t.selected.slice(), t.comment.slice() });
+                    try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/new", .{ prefix, t.selected.slice(), t.comment.slice() });
+                if (t.view == .edit_comment) break :blk try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/edit", .{ prefix, t.selected.slice(), t.comment.slice() });
                 if (t.view == .remove) break :blk if (t.comment.len == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/remove", .{ prefix, t.selected.slice() })
+                    try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/remove", .{ prefix, t.selected.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/remove", .{ prefix, t.selected.slice(), t.comment.slice() });
+                    try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/remove", .{ prefix, t.selected.slice(), t.comment.slice() });
                 if (t.comment.len != 0) break :blk if (t.comments_start == 0)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}", .{ prefix, t.selected.slice(), t.comment.slice() })
+                    try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}", .{ prefix, t.selected.slice(), t.comment.slice() })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/" ++ start_seg ++ "{d}", .{ prefix, t.selected.slice(), t.comment.slice(), t.comments_start });
+                    try arena.allocator().print("{s}/" ++ discuss_seg ++ "{s}/" ++ comment_seg ++ "{s}/" ++ start_seg ++ "{d}", .{ prefix, t.selected.slice(), t.comment.slice(), t.comments_start });
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
                 // the list the thread is selected in stays filtered, so paging
                 // and reloading keep the label and the query
@@ -1222,25 +1222,25 @@ pub const RoutablePage = union(enum) {
             .repo_undo => |u| blk: {
                 const prefix = try repoUrlPrefix(arena, u.name.slice());
                 break :blk if (u.clear)
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/undo/clear", .{prefix})
+                    try arena.allocator().print("{s}/undo/clear", .{prefix})
                 else if (u.index) |index|
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/undo/{d}", .{ prefix, index })
+                    try arena.allocator().print("{s}/undo/{d}", .{ prefix, index })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/undo", .{prefix});
+                    try arena.allocator().print("{s}/undo", .{prefix});
             },
             .repo_events => |e| blk: {
                 const prefix = try repoUrlPrefix(arena, e.name.slice());
-                const moment = if (e.moment) |value| try std.fmt.allocPrint(arena.allocator(), "/moment:{d}", .{value}) else "";
+                const moment = if (e.moment) |value| try arena.allocator().print("/moment:{d}", .{value}) else "";
                 break :blk if (e.kind) |kind|
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/event:{s}/kind:{s}{s}", .{ prefix, e.selected.slice(), @tagName(kind), moment })
+                    try arena.allocator().print("{s}/event:{s}/kind:{s}{s}", .{ prefix, e.selected.slice(), @tagName(kind), moment })
                 else
-                    try std.fmt.allocPrint(arena.allocator(), "{s}/events/{s}{s}", .{ prefix, @tagName(e.view), moment });
+                    try arena.allocator().print("{s}/events/{s}{s}", .{ prefix, @tagName(e.view), moment });
             },
-            .repo_repo_new => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/repo/new", .{try repoUrlPrefix(arena, name.slice())}),
-            .repo_user_new => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/user/new", .{try repoUrlPrefix(arena, name.slice())}),
-            .repo_repo => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/repo", .{try repoUrlPrefix(arena, name.slice())}),
-            .repo_user => |name| try std.fmt.allocPrint(arena.allocator(), "{s}/user", .{try repoUrlPrefix(arena, name.slice())}),
-            .fork_patch => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}", .{ f.name.slice(), f.id.slice() }),
+            .repo_repo_new => |name| try arena.allocator().print("{s}/repo/new", .{try repoUrlPrefix(arena, name.slice())}),
+            .repo_user_new => |name| try arena.allocator().print("{s}/user/new", .{try repoUrlPrefix(arena, name.slice())}),
+            .repo_repo => |name| try arena.allocator().print("{s}/repo", .{try repoUrlPrefix(arena, name.slice())}),
+            .repo_user => |name| try arena.allocator().print("{s}/user", .{try repoUrlPrefix(arena, name.slice())}),
+            .fork_patch => |f| try arena.allocator().print("/{s}+{s}", .{ f.name.slice(), f.id.slice() }),
             .fork_diff => |d| blk: {
                 var out: std.Io.Writer.Allocating = .init(arena.allocator());
                 try out.writer.print("/{s}+{s}/diff", .{ d.fork.name.slice(), d.fork.id.slice() });
@@ -1265,9 +1265,9 @@ pub const RoutablePage = union(enum) {
                 if (c.message) try out.writer.print("/" ++ message_seg, .{});
                 break :blk out.written();
             },
-            .fork_repo_new => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}/repo/new", .{ f.name.slice(), f.id.slice() }),
-            .fork_user_new => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}/user/new", .{ f.name.slice(), f.id.slice() }),
-            .fork_user => |f| try std.fmt.allocPrint(arena.allocator(), "/{s}+{s}/user", .{ f.name.slice(), f.id.slice() }),
+            .fork_repo_new => |f| try arena.allocator().print("/{s}+{s}/repo/new", .{ f.name.slice(), f.id.slice() }),
+            .fork_user_new => |f| try arena.allocator().print("/{s}+{s}/user/new", .{ f.name.slice(), f.id.slice() }),
+            .fork_user => |f| try arena.allocator().print("/{s}+{s}/user", .{ f.name.slice(), f.id.slice() }),
         };
     }
 
@@ -1364,7 +1364,7 @@ pub const RoutablePage = union(enum) {
     // when the identity is elided.
     fn repoUrlPrefix(arena: *std.heap.ArenaAllocator, identity: []const u8) ![]const u8 {
         if (identity.len == 0) return "";
-        return std.fmt.allocPrint(arena.allocator(), "/{s}", .{identity});
+        return arena.allocator().print("/{s}", .{identity});
     }
 
     // true when the page builds at its content height on the web, letting the
@@ -2501,7 +2501,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, session: *Session, repo_may
 }
 
 fn showCopyableText(io: std.Io, copyable_text: []const u8) !void {
-    const tty: ?std.Io.File = if (builtin.os.tag == .windows)
+    const tty: ?std.Io.File = if (builtin.target.os.tag == .windows)
         null
     else
         try std.Io.Dir.cwd().openFile(io, "/dev/tty", .{ .mode = .read_write });
@@ -2608,7 +2608,7 @@ pub const in_page_link_prefix = "ai:";
 // an in-page tab's base route, or the exact current route when it is selected
 pub fn inPageTabLink(session: *Session, route: RoutablePage, selected: bool) ![]const u8 {
     const target = if (selected) session.data.current_page else route;
-    return std.fmt.allocPrint(session.page_arena.allocator(), "{s}{s}", .{ in_page_link_prefix, try target.toUrl(session.page_arena) });
+    return session.page_arena.allocator().print("{s}{s}", .{ in_page_link_prefix, try target.toUrl(session.page_arena) });
 }
 
 // a button the web renderer covers with a file picker that posts the chosen
@@ -2641,7 +2641,7 @@ pub fn terminalWebUrl(allocator: std.mem.Allocator, session: *const Session, pat
     // an absolute url is already complete
     if (!std.mem.startsWith(u8, path, "/")) return path;
     return if (session.web_port) |port|
-        try std.fmt.allocPrint(allocator, "http://localhost:{d}{s}", .{ port, path })
+        try allocator.print("http://localhost:{d}{s}", .{ port, path })
     else
         path;
 }
@@ -2721,7 +2721,7 @@ pub const Author = union(enum) {
 pub fn userLink(page_arena: *std.heap.ArenaAllocator, name: []const u8) ![]const u8 {
     const parsed = RoutablePage.Array(evt.User.name_max_len).from(name) orelse return error.RouteTooLong;
     const url = try (RoutablePage{ .user_repos = .{ .name = parsed } }).toUrl(page_arena);
-    return std.fmt.allocPrint(page_arena.allocator(), "a:{s}", .{url});
+    return page_arena.allocator().print("a:{s}", .{url});
 }
 
 // a focusable " author " box showing `author`, linking to their user page

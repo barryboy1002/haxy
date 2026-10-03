@@ -61,23 +61,23 @@ pub fn initUserRepo(io: std.Io, allocator: std.mem.Allocator, path: []const u8) 
 
 // a user repo's path, inside the user's dir
 pub fn userRepoPath(allocator: std.mem.Allocator, users_dir: []const u8, user_id: *const [event_id_size]u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(user_id.*, .lower), "user" });
+    return try std.Io.Dir.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(user_id.*, .lower), "user" });
 }
 
 // a repo's path, inside its owner's dir
 pub fn repoPath(allocator: std.mem.Allocator, users_dir: []const u8, owner_id: []const u8, repo_id: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(owner_id[0..event_id_size].*, .lower), "repos", &std.fmt.bytesToHex(repo_id[0..event_id_size].*, .lower) });
+    return try std.Io.Dir.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(owner_id[0..event_id_size].*, .lower), "repos", &std.fmt.bytesToHex(repo_id[0..event_id_size].*, .lower) });
 }
 
 // the ids a repo path names, or null for a path `repoPath` didn't build
 pub fn parseRepoPath(users_dir: []const u8, path: []const u8) ?RepoLocation {
-    const repos_dir = std.fs.path.dirname(path) orelse return null;
-    if (!std.mem.eql(u8, std.fs.path.basename(repos_dir), "repos")) return null;
-    const owner_dir = std.fs.path.dirname(repos_dir) orelse return null;
-    if (!std.mem.eql(u8, std.fs.path.dirname(owner_dir) orelse return null, users_dir)) return null;
+    const repos_dir = std.Io.Dir.path.dirname(path) orelse return null;
+    if (!std.mem.eql(u8, std.Io.Dir.path.basename(repos_dir), "repos")) return null;
+    const owner_dir = std.Io.Dir.path.dirname(repos_dir) orelse return null;
+    if (!std.mem.eql(u8, std.Io.Dir.path.dirname(owner_dir) orelse return null, users_dir)) return null;
     return .{
-        .owner_id = parseEventId(std.fs.path.basename(owner_dir)) catch return null,
-        .repo_id = parseEventId(std.fs.path.basename(path)) catch return null,
+        .owner_id = parseEventId(std.Io.Dir.path.basename(owner_dir)) catch return null,
+        .repo_id = parseEventId(std.Io.Dir.path.basename(path)) catch return null,
     };
 }
 
@@ -262,8 +262,8 @@ pub fn authorEmail(author_line: []const u8) ?[]const u8 {
 // build a `T` by copying its fields, by name, out of `source`
 pub fn project(comptime T: type, source: anytype) T {
     var result: T = undefined;
-    inline for (std.meta.fields(T)) |field| {
-        @field(result, field.name) = @field(source, field.name);
+    inline for (@typeInfo(T).@"struct".field_names) |name| {
+        @field(result, name) = @field(source, name);
     }
     return result;
 }
@@ -822,7 +822,7 @@ pub fn commitEvents(
         json.clearRetainingCapacity();
         try std.json.Stringify.value(event, .{}, &json.writer);
         if (json.written().len > max_event_size) return error.EventTooLarge;
-        const author = try std.fmt.allocPrint(allocator, "{s} <{s}>", .{ event.author.name, event.author.email });
+        const author = try allocator.print("{s} <{s}>", .{ event.author.name, event.author.email });
         defer allocator.free(author);
 
         // every event gets a fresh tree
@@ -831,7 +831,7 @@ pub fn commitEvents(
         for (event.tree_entries) |entry| {
             switch (entry) {
                 .blob => |blob| {
-                    var oid_bytes = [_]u8{0} ** hash.byteLen(repo_opts.hash);
+                    var oid_bytes: [hash.byteLen(repo_opts.hash)]u8 = @splat(0);
                     try obj.writeObject(repo_kind, repo_opts, state, io, allocator, blob.reader, .{ .kind = .blob, .size = blob.size }, &oid_bytes);
                     try tree.addBlobEntry(.{ .content = .{ .unix_permission = 0o644, .object_type = .regular_file } }, blob.name, &oid_bytes);
                 },
@@ -1155,8 +1155,8 @@ pub fn consumeInTransaction(
                 const baseline_haxy_moment_cursor = try haxy_moments.getCursor(hash.bytesToInt(repo_opts.hash, &baseline_oid)) orelse return error.CursorNotFound;
                 const baseline_haxy_moment = try DB.HashMap(.read_only).init(baseline_haxy_moment_cursor);
 
-                inline for (std.meta.fields(Event)) |field| {
-                    const T = @typeInfo(field.type).optional.child;
+                inline for (@typeInfo(Event).@"union".field_types) |field_type| {
+                    const T = @typeInfo(field_type).optional.child;
                     try merge(T, DB, repo_opts.hash, allocator, haxy_moment, parent_haxy_moment, baseline_haxy_moment);
                 }
             }
@@ -1353,16 +1353,17 @@ pub fn writeOid(
     // created only once a field actually changes
     var field_oids: ?DB.SortedMap(.read_write) = null;
 
-    inline for (std.meta.fields(T)) |field| {
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
         const changed = if (existing_maybe) |existing|
-            !fieldEqual(field.type, @field(existing, field.name), @field(event, field.name))
+            !fieldEqual(field_type, @field(existing, field_name), @field(event, field_name))
         else
             true;
         if (changed) {
             if (field_oids == null) {
                 field_oids = try DB.SortedMap(.read_write).init(try id_to_field_to_oid.putCursor(record_key));
             }
-            if (field_oids) |map| try map.put(field.name, .{ .bytes = oid });
+            if (field_oids) |map| try map.put(field_name, .{ .bytes = oid });
         }
     }
 }
@@ -1370,7 +1371,7 @@ pub fn writeOid(
 // the whole field list, space separated, is the longest it can get
 fn conflictedFieldsMaxLen(comptime T: type) usize {
     var len: usize = 0;
-    for (std.meta.fields(T)) |field| len += field.name.len + 1;
+    for (@typeInfo(T).@"struct".field_names) |name| len += name.len + 1;
     return len;
 }
 
@@ -1396,23 +1397,24 @@ fn mergeFields(
     baseline_maybe: ?T,
     target: T,
     parent: T,
-    outcome: *[std.meta.fields(T).len]FieldMerge,
+    outcome: *[@typeInfo(T).@"struct".field_names.len]FieldMerge,
 ) T {
     var merged = target;
 
-    inline for (std.meta.fields(T), 0..) |field, i| {
-        const target_value = @field(target, field.name);
-        const parent_value = @field(parent, field.name);
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
+        const target_value = @field(target, field_name);
+        const parent_value = @field(parent, field_name);
 
-        if (!fieldEqual(field.type, target_value, parent_value)) {
+        if (!fieldEqual(field_type, target_value, parent_value)) {
             outcome[i] = if (baseline_maybe) |baseline| blk: {
-                const baseline_value = @field(baseline, field.name);
-                if (fieldEqual(field.type, target_value, baseline_value)) {
-                    @field(merged, field.name) = parent_value;
+                const baseline_value = @field(baseline, field_name);
+                if (fieldEqual(field_type, target_value, baseline_value)) {
+                    @field(merged, field_name) = parent_value;
                     break :blk .parent;
                 }
                 // only the target changed it
-                if (fieldEqual(field.type, parent_value, baseline_value)) break :blk .kept;
+                if (fieldEqual(field_type, parent_value, baseline_value)) break :blk .kept;
                 break :blk .conflicted;
             } else .conflicted;
         }
@@ -1491,7 +1493,7 @@ pub fn merge(
         const target_records = try DB.HashMap(.read_write).init(target_records_cursor);
 
         // a record the target doesn't have arrives wholesale from the parent
-        var outcome: [std.meta.fields(T).len]FieldMerge = @splat(.parent);
+        var outcome: [@typeInfo(T).@"struct".field_names.len]FieldMerge = @splat(.parent);
         var merged = parent_record;
 
         if (try target_records.getCursor(record_key)) |target_record_cursor| {
@@ -1591,7 +1593,7 @@ pub fn merge(
         var conflicted_fields: [conflictedFieldsMaxLen(T)]u8 = undefined;
         var conflicted_len: usize = 0;
 
-        inline for (std.meta.fields(T), 0..) |field, i| {
+        inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, i| {
             switch (outcome[i]) {
                 // the target's value stands, so its oid does too
                 .kept => {},
@@ -1604,11 +1606,11 @@ pub fn merge(
                         field_oids = try DB.SortedMap(.read_write).init(try id_to_field_to_oid.putCursor(record_key));
                     }
                     const map = field_oids orelse unreachable;
-                    const parent_oid = if (parent_field_oids) |parent_map| try parent_map.getCursor(field.name) else null;
+                    const parent_oid = if (parent_field_oids) |parent_map| try parent_map.getCursor(field_name) else null;
                     if (parent_oid) |oid_cursor| {
-                        try map.put(field.name, .{ .slot = oid_cursor.slot() });
+                        try map.put(field_name, .{ .slot = oid_cursor.slot() });
                     } else {
-                        _ = try map.remove(field.name);
+                        _ = try map.remove(field_name);
                     }
                 },
                 .conflicted => {
@@ -1616,8 +1618,8 @@ pub fn merge(
                         conflicted_fields[conflicted_len] = ' ';
                         conflicted_len += 1;
                     }
-                    @memcpy(conflicted_fields[conflicted_len..][0..field.name.len], field.name);
-                    conflicted_len += field.name.len;
+                    @memcpy(conflicted_fields[conflicted_len..][0..field_name.len], field_name);
+                    conflicted_len += field_name.len;
                 },
             }
         }
@@ -2088,13 +2090,14 @@ pub fn readRecordSubset(
 }
 
 fn assertFieldSubset(comptime Sub: type, comptime Full: type) void {
-    for (@typeInfo(Sub).@"struct".fields) |field| {
-        if (!@hasField(Full, field.name)) @compileError(@typeName(Full) ++ " has no field " ++ field.name);
-        const FullField = @FieldType(Full, field.name);
-        if (@typeInfo(field.type) == .@"struct") {
-            assertFieldSubset(field.type, FullField);
-        } else if (field.type != FullField) {
-            @compileError(@typeName(Full) ++ "." ++ field.name ++ " is a " ++ @typeName(FullField));
+    const info = @typeInfo(Sub).@"struct";
+    for (info.field_names, info.field_types) |field_name, field_type| {
+        if (!@hasField(Full, field_name)) @compileError(@typeName(Full) ++ " has no field " ++ field_name);
+        const FullField = @FieldType(Full, field_name);
+        if (@typeInfo(field_type) == .@"struct") {
+            assertFieldSubset(field_type, FullField);
+        } else if (field_type != FullField) {
+            @compileError(@typeName(Full) ++ "." ++ field_name ++ " is a " ++ @typeName(FullField));
         }
     }
 }
@@ -2109,9 +2112,9 @@ pub fn read(
     var event: T = undefined;
     switch (@typeInfo(T)) {
         .@"struct" => |struct_info| {
-            inline for (struct_info.fields) |field| {
-                const cursor = try map.getCursor(hash.hashInt(hash_kind, field.name));
-                @field(event, field.name) = try readField(field.type, DB, hash_kind, arena, cursor);
+            inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+                const cursor = try map.getCursor(hash.hashInt(hash_kind, field_name));
+                @field(event, field_name) = try readField(field_type, DB, hash_kind, arena, cursor);
             }
         },
         else => @compileError("read expects a struct"),
@@ -2135,7 +2138,7 @@ fn readField(
     const cursor = cursor_maybe orelse return error.NotFound;
     switch (@typeInfo(Field)) {
         .pointer => |pointer_info| {
-            if (pointer_info.size != .slice or pointer_info.child != u8 or !pointer_info.is_const) {
+            if (pointer_info.size != .slice or pointer_info.child != u8 or !pointer_info.attrs.@"const") {
                 @compileError("unsupported read field type: " ++ @typeName(Field));
             }
             return try cursor.readBytesAlloc(arena.allocator(), null);
@@ -2165,9 +2168,9 @@ fn readField(
             switch (cursor.slot().tag) {
                 .bytes, .short_bytes => {
                     const name = try cursor.readBytesAlloc(arena.allocator(), null);
-                    inline for (union_info.fields) |variant| {
-                        if (variant.type == void and std.mem.eql(u8, name, variant.name)) {
-                            return @unionInit(Field, variant.name, {});
+                    inline for (union_info.field_names, union_info.field_types) |variant_name, variant_type| {
+                        if (variant_type == void and std.mem.eql(u8, name, variant_name)) {
+                            return @unionInit(Field, variant_name, {});
                         }
                     }
                     return error.InvalidUnion;
@@ -2178,9 +2181,9 @@ fn readField(
                     const entry = (try iter.next()) orelse return error.InvalidUnion;
                     const pair = try entry.readKeyValuePair();
                     if (try iter.next() != null) return error.InvalidUnion;
-                    inline for (union_info.fields) |variant| {
-                        if (variant.type != void and pair.hash == hash.hashInt(hash_kind, variant.name)) {
-                            return @unionInit(Field, variant.name, try readField(variant.type, DB, hash_kind, arena, pair.value_cursor));
+                    inline for (union_info.field_names, union_info.field_types) |variant_name, variant_type| {
+                        if (variant_type != void and pair.hash == hash.hashInt(hash_kind, variant_name)) {
+                            return @unionInit(Field, variant_name, try readField(variant_type, DB, hash_kind, arena, pair.value_cursor));
                         }
                     }
                     return error.InvalidUnion;
@@ -2197,8 +2200,8 @@ fn readField(
 fn fieldsEqual(comptime T: type, a: T, b: T) bool {
     switch (@typeInfo(T)) {
         .@"struct" => |struct_info| {
-            inline for (struct_info.fields) |field| {
-                if (!fieldEqual(field.type, @field(a, field.name), @field(b, field.name))) return false;
+            inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+                if (!fieldEqual(field_type, @field(a, field_name), @field(b, field_name))) return false;
             }
         },
         else => @compileError("fieldsEqual expects a struct"),
@@ -2256,8 +2259,8 @@ pub fn upsert(
 ) !void {
     switch (@typeInfo(T)) {
         .@"struct" => |struct_info| {
-            inline for (struct_info.fields) |field| {
-                try upsertField(DB, hash_kind, map, field.name, field.type, @field(event, field.name));
+            inline for (struct_info.field_names, struct_info.field_types) |field_name, field_type| {
+                try upsertField(DB, hash_kind, map, field_name, field_type, @field(event, field_name));
             }
         },
         else => @compileError("upsert expects a struct"),

@@ -1088,11 +1088,23 @@ pub fn merge(
     input: MergeInput,
 ) !void {
     const patch_id = try evt.parseEventId(&input.id);
-    errdefer |err| {
+    mergeInner(repo_opts, io, allocator, users_dir, target_repo, input, patch_id) catch |err| {
         if (err == error.PatchDataUnavailable or err == error.PatchOutOfDate) {
             refreshMergeability(repo_opts, io, allocator, target_repo, users_dir, patch_id);
         }
-    }
+        return err;
+    };
+}
+
+fn mergeInner(
+    comptime repo_opts: rp.RepoOpts(.xit),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    users_dir: []const u8,
+    target_repo: *rp.Repo(.xit, repo_opts),
+    input: MergeInput,
+    patch_id: [evt.event_id_size]u8,
+) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
@@ -1123,7 +1135,7 @@ pub fn merge(
         .squash => selected.squash_oid,
         .source => selected.source_oid,
     }) catch return error.InvalidPatch;
-    const identity = try std.fmt.allocPrint(arena.allocator(), "{s} <{s}>", .{ input.author.name, input.author.email });
+    const identity = try arena.allocator().print("{s} <{s}>", .{ input.author.name, input.author.email });
 
     // merge the code and events in one target transaction
     {

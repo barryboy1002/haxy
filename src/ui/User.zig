@@ -212,19 +212,19 @@ pub const View = struct {
                 const aa = item_arena.allocator();
                 var items: std.ArrayList(ui.widget.FlowBox.Item) = .empty;
                 if (data.forks_start > 0)
-                    try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:/{s}/forks/start:{d}", .{ data.user.name, data.forks_start -| page_size }) });
+                    try items.append(aa, .{ .text = "← previous", .link = try aa.print("a:/{s}/forks/start:{d}", .{ data.user.name, data.forks_start -| page_size }) });
                 for (data.forks) |fork_item| {
                     // the fork route names the forker
-                    const identity = try std.fmt.allocPrint(aa, "{s}:{s}", .{ data.user.name, fork_item.target.name });
+                    const identity = try aa.print("{s}:{s}", .{ data.user.name, fork_item.target.name });
                     const route = ui.RoutablePage.forkPatchRoute(identity, fork_item.id) orelse return error.RouteTooLong;
                     try items.append(aa, .{
-                        .text = try std.fmt.allocPrint(aa, "{s} - {s}", .{ fork_item.target.name, fork_item.title }),
-                        .link = try std.fmt.allocPrint(aa, "a:{s}", .{try route.toUrl(session.page_arena)}),
+                        .text = try aa.print("{s} - {s}", .{ fork_item.target.name, fork_item.title }),
+                        .link = try aa.print("a:{s}", .{try route.toUrl(session.page_arena)}),
                         .bottom_label = if (fork_item.target.read_access == .private) "(private)" else "",
                     });
                 }
                 if (data.forks_next_start) |next_start|
-                    try items.append(aa, .{ .text = "next →", .link = try std.fmt.allocPrint(aa, "a:/{s}/forks/start:{d}", .{ data.user.name, next_start }) });
+                    try items.append(aa, .{ .text = "next →", .link = try aa.print("a:/{s}/forks/start:{d}", .{ data.user.name, next_start }) });
                 try list.setItems(allocator, items.items);
                 try stack.children.put(allocator, list.getFocus().id, .{ .flow_box_scroll = list });
             }
@@ -397,20 +397,20 @@ pub const ReposView = struct {
             if (data.repos_start > 0) {
                 var prev = route;
                 prev.user_repos.start = data.repos_start -| page_size;
-                try items.append(aa, .{ .text = "← previous", .link = try std.fmt.allocPrint(aa, "a:{s}", .{try prev.toUrl(&arena)}) });
+                try items.append(aa, .{ .text = "← previous", .link = try aa.print("a:{s}", .{try prev.toUrl(&arena)}) });
             }
             for (data.repos) |repo|
                 // clicking a repo opens its page; the "a:" prefix makes the web
                 // renderer emit an <a href="/alice:foo"> anchor.
                 try items.append(aa, .{
-                    .text = if (repo.event.description.len == 0) repo.event.name else try std.fmt.allocPrint(aa, "{s} - {s}", .{ repo.event.name, repo.event.description }),
-                    .link = try std.fmt.allocPrint(aa, "a:/{s}:{s}", .{ data.user.name, repo.event.name }),
+                    .text = if (repo.event.description.len == 0) repo.event.name else try aa.print("{s} - {s}", .{ repo.event.name, repo.event.description }),
+                    .link = try aa.print("a:/{s}:{s}", .{ data.user.name, repo.event.name }),
                     .bottom_label = if (repo.event.read_access == .private) "(private)" else "",
                 });
             if (data.repos_next_start) |next_start| {
                 var next = route;
                 next.user_repos.start = next_start;
-                try items.append(aa, .{ .text = "next →", .link = try std.fmt.allocPrint(aa, "a:{s}", .{try next.toUrl(&arena)}) });
+                try items.append(aa, .{ .text = "next →", .link = try aa.print("a:{s}", .{try next.toUrl(&arena)}) });
             }
             try list.setItems(allocator, items.items);
 

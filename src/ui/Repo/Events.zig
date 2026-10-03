@@ -203,7 +203,7 @@ fn readMomentEvents(
             if (!std.mem.eql(u8, selected, &std.fmt.bytesToHex(id, .lower))) continue;
             awaiting_selected = false;
         }
-        const window_events = &events[@intFromEnum(view)];
+        const window_events = &events[@backingInt(view)];
         if (window_events.items.len == page_size) {
             if (event_window.next == null) event_window.next = .{ .id = try formatId(aa, &id), .kind = kind };
             continue;
@@ -213,8 +213,8 @@ fn readMomentEvents(
     }
     // the window start can name an event this batch no longer holds
     if (awaiting_selected) return;
-    result.active.events = events[@intFromEnum(ui.RoutablePage.EventsView.active)].items;
-    result.removed.events = events[@intFromEnum(ui.RoutablePage.EventsView.removed)].items;
+    result.active.events = events[@backingInt(ui.RoutablePage.EventsView.active)].items;
+    result.removed.events = events[@backingInt(ui.RoutablePage.EventsView.removed)].items;
 }
 
 pub fn empty(aa: std.mem.Allocator, identity: []const u8, view: ui.RoutablePage.EventsView, local: bool, failure: ?[]const u8) !Self {
@@ -383,7 +383,7 @@ pub const View = struct {
             errdefer content_box.deinit(allocator);
             try content_stack.children.put(allocator, content_box.getFocus().id, .{ .box = content_box });
         }
-        content_stack.getFocus().child_id = content_stack.children.keys()[@intFromEnum(data.view)];
+        content_stack.getFocus().child_id = content_stack.children.keys()[@backingInt(data.view)];
         try outer.children.put(allocator, content_stack.getFocus().id, .{ .widget = .{ .stack = content_stack }, .rect = null, .min_size = null });
         outer.getFocus().child_id = outer.children.keys()[content_index];
         return .{ .box = outer, .data = data, .session = session, .detailed_index = .{ null, null } };
@@ -398,12 +398,12 @@ pub const View = struct {
         const event_window = data.window(view);
         for (event_window.events) |event| {
             const route = ui.RoutablePage.repoEventsRoute(data.identity, view, event.kind, event.id, data.moment) orelse return error.RouteTooLong;
-            const link = try std.fmt.allocPrint(session.page_arena.allocator(), "ai:{s}", .{try route.toUrl(session.page_arena)});
+            const link = try session.page_arena.allocator().print("ai:{s}", .{try route.toUrl(session.page_arena)});
             try addRow(allocator, &list_box, @tagName(event.kind), link);
         }
         if (event_window.next) |next| {
             const route = ui.RoutablePage.repoEventsRoute(data.identity, view, next.kind, next.id, data.moment) orelse return error.RouteTooLong;
-            const link = try std.fmt.allocPrint(session.page_arena.allocator(), "a:{s}", .{try route.toUrl(session.page_arena)});
+            const link = try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)});
             try addRow(allocator, &list_box, "next →", link);
         }
         if (list_box.children.count() > 0) list_box.getFocus().child_id = list_box.children.keys()[0];
@@ -445,7 +445,7 @@ pub const View = struct {
     fn selectedView(self: *View) ui.RoutablePage.EventsView {
         const stack = self.contentStack();
         const id = stack.getFocus().child_id orelse return .active;
-        return @enumFromInt(stack.children.getIndex(id) orelse 0);
+        return @fromBackingInt(@intCast(stack.children.getIndex(id) orelse 0));
     }
 
     fn eventWindow(self: *View) *const Window {
@@ -454,7 +454,7 @@ pub const View = struct {
 
     fn content(self: *View) *wgt.Box(ui.Widget) {
         const stack = self.contentStack();
-        return &stack.children.values()[@intFromEnum(self.selectedView())].box;
+        return &stack.children.values()[@backingInt(self.selectedView())].box;
     }
 
     fn listScroll(self: *View) *wgt.Scroll(ui.Widget) {
@@ -510,7 +510,7 @@ pub const View = struct {
 
     fn refreshDetail(self: *View, allocator: std.mem.Allocator) !void {
         const index = self.selectedEventIndex() orelse return;
-        const detailed_index = &self.detailed_index[@intFromEnum(self.selectedView())];
+        const detailed_index = &self.detailed_index[@backingInt(self.selectedView())];
         if (detailed_index.*) |old| if (old == index) return;
         const box = self.detailBox();
         for (box.children.values()) |*child| child.widget.deinit(allocator);
@@ -522,7 +522,7 @@ pub const View = struct {
             var link = try wgt.TextBox.init(allocator, "view event", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
             errdefer link.deinit(allocator);
             link.getFocus().mode = .all;
-            link.getFocus().kind = .{ .custom = try std.fmt.allocPrint(self.session.page_arena.allocator(), "a:{s}", .{url}) };
+            link.getFocus().kind = .{ .custom = try self.session.page_arena.allocator().print("a:{s}", .{url}) };
             try box.children.put(allocator, link.getFocus().id, .{ .widget = .{ .text_box = link }, .rect = null, .min_size = null });
         }
         {
@@ -637,7 +637,7 @@ pub const Header = struct {
     }
 
     pub fn empty(aa: std.mem.Allocator, failure: ?[]const u8) !Header {
-        return .{ .sync_status = if (failure) |name| try std.fmt.allocPrint(aa, "error: {s}", .{name}) else nothing };
+        return .{ .sync_status = if (failure) |name| try aa.print("error: {s}", .{name}) else nothing };
     }
 
     pub fn remote() Header {
@@ -694,8 +694,8 @@ pub const Header = struct {
                 errdefer status.deinit(allocator);
                 try box.children.put(allocator, status.getFocus().id, .{ .widget = .{ .text_box = status }, .rect = null, .min_size = null, .flex = .shrink });
             }
-            box.getFocus().child_id = tab_ids[@intFromEnum(data.view)];
-            return .{ .box = box, .session = session, .tab_ids = tab_ids, .selected_tab = @intFromEnum(data.view), .button_id = button_id };
+            box.getFocus().child_id = tab_ids[@backingInt(data.view)];
+            return .{ .box = box, .session = session, .tab_ids = tab_ids, .selected_tab = @backingInt(data.view), .button_id = button_id };
         }
 
         pub fn deinit(self: *Header.View, allocator: std.mem.Allocator) void {
@@ -845,20 +845,20 @@ pub fn sync(io: std.Io, allocator: std.mem.Allocator, source: ui.RepoSource) !?[
                     defer config.deinit();
                     const configured_ssh = if (config.sections.get("core")) |core| core.get("sshcommand") else null;
                     const ssh = if (configured_ssh) |command| if (command.len > 0) command else "ssh" else "ssh";
-                    const remote_section = try std.fmt.allocPrint(allocator, "remote.{s}", .{remote_name});
+                    const remote_section = try allocator.print("remote.{s}", .{remote_name});
                     defer allocator.free(remote_section);
                     const remote_config = config.sections.get(remote_section) orelse return error.RemoteNotFound;
                     const fetch_url = remote_config.get("url") orelse return error.UrlNotFound;
                     const push_url = remote_config.get("pushurl") orelse fetch_url;
                     const loopback_opts = " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
-                    const fetch_ssh_command = try std.fmt.allocPrint(allocator, "{s}{s} -o BatchMode=yes -o LogLevel=QUIET", .{ ssh, if (isLoopbackSshUrl(fetch_url)) loopback_opts else "" });
+                    const fetch_ssh_command = try allocator.print("{s}{s} -o BatchMode=yes -o LogLevel=QUIET", .{ ssh, if (isLoopbackSshUrl(fetch_url)) loopback_opts else "" });
                     defer allocator.free(fetch_ssh_command);
-                    const push_ssh_command = try std.fmt.allocPrint(allocator, "{s}{s} -o BatchMode=yes -o LogLevel=QUIET", .{ ssh, if (isLoopbackSshUrl(push_url)) loopback_opts else "" });
+                    const push_ssh_command = try allocator.print("{s}{s} -o BatchMode=yes -o LogLevel=QUIET", .{ ssh, if (isLoopbackSshUrl(push_url)) loopback_opts else "" });
                     defer allocator.free(push_ssh_command);
                     const fetch_transport_opts: xit.net.Opts(repo_opts.ProgressCtx) = .{ .progress_ctx = .{ .message = &message }, .wire = .{ .ssh = .{ .command = fetch_ssh_command } } };
                     const push_transport_opts: xit.net.Opts(repo_opts.ProgressCtx) = .{ .progress_ctx = .{ .message = &message }, .wire = .{ .ssh = .{ .command = push_ssh_command } } };
 
-                    const fetch_refspec = try std.fmt.allocPrint(allocator, "+refs/heads/{s}:refs/remotes/{s}/{s}", .{ evt.events_ref.name, remote_name, evt.events_ref.name });
+                    const fetch_refspec = try allocator.print("+refs/heads/{s}:refs/remotes/{s}/{s}", .{ evt.events_ref.name, remote_name, evt.events_ref.name });
                     defer allocator.free(fetch_refspec);
                     var fetch_opts = fetch_transport_opts;
                     fetch_opts.refspecs = &.{fetch_refspec};
@@ -878,7 +878,7 @@ pub fn sync(io: std.Io, allocator: std.mem.Allocator, source: ui.RepoSource) !?[
                     if (remote_oid != null) try evt.mergeEvents(repo_kind, repo_opts, io, allocator, repo, remote_ref);
                     try evt.consume(.local, .repo, repo_kind, repo_opts, io, allocator, repo, evt.events_ref, &.{});
 
-                    const push_refspec = try std.fmt.allocPrint(allocator, "refs/heads/{s}:refs/heads/{s}", .{ evt.events_ref.name, evt.events_ref.name });
+                    const push_refspec = try allocator.print("refs/heads/{s}:refs/heads/{s}", .{ evt.events_ref.name, evt.events_ref.name });
                     defer allocator.free(push_refspec);
                     message.clearRetainingCapacity();
                     repo.push(io, allocator, remote_name, push_refspec, false, push_transport_opts) catch |err| {

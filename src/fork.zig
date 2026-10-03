@@ -30,7 +30,7 @@ pub fn parseRoute(route_path: []const u8) ?Route {
 
 // a fork's path, inside its forker's dir
 pub fn forkPath(allocator: std.mem.Allocator, users_dir: []const u8, forker_id: *const [evt.event_id_size]u8, fork_id: *const [evt.event_id_size]u8) ![]u8 {
-    return try std.fs.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(forker_id.*, .lower), "forks", &std.fmt.bytesToHex(fork_id.*, .lower) });
+    return try std.Io.Dir.path.join(allocator, &.{ users_dir, &std.fmt.bytesToHex(forker_id.*, .lower), "forks", &std.fmt.bytesToHex(fork_id.*, .lower) });
 }
 
 const forker_section = "haxy";
@@ -112,10 +112,10 @@ fn copyTarget(
     if ((try target_repo.readRef(io, .{ .kind = .head, .name = input.target_branch })) == null) return error.TargetNotFound;
 
     // create the fork repo dir
-    const forks_path = std.fs.path.dirname(fork_path) orelse return error.InvalidPatchDraft;
+    const forks_path = std.Io.Dir.path.dirname(fork_path) orelse return error.InvalidPatchDraft;
     var forks_dir = try std.Io.Dir.cwd().createDirPathOpen(io, forks_path, .{});
     defer forks_dir.close(io);
-    const fork_name = std.fs.path.basename(fork_path);
+    const fork_name = std.Io.Dir.path.basename(fork_path);
     forks_dir.createDir(io, fork_name, .default_dir) catch |err| switch (err) {
         error.PathAlreadyExists => return error.InvalidPatchDraft,
         else => |other| return other,
@@ -196,7 +196,7 @@ fn copyTarget(
                     const na = names_arena.allocator();
                     var names: std.ArrayList([]const u8) = .empty;
                     for (section.keys()) |key| {
-                        if (std.mem.startsWith(u8, key, forker_prefix)) try names.append(na, try std.fmt.allocPrint(na, forker_section ++ ".{s}", .{key}));
+                        if (std.mem.startsWith(u8, key, forker_prefix)) try names.append(na, try na.print(forker_section ++ ".{s}", .{key}));
                     }
                     for (names.items) |name| try config.remove(state, ctx.io, .{ .name = name });
                 }

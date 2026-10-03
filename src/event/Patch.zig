@@ -57,7 +57,7 @@ pub const StatusKind = enum {
 
     const longest_len = blk: {
         var len: usize = 0;
-        for (@typeInfo(StatusKind).@"enum".fields) |field| len = @max(len, field.name.len);
+        for (@typeInfo(StatusKind).@"enum".field_names) |name| len = @max(len, name.len);
         break :blk len;
     };
 };
@@ -286,7 +286,7 @@ pub fn resolveMerge(
     target: Self,
     parent: Self,
     merged: *Self,
-    outcome: *[std.meta.fields(Self).len]evt.FieldMerge,
+    outcome: *[@typeInfo(Self).@"struct".field_names.len]evt.FieldMerge,
 ) void {
     const status_index = std.meta.fieldIndex(Self, "status") orelse @compileError("Patch.status not found");
     const revision_index = std.meta.fieldIndex(Self, "revision") orelse @compileError("Patch.revision not found");
