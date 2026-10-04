@@ -182,7 +182,7 @@ pub const View = struct {
     const stack_index: usize = 1;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
         {
             var header = try Header.View.init(allocator, &data.header, data.commits.commit_count, session);

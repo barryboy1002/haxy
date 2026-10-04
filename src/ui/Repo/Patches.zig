@@ -24,7 +24,7 @@ pub const Source = struct {
     pub const Kind = enum { fork, branch };
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, initial: []const u8, initial_kind: Kind) !Source {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
         const selected: Kind = if (session.data.host_kind == .local) .branch else initial_kind;
         var selectors: std.enums.EnumMap(Kind, usize) = .{};
@@ -34,14 +34,14 @@ pub const Source = struct {
                     .fork => "from a new fork",
                     .branch => "from an existing branch",
                 };
-                var selector = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+                var selector = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
                 errdefer selector.deinit(allocator);
                 selector.getFocus().mode = .all;
                 try box.children.put(allocator, selector.getFocus().id, .{ .widget = .{ .text_box = selector }, .rect = null, .min_size = .{ .width = label.len + 2, .height = 3 } });
                 selectors.put(kind, selector.getFocus().id);
             }
         }
-        var input_box = try wgt.TextInput.init(allocator, .{ .label = " source branch ", .name = "source_branch", .round_corners = true, .visible_width = null, .render_content = session.is_terminal });
+        var input_box = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " source branch " }, .name = "source_branch", .round_corners = true, .visible_width = null, .render_content = session.is_terminal });
         errdefer input_box.deinit(allocator);
         input_box.getFocus().mode = .all;
         try input_box.setContent(allocator, initial);
@@ -92,7 +92,7 @@ pub const Source = struct {
         const selected = self.selectedKind();
         for (self.box.children.keys(), self.box.children.values()) |id, *child| switch (child.widget) {
             .text_input => child.hidden = selected == .fork,
-            .text_box => |*selector| selector.options.border_style = if (id == self.selectors.get(selected)) .single else .hidden,
+            .text_box => |*selector| selector.options.border = if (id == self.selectors.get(selected)) .single else .hidden,
             else => {},
         };
         try self.box.build(allocator, constraint, root_focus);
@@ -975,7 +975,7 @@ pub fn appendDetails(self: *const Self, allocator: std.mem.Allocator, box: *wgt.
         try box.children.put(allocator, copyable_text.getFocus().id, .{ .widget = .{ .copyable_text = copyable_text }, .rect = null, .min_size = null });
     };
     if (entry.record.event.source_branch) |branch| {
-        var source = try wgt.TextBox.init(allocator, branch, .{ .label = " source branch ", .border_style = .single, .round_corners = true, .wrap_kind = .none });
+        var source = try wgt.TextBox.init(allocator, branch, .{ .top_label = .{ .text = " source branch " }, .border = .single, .round_corners = true, .wrap_kind = .none });
         errdefer source.deinit(allocator);
         source.getFocus().mode = .all;
         try box.children.put(allocator, source.getFocus().id, .{ .widget = .{ .text_box = source }, .rect = null, .min_size = null });

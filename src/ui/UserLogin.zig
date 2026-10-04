@@ -26,7 +26,7 @@ pub const View = struct {
     const button_index: usize = 2;
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
         // marks this subtree as an HTML form scope for the web renderer
         box.getFocus().kind = .{ .custom = "form:login" };
@@ -34,7 +34,7 @@ pub const View = struct {
         var nav_ids: [3]usize = undefined;
 
         {
-            var username = try wgt.TextInput.init(allocator, .{ .label = " username ", .name = "username", .round_corners = true, .render_content = session.is_terminal });
+            var username = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " username " }, .name = "username", .round_corners = true, .render_content = session.is_terminal });
             errdefer username.deinit(allocator);
             username.getFocus().mode = .all;
             if (session.formFeedback(.login)) |feedback| try username.setContent(allocator, feedback.username);
@@ -47,7 +47,7 @@ pub const View = struct {
         }
 
         {
-            var password = try wgt.TextInput.init(allocator, .{ .label = " password ", .password = true, .name = "password", .round_corners = true, .render_content = session.is_terminal });
+            var password = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " password " }, .password = true, .name = "password", .round_corners = true, .render_content = session.is_terminal });
             errdefer password.deinit(allocator);
             password.getFocus().mode = .all;
             nav_ids[password_index] = password.getFocus().id;
@@ -59,7 +59,7 @@ pub const View = struct {
         }
 
         {
-            var button = try wgt.TextBox.init(allocator, "login", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var button = try wgt.TextBox.init(allocator, "login", .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer button.deinit(allocator);
             button.getFocus().mode = .all;
             // the renderer distinguishes plain clickables from buttons that
@@ -92,13 +92,13 @@ pub const View = struct {
         const failure = if (self.session.formFeedback(.login)) |feedback| feedback.failure else null;
 
         const username_input = &box.children.values()[username_index].widget.text_input;
-        username_input.options.label = if (failure == .unknown_user)
+        username_input.options.top_label.text = if (failure == .unknown_user)
             " username (invalid) "
         else
             " username ";
 
         const password_input = &box.children.values()[password_index].widget.text_input;
-        password_input.options.label = if (failure == .wrong_password)
+        password_input.options.top_label.text = if (failure == .wrong_password)
             " password (invalid) "
         else
             " password ";

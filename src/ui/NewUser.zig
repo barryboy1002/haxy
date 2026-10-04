@@ -20,14 +20,14 @@ pub const View = struct {
 
     // `route` is the page's own new-user route, which the web form posts to
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, route: ui.RoutablePage) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
         box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("form:{s}", .{try route.toUrl(session.page_arena)}) };
 
         const saved_fields = if (session.formFeedback(.user)) |saved| saved.fields else null;
 
         {
-            var name = try wgt.TextInput.init(allocator, .{ .label = " name ", .name = "name", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
+            var name = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " name " }, .name = "name", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer name.deinit(allocator);
             name.getFocus().mode = .all;
             if (saved_fields) |saved| try name.setContent(allocator, saved.name);
@@ -36,7 +36,7 @@ pub const View = struct {
         }
 
         {
-            var email = try wgt.TextInput.init(allocator, .{ .label = " email ", .name = "email", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
+            var email = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " email " }, .name = "email", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer email.deinit(allocator);
             email.getFocus().mode = .all;
             if (saved_fields) |saved| try email.setContent(allocator, saved.email);
@@ -44,14 +44,14 @@ pub const View = struct {
         }
 
         {
-            var password = try wgt.TextInput.init(allocator, .{ .label = " password ", .password = true, .name = "password", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
+            var password = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " password " }, .password = true, .name = "password", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer password.deinit(allocator);
             password.getFocus().mode = .all;
             try box.children.put(allocator, password.getFocus().id, .{ .widget = .{ .text_input = password }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
         {
-            var password_again = try wgt.TextInput.init(allocator, .{ .label = " password again ", .password = true, .name = "password_again", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
+            var password_again = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " password again " }, .password = true, .name = "password_again", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer password_again.deinit(allocator);
             password_again.getFocus().mode = .all;
             try box.children.put(allocator, password_again.getFocus().id, .{ .widget = .{ .text_input = password_again }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
@@ -73,19 +73,19 @@ pub const View = struct {
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
         const failure = if (self.session.formFeedback(.user)) |saved| saved.failure else null;
-        (try formField(self.formBox(), "name")).options.label = if (failure) |value| switch (value) {
+        (try formField(self.formBox(), "name")).options.top_label.text = if (failure) |value| switch (value) {
             .required_name => " name (required) ",
             .invalid_name => " name (invalid) ",
             .name_taken => " name (taken) ",
             else => " name ",
         } else " name ";
-        (try formField(self.formBox(), "email")).options.label = if (failure) |value| switch (value) {
+        (try formField(self.formBox(), "email")).options.top_label.text = if (failure) |value| switch (value) {
             .required_email => " email (required) ",
             .email_taken => " email (taken) ",
             else => " email ",
         } else " email ";
-        (try formField(self.formBox(), "password")).options.label = if (failure == .required_password) " password (required) " else " password ";
-        (try formField(self.formBox(), "password_again")).options.label = if (failure == .password_mismatch) " password again (doesn't match) " else " password again ";
+        (try formField(self.formBox(), "password")).options.top_label.text = if (failure == .required_password) " password (required) " else " password ";
+        (try formField(self.formBox(), "password_again")).options.top_label.text = if (failure == .password_mismatch) " password again (doesn't match) " else " password again ";
         // the web form handling finds the inputs by focus id
         const inputs_arena = self.session.arena.allocator();
         for (self.formBox().children.values()) |*child| switch (child.widget) {

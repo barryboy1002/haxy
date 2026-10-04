@@ -357,7 +357,7 @@ pub const View = struct {
     const row_height: usize = 3;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer outer.deinit(allocator);
 
         if (data.no_commits) {
@@ -376,7 +376,7 @@ pub const View = struct {
             try outer.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .search_header = header_view }, .rect = null, .min_size = .{ .width = null, .height = 4 } });
         }
 
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         var shows_file = false;
@@ -384,7 +384,7 @@ pub const View = struct {
         // the directory listing on the left (one focusable row each).
         {
             var list_scroll = blk: {
-                var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert, .stretch = true });
+                var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert, .stretch = true });
                 errdefer list_box.deinit(allocator);
 
                 // link kinds are borrowed by the rows, so they live in the page
@@ -442,11 +442,11 @@ pub const View = struct {
         // populateDetail.
         {
             var detail_outer = blk: {
-                var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
                 errdefer frame.deinit(allocator);
 
                 {
-                    var nav_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+                    var nav_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
                     errdefer nav_box.deinit(allocator);
                     try frame.children.put(allocator, nav_box.getFocus().id, .{ .widget = .{ .box = nav_box }, .rect = null, .min_size = null });
                 }
@@ -456,12 +456,12 @@ pub const View = struct {
                     // (the content box itself is borderless).
                     var scroll_frame = blk2: {
                         var detail_scroll = blk3: {
-                            var detail_inner = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                            var detail_inner = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
                             errdefer detail_inner.deinit(allocator);
                             break :blk3 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = detail_inner }, .{ .direction = .both, .web_native = !session.is_terminal, .fill = true });
                         };
                         errdefer detail_scroll.deinit(allocator);
-                        var sf = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .single, .round_corners = true, .direction = .vert });
+                        var sf = try wgt.Box(ui.Widget).init(allocator, .{ .border = .single, .round_corners = true, .direction = .vert });
                         errdefer sf.deinit(allocator);
                         // the wrapper's selected child is its scroll, so the focus
                         // chain reaches the content box (populateDetail points the
@@ -496,7 +496,7 @@ pub const View = struct {
     }
 
     fn addRow(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, bottom_label: []const u8, link: []const u8) !void {
-        var row = try wgt.TextBox.init(allocator, label, .{ .border_style = .hidden, .round_corners = true, .wrap_kind = .none, .bottom_label = bottom_label });
+        var row = try wgt.TextBox.init(allocator, label, .{ .border = .hidden, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = bottom_label } });
         errdefer row.deinit(allocator);
         row.getFocus().mode = .all;
         if (link.len != 0) row.getFocus().kind = .{ .custom = link };
@@ -509,7 +509,7 @@ pub const View = struct {
     // the box follow it, like addRow.
     fn addContentBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: []const u8) !void {
         _ = self;
-        var tb = try wgt.TextBox.init(allocator, text, .{ .border_style = null, .wrap_kind = .none });
+        var tb = try wgt.TextBox.init(allocator, text, .{ .border = null, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
         if (link.len != 0) tb.getFocus().kind = .{ .custom = link };
@@ -615,7 +615,7 @@ pub const View = struct {
         // the content scroll's border is single normally and double when the
         // content is focused (the content box itself is borderless).
         const has_content = self.detailInner().children.count() > 0;
-        self.detailScrollFrame().options.border_style = if (!has_content) null else if (self.focusOnContent(root_focus)) .double else .single;
+        self.detailScrollFrame().options.border = if (!has_content) null else if (self.focusOnContent(root_focus)) .double else .single;
 
         // cap the list at list_max_width only while the detail pane fits beside
         // it. the box drops the detail pane when the width can't hold both
@@ -731,7 +731,7 @@ pub const View = struct {
         const path = try childDir(page_arena.allocator(), self.data.dir, entry.name);
         const route = self.data.filesRoute(path, target_start) orelse return error.RouteTooLong;
         const link = try page_arena.allocator().print("a:{s}", .{try route.toUrl(page_arena)});
-        var tb = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+        var tb = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
         tb.getFocus().kind = .{ .custom = link };

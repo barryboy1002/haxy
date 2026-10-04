@@ -129,13 +129,13 @@ const back_kind = "back";
 // draw a text box as the selected one of its group: bordered and inverted,
 // while the rest stay borderless
 pub fn markSelected(text_box: *wgt.TextBox, selected: bool) void {
-    text_box.options.border_style = if (selected) .single else .hidden;
+    text_box.options.border = if (selected) .single else .hidden;
     text_box.options.invert = selected;
 }
 
 pub fn addBackButton(allocator: std.mem.Allocator, box: *wgt.Box(Widget), session: *ui.Session) !void {
     if (!session.is_terminal) return;
-    var back = try wgt.TextBox.init(allocator, "←", .{ .border_style = .hidden, .wrap_kind = .none });
+    var back = try wgt.TextBox.init(allocator, "←", .{ .border = .hidden, .wrap_kind = .none });
     errdefer back.deinit(allocator);
     back.getFocus().kind = .{ .custom = back_kind };
     back.getFocus().mode = .mouse;
@@ -246,7 +246,7 @@ pub fn moveInRow(row: *wgt.Box(Widget), root_focus: *Focus, right: bool) bool {
 // a repo tab's placeholder while the repo has no commits, with the remote to
 // push to for a viewer who can
 pub fn initNoCommits(allocator: std.mem.Allocator, session: *ui.Session, handle: ui.RepoHandle) !Center {
-    var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+    var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .vert });
     errdefer box.deinit(allocator);
 
     // built first so the text can center over it
@@ -268,7 +268,7 @@ pub fn initNoCommits(allocator: std.mem.Allocator, session: *ui.Session, handle:
 
     {
         var text_widget: Widget = blk: {
-            var text_box = try wgt.TextBox.init(allocator, "no commits yet", .{ .border_style = null, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, "no commits yet", .{ .border = null, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             break :blk if (remote_maybe != null) .{ .center = try Center.init(allocator, .{ .text_box = text_box }) } else .{ .text_box = text_box };
         };
@@ -355,7 +355,7 @@ pub const FlowBox = struct {
         self.focus.child_id = null;
 
         for (items) |item| {
-            var text_box = try wgt.TextBox.init(allocator, item.text, .{ .border_style = .hidden, .round_corners = true, .wrap_kind = .word, .bottom_label = try aa.dupe(u8, item.bottom_label) });
+            var text_box = try wgt.TextBox.init(allocator, item.text, .{ .border = .hidden, .round_corners = true, .wrap_kind = .word, .bottom_label = .{ .text = try aa.dupe(u8, item.bottom_label) } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
 
@@ -387,7 +387,7 @@ pub const FlowBox = struct {
 
         // build at the slot size so every text box fits a single grid cell
         for (self.text_boxes.items) |*tb| {
-            tb.options.border_style = if (root_focus.grandchild_id == tb.getFocus().id) .double else .hidden;
+            tb.options.border = if (root_focus.grandchild_id == tb.getFocus().id) .double else .hidden;
             try tb.build(allocator, .{
                 .min_size = .{ .width = cell_width, .height = null },
                 .max_size = .{ .width = cell_width, .height = slot_height },
@@ -618,7 +618,7 @@ pub const WordFlow = struct {
         self.focus.child_id = null;
 
         for (items) |item| {
-            var text_box = try wgt.TextBox.init(allocator, item.text, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, item.text, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
 
@@ -1000,7 +1000,7 @@ pub const SearchBox = struct {
     pub const min_size: layout.MaybeSize = .{ .width = 20, .height = 3 };
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, label: []const u8, name: []const u8, text_value: ?[]const u8) !SearchBox {
-        var text_input = try wgt.TextInput.init(allocator, .{ .label = label, .name = name, .round_corners = true, .visible_width = 18, .render_content = session.is_terminal });
+        var text_input = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = label }, .name = name, .round_corners = true, .visible_width = 18, .render_content = session.is_terminal });
         errdefer text_input.deinit(allocator);
         text_input.getFocus().mode = .all;
         if (text_value) |value| try text_input.setContent(allocator, value);
@@ -1012,7 +1012,7 @@ pub const SearchBox = struct {
     }
 
     pub fn build(self: *SearchBox, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
-        self.text_input.options.bottom_label = if (root_focus.grandchild_id == self.getFocus().id) " press enter " else "";
+        self.text_input.options.bottom_label.text = if (root_focus.grandchild_id == self.getFocus().id) " press enter " else "";
         try self.text_input.build(allocator, constraint, root_focus);
         if (!self.session.is_terminal) {
             try self.session.text_inputs.put(self.session.arena.allocator(), self.getFocus().id, &self.text_input);
@@ -1055,10 +1055,10 @@ pub const Radio = struct {
     values: []const []const u8,
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, name: []const u8, values: []const []const u8, initial: []const u8) !Radio {
-        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
         for (values) |value| {
-            var option = try wgt.TextBox.init(allocator, value, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var option = try wgt.TextBox.init(allocator, value, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer option.deinit(allocator);
             option.getFocus().mode = .all;
             option.getFocus().kind = .{ .custom = try session.page_arena.allocator().print(ui.radio_prefix ++ "{s}={s}", .{ name, value }) };
@@ -1082,7 +1082,7 @@ pub const Radio = struct {
         self.clearGrid();
         const selected_id = self.box.getFocus().child_id;
         for (self.box.children.keys(), self.box.children.values()) |id, *child| {
-            child.widget.text_box.options.border_style = if (id == selected_id) .single else .hidden;
+            child.widget.text_box.options.border = if (id == selected_id) .single else .hidden;
         }
         try self.box.build(allocator, constraint, root_focus);
     }
@@ -1127,7 +1127,7 @@ pub const SearchHeader = struct {
         text: ?[]const u8,
         show_input: bool,
     ) !SearchHeader {
-        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         // the search box only appears where an index can serve it.
@@ -1333,7 +1333,7 @@ pub const SectionLabel = struct {
     box: wgt.Box(Widget),
 
     pub fn init(allocator: std.mem.Allocator, content: []const u8) !SectionLabel {
-        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         {
@@ -1343,7 +1343,7 @@ pub const SectionLabel = struct {
         }
 
         {
-            var tb = try wgt.TextBox.init(allocator, content, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var tb = try wgt.TextBox.init(allocator, content, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer tb.deinit(allocator);
             tb.getFocus().mode = .all;
             try box.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
@@ -1391,7 +1391,7 @@ pub const SubmitButton = struct {
     }
 
     pub fn initLabeled(allocator: std.mem.Allocator, label: []const u8) !SubmitButton {
-        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         {
@@ -1401,7 +1401,7 @@ pub const SubmitButton = struct {
         }
 
         {
-            var button = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var button = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer button.deinit(allocator);
             button.getFocus().mode = .all;
             // the renderer distinguishes plain clickables from buttons that
@@ -1875,21 +1875,21 @@ pub const CopyableText = struct {
         const owned_choices = try allocator.dupe(Choice, choices);
         errdefer allocator.free(owned_choices);
 
-        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         if (choices.len > 1) for (choices) |choice| {
-            var selector_box = try wgt.TextBox.init(allocator, choice.selector, .{ .border_style = .hidden, .round_corners = true, .wrap_kind = .none });
+            var selector_box = try wgt.TextBox.init(allocator, choice.selector, .{ .border = .hidden, .round_corners = true, .wrap_kind = .none });
             errdefer selector_box.deinit(allocator);
             selector_box.getFocus().mode = .all;
             try box.children.put(allocator, selector_box.getFocus().id, .{ .widget = .{ .text_box = selector_box }, .rect = null, .min_size = .{ .width = choice.selector.len + 2, .height = 3 } });
         };
 
         var text_input = try wgt.TextInput.init(allocator, .{
-            .border_style = .single,
+            .border = .single,
             .round_corners = true,
-            .label = choices[initial].label,
-            .bottom_label = choices[initial].bottom_label,
+            .top_label = .{ .text = choices[initial].label },
+            .bottom_label = .{ .text = choices[initial].bottom_label },
             .read_only = true,
             .render_content = session.is_terminal,
             .visible_width = null,
@@ -1976,13 +1976,13 @@ pub const CopyableText = struct {
 
             const focused = root_focus.grandchild_id == self.textInput().getFocus().id;
             for (0..self.choices.len) |i| {
-                self.selector(i).options.border_style = if (i == self.selected)
+                self.selector(i).options.border = if (i == self.selected)
                     (if (focused) .double else .single)
                 else
                     .hidden;
             }
         }
-        self.textInput().options.border_style = .single;
+        self.textInput().options.border = .single;
         self.textInput().cursor = 0;
         self.textInput().scroll_offset = 0;
         try self.box.build(allocator, constraint, root_focus);
@@ -2016,8 +2016,8 @@ pub const CopyableText = struct {
         self.selected = selected;
         const choice = self.choices[selected];
         const text_input = self.textInput();
-        text_input.options.label = choice.label;
-        text_input.options.bottom_label = choice.bottom_label;
+        text_input.options.top_label.text = choice.label;
+        text_input.options.bottom_label.text = choice.bottom_label;
         try text_input.setContent(allocator, choice.text);
     }
 

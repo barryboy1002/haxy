@@ -116,7 +116,7 @@ pub const Frame = struct {
     pub fn init(allocator: std.mem.Allocator, text: []const u8, label: []const u8, bottom_label: []const u8, page_arena: *std.heap.ArenaAllocator) !Frame {
         const doc = try md.parseText(page_arena.allocator(), text);
 
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .single, .round_corners = true, .direction = .vert, .label = label, .bottom_label = bottom_label });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = .single, .round_corners = true, .direction = .vert, .top_label = .{ .text = label }, .bottom_label = .{ .text = bottom_label } });
         errdefer box.deinit(allocator);
         var markdown = try View.init(allocator, doc, null, "", page_arena);
         errdefer markdown.deinit(allocator);
@@ -131,7 +131,7 @@ pub const Frame = struct {
 
     pub fn build(self: *Frame, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         const focused = if (root_focus.grandchild_id) |id| self.markdownView().owns(id) else false;
-        self.box.options.border_style = if (focused) .double else .single;
+        self.box.options.border = if (focused) .double else .single;
         try self.box.build(allocator, constraint, root_focus);
     }
 
@@ -200,7 +200,7 @@ const Builder = struct {
 
     // a vertical box of `blocks`, with a blank row between them when `gap`
     fn blocksBox(b: Builder, blocks: []const md.Block, gap: bool) anyerror!wgt.Box(ui.Widget) {
-        var box = try wgt.Box(ui.Widget).init(b.allocator, .{ .border_style = null, .direction = .vert, .gap = @intFromBool(gap) });
+        var box = try wgt.Box(ui.Widget).init(b.allocator, .{ .border = null, .direction = .vert, .gap = @intFromBool(gap) });
         errdefer box.deinit(b.allocator);
         for (blocks) |block| try b.addBlock(&box, block);
         return box;
@@ -216,7 +216,7 @@ const Builder = struct {
             .paragraph => |inlines| try put(allocator, box, .{ .rich_text = try RichText.init(allocator, try b.runSpans(inlines, .{})) }),
             .code => |lines| {
                 const text = try std.mem.join(b.page_arena.allocator(), "\n", lines);
-                try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, text, .{ .border_style = .single, .round_corners = true, .wrap_kind = .char }) });
+                try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, text, .{ .border = .single, .round_corners = true, .wrap_kind = .char }) });
             },
             .quote => |blocks| {
                 const gutter = gutter: {
@@ -227,7 +227,7 @@ const Builder = struct {
                 try put(allocator, box, .{ .markdown_gutter = gutter });
             },
             .list => |list| {
-                var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
                 errdefer list_box.deinit(allocator);
                 // ordered markers are right-aligned to the widest number
                 const number_width = std.fmt.count("{d}", .{list.start + list.items.len -| 1});
@@ -248,10 +248,10 @@ const Builder = struct {
                 try put(allocator, box, .{ .box = list_box });
             },
             // wider than any pane, and clipped to the width
-            .rule => try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, std.mem.asBytes(&@as([512]["─".len]u8, @splat("─".*))), .{ .border_style = null, .wrap_kind = .none, .style = .{ .dim = true } }) }),
+            .rule => try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, std.mem.asBytes(&@as([512]["─".len]u8, @splat("─".*))), .{ .border = null, .wrap_kind = .none, .style = .{ .dim = true } }) }),
             .raw => |lines| {
                 const text = try std.mem.join(b.page_arena.allocator(), "\n", lines);
-                try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, text, .{ .border_style = null, .wrap_kind = .none }) });
+                try put(allocator, box, .{ .text_box = try wgt.TextBox.init(allocator, text, .{ .border = null, .wrap_kind = .none }) });
             },
         }
     }
@@ -362,7 +362,7 @@ pub const Heading = struct {
         var text = try RichText.init(allocator, marked);
         errdefer text.deinit(allocator);
 
-        var font_box = try wgt.TextBox.init(allocator, "", .{ .border_style = null, .wrap_kind = .none });
+        var font_box = try wgt.TextBox.init(allocator, "", .{ .border = null, .wrap_kind = .none });
         errdefer font_box.deinit(allocator);
         var self: Heading = .{ .focus = focus, .text = text, .font_box = font_box };
 

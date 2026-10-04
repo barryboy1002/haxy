@@ -28,11 +28,11 @@ pub const View = struct {
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
         // the form box makes the web renderer post the button to /logout
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
         box.getFocus().kind = .{ .custom = "form:logout" };
 
-        var button = try wgt.TextBox.init(allocator, "logout", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+        var button = try wgt.TextBox.init(allocator, "logout", .{ .border = .single, .round_corners = true, .wrap_kind = .none });
         errdefer button.deinit(allocator);
         button.getFocus().mode = .all;
         // the renderer distinguishes plain clickables from buttons that

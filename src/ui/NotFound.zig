@@ -16,18 +16,18 @@ pub const View = struct {
     const header_index: usize = 0;
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
 
         {
-            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .direction = .horiz });
+            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border = .hidden, .direction = .horiz });
             errdefer header.deinit(allocator);
             try ui.widget.addBackButton(allocator, &header, session);
             try box.children.put(allocator, header.getFocus().id, .{ .widget = .{ .box = header }, .rect = null, .min_size = null });
         }
 
         {
-            var text_box = try wgt.TextBox.init(allocator, "can't find it, homie", .{ .border_style = null, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, "can't find it, homie", .{ .border = null, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             var center = try ui.widget.Center.init(allocator, .{ .text_box = text_box });
             errdefer center.deinit(allocator);

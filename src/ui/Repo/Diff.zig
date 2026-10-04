@@ -31,6 +31,15 @@ pub const Status = enum {
             .changed => " changed ",
         };
     }
+
+    fn border(self: Status) wgt.Border {
+        const color: Grid.Color.Ansi = switch (self) {
+            .added => .green,
+            .removed => .red,
+            .changed => return .single,
+        };
+        return .{ .kind = .single, .style = .{ .fg = .{ .ansi = color } } };
+    }
 };
 pub const Window = struct {
     hunks: []const Hunk = &.{},
@@ -252,7 +261,7 @@ fn editLineNum(edit: df.Edit) usize {
 fn appendWindow(data: @This(), allocator: std.mem.Allocator, session: *ui.Session, box: *wgt.Box(ui.Widget)) !void {
     if (data.path.len != 0) {
         const status = if (data.window.hunks.len > 0) data.window.hunks[0].status else .changed;
-        try addSpans(allocator, box, &.{.{ .text = data.path }}, try data.route.fileLink(session.page_arena, data.path, status), status.label());
+        try addSpans(allocator, box, &.{.{ .text = data.path }}, try data.route.fileLink(session.page_arena, data.path, status), status.label(), status.border());
         try addLink(allocator, box, "← all files", try data.route.link(session.page_arena, 0, ""));
     }
     if (data.window.start > 0) try addLink(allocator, box, "← previous", try data.route.link(session.page_arena, data.window.start -| page_size, data.path));
@@ -260,7 +269,7 @@ fn appendWindow(data: @This(), allocator: std.mem.Allocator, session: *ui.Sessio
         if (data.path.len == 0) if (hunk.path) |path| {
             // a changed file's path narrows the diff to it, the others open the file
             const link = if (hunk.status == .changed) try data.route.link(session.page_arena, 0, path) else try data.route.fileLink(session.page_arena, path, hunk.status);
-            try addSpans(allocator, box, &.{.{ .text = path }}, link, hunk.status.label());
+            try addSpans(allocator, box, &.{.{ .text = path }}, link, hunk.status.label(), hunk.status.border());
         };
         if (hunk.text.len != 0) try addHunk(allocator, box, hunk);
     }
@@ -268,7 +277,7 @@ fn appendWindow(data: @This(), allocator: std.mem.Allocator, session: *ui.Sessio
 }
 
 fn addLink(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: []const u8) !void {
-    try addSpans(allocator, box, &.{.{ .text = text }}, link, "");
+    try addSpans(allocator, box, &.{.{ .text = text }}, link, "", .single);
 }
 
 // one span per line, inserted lines green and deleted lines red. the text
@@ -288,11 +297,11 @@ fn addHunk(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), hunk: Hunk) !
         try spans.append(allocator, .{ .text = hunk.text[start..end], .style = style });
         start = end;
     }
-    try addSpans(allocator, box, spans.items, "", "");
+    try addSpans(allocator, box, spans.items, "", "", .single);
 }
 
-fn addSpans(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), spans: []const wgt.Span, link: []const u8, label: []const u8) !void {
-    var tb = try wgt.TextBox.initSpans(allocator, spans, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .label = label });
+fn addSpans(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), spans: []const wgt.Span, link: []const u8, label: []const u8, border: wgt.Border) !void {
+    var tb = try wgt.TextBox.initSpans(allocator, spans, .{ .border = border, .round_corners = true, .wrap_kind = .none, .top_label = .{ .text = label } });
     errdefer tb.deinit(allocator);
     tb.getFocus().mode = .all;
     if (link.len != 0) tb.getFocus().kind = .{ .custom = link };
@@ -304,7 +313,7 @@ pub const View = struct {
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var view: View = blk: {
-            var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+            var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
             errdefer box.deinit(allocator);
             break :blk .{ .scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = box }, .{ .direction = .both, .web_native = !session.is_terminal, .fill = true }) };
         };

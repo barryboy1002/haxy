@@ -2731,7 +2731,7 @@ pub fn authorBox(allocator: std.mem.Allocator, page_arena: *std.heap.ArenaAlloca
         .unknown => "",
         .email, .user_name => |t| t,
     };
-    var tb = try wgt.TextBox.init(allocator, text, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .label = " author " });
+    var tb = try wgt.TextBox.init(allocator, text, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .top_label = .{ .text = " author " } });
     errdefer tb.deinit(allocator);
     tb.getFocus().mode = .all;
     switch (author) {
@@ -2927,7 +2927,7 @@ pub fn initRoot(allocator: std.mem.Allocator, page: *const Page, session: *Sessi
     // on the TUI/SSH, the page sits above a one-row footer showing its web
     // url, when there's a web UI to point at
     var root = if (session.is_terminal) blk: {
-        var box = try wgt.Box(Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
         const bg_id = bg_blk: {
             var background = try widget.AnsiBackground.init(allocator, page_widget, session);

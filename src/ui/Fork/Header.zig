@@ -45,14 +45,14 @@ pub const View = struct {
     session: *ui.Session,
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, commit_count: ?u64, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .round_corners = true, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = .hidden, .round_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
-        var title_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var title_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         var title_box_owned = false;
         errdefer if (!title_box_owned) title_box.deinit(allocator);
 
-        var tabs_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var tabs_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         var tabs_box_owned = false;
         errdefer if (!tabs_box_owned) tabs_box.deinit(allocator);
 
@@ -70,7 +70,7 @@ pub const View = struct {
         {
             var text_buf: [evt.User.name_max_len + 1]u8 = undefined;
             const text = try std.fmt.bufPrint(&text_buf, "{s}/", .{data.forker_name});
-            var forker = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
+            var forker = try wgt.TextBox.init(allocator, text, .{ .border = .hidden, .wrap_kind = .none });
             errdefer forker.deinit(allocator);
             forker.getFocus().mode = .all;
             forker.getFocus().kind = .{ .custom = try aa.print("a:/{s}", .{data.forker_name}) };
@@ -113,7 +113,7 @@ pub const View = struct {
 
         for (routes, tags, labels, bottom_labels) |route, tag, label, bottom_label| {
             const selected = current_tag == tag;
-            var tab = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = bottom_label });
+            var tab = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = bottom_label } });
             errdefer tab.deinit(allocator);
             tab.getFocus().mode = .all;
             tab.getFocus().kind = .{ .custom = try ui.inPageTabLink(session, route, selected) };
@@ -142,7 +142,7 @@ pub const View = struct {
 
         // new repo tab with a login, new user tab without one outside local mode
         if (session.data.user_id != null) {
-            var new_repo = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
+            var new_repo = try wgt.TextBox.init(allocator, new_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = new_repo_tab_bottom_label } });
             errdefer new_repo.deinit(allocator);
             new_repo.getFocus().mode = .all;
             new_repo.getFocus().kind = .{ .custom = new_repo_link };
@@ -150,7 +150,7 @@ pub const View = struct {
             if (current_tag == .fork_repo_new) selected_tab = new_repo.getFocus().id;
             try tabs_box.children.put(allocator, new_repo.getFocus().id, .{ .widget = .{ .text_box = new_repo }, .rect = null, .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null } });
         } else if (session.data.host_kind == .server) {
-            var new_user = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
+            var new_user = try wgt.TextBox.init(allocator, new_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = new_user_tab_bottom_label } });
             errdefer new_user.deinit(allocator);
             new_user.getFocus().mode = .all;
             new_user.getFocus().kind = .{ .custom = new_user_link };
@@ -161,7 +161,7 @@ pub const View = struct {
 
         if (session.data.host_kind == .server) {
             const label = ui.UserLogout.tabLabel(session);
-            var user_tab = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var user_tab = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer user_tab.deinit(allocator);
             user_tab.getFocus().mode = .all;
             user_tab.getFocus().kind = .{ .custom = user_link };
@@ -171,7 +171,7 @@ pub const View = struct {
         }
 
         if (session.is_terminal) {
-            var quit = try wgt.TextBox.init(allocator, ui.Quit.tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var quit = try wgt.TextBox.init(allocator, ui.Quit.tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer quit.deinit(allocator);
             quit.getFocus().mode = .all;
             quit.getFocus().kind = .{ .custom = ui.Quit.tab_kind };

@@ -154,12 +154,12 @@ pub const View = struct {
     const right_col = 1;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer outer.deinit(allocator);
 
         // both backends list refs in sorted order, so a prefix is just a seek
         {
-            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
             errdefer header.deinit(allocator);
             {
                 var search_box = try ui.widget.SearchBox.init(allocator, session, " search ", "search", data.search);
@@ -178,7 +178,7 @@ pub const View = struct {
         }
 
         {
-            var split = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            var split = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
             errdefer split.deinit(allocator);
 
             const search = data.search orelse "";
@@ -209,14 +209,14 @@ pub const View = struct {
         kind: ui.RoutablePage.RefKind,
         data: *const Column,
     ) !void {
-        var column = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var column = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer column.deinit(allocator);
 
         // a fixed, non-focusable header in the SubTitle font, nudged off the
         // left edge by a one-column space. it declares its height (2 rows plus
         // a blank one beneath) as a min so the (fill) scroll reserves room for it.
         {
-            var header_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            var header_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
             errdefer header_box.deinit(allocator);
             {
                 var space = try wgt.Text.init(allocator, " ");

@@ -351,11 +351,11 @@ fn trimIncompleteCodepoint(bytes: []const u8) []const u8 {
 // marks a message the page only shows part of ("" when it's whole).
 fn messageBox(allocator: std.mem.Allocator, message: []const u8, bottom_label: []const u8) !wgt.TextBox {
     var tb = try wgt.TextBox.init(allocator, message, .{
-        .border_style = .single,
+        .border = .single,
         .round_corners = true,
         .wrap_kind = .word,
-        .label = " message ",
-        .bottom_label = bottom_label,
+        .top_label = .{ .text = " message " },
+        .bottom_label = .{ .text = bottom_label },
         .detect_links = true,
     });
     tb.getFocus().mode = .all;
@@ -387,7 +387,7 @@ pub const View = struct {
     const detail_min_width: usize = 40;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer outer.deinit(allocator);
 
         if (data.no_commits) {
@@ -406,13 +406,13 @@ pub const View = struct {
             try outer.children.put(allocator, header_view.getFocus().id, .{ .widget = .{ .search_header = header_view }, .rect = null, .min_size = .{ .width = null, .height = 4 } });
         }
 
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
 
         // the commit list (one focusable row each), plus a "next" link
         {
             var list_scroll = blk: {
-                var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert, .stretch = true });
+                var list_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert, .stretch = true });
                 errdefer list_box.deinit(allocator);
                 for (data.commits, 0..) |commit, index| {
                     // an in-page "ai:" anchor so a commit row is clickable with
@@ -434,12 +434,12 @@ pub const View = struct {
         {
             var detail_outer = blk: {
                 var detail_scroll = blk2: {
-                    var rows = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                    var rows = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
                     errdefer rows.deinit(allocator);
                     break :blk2 try wgt.Scroll(ui.Widget).init(allocator, .{ .box = rows }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
                 };
                 errdefer detail_scroll.deinit(allocator);
-                var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .direction = .vert });
+                var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border = .hidden, .direction = .vert });
                 errdefer frame.deinit(allocator);
                 // the frame's selected child is its scroll, so the focus chain
                 // reaches a row (populateDetail points the scroll's inner box at
@@ -470,7 +470,7 @@ pub const View = struct {
     }
 
     fn addRow(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, link: []const u8, bottom_label: []const u8) !void {
-        var row = try wgt.TextBox.init(allocator, label, .{ .border_style = .hidden, .round_corners = true, .wrap_kind = .word, .bottom_label = bottom_label });
+        var row = try wgt.TextBox.init(allocator, label, .{ .border = .hidden, .round_corners = true, .wrap_kind = .word, .bottom_label = .{ .text = bottom_label } });
         errdefer row.deinit(allocator);
         row.getFocus().mode = .all;
         if (link.len != 0) row.getFocus().kind = .{ .custom = link };
@@ -479,7 +479,7 @@ pub const View = struct {
 
     // a focusable row following the "a:" `link`.
     fn addLink(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, link: []const u8) !void {
-        var tb = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+        var tb = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
         tb.getFocus().kind = .{ .custom = link };
@@ -627,7 +627,7 @@ pub const View = struct {
         } else {
             const pa = self.session.page_arena;
             {
-                var row = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+                var row = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
                 errdefer row.deinit(allocator);
                 const diff_route = self.data.handle.location.commitDiffRoute(commit.oid, commit.parent_oid) orelse return error.RouteTooLong;
                 try addLink(allocator, &row, "view diff", try pa.allocator().print("a:{s}", .{try diff_route.toUrl(pa)}));
@@ -639,7 +639,7 @@ pub const View = struct {
                 try addLink(allocator, inner, "view commits from this merge", try pa.allocator().print("a:{s}", .{try route.toUrl(pa)}));
             };
             if (commit.author != .unknown or commit.committer != .unknown) {
-                var row = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+                var row = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
                 errdefer row.deinit(allocator);
                 if (commit.author != .unknown) {
                     var tb = try ui.authorBox(allocator, pa, commit.author);
@@ -649,14 +649,14 @@ pub const View = struct {
                 if (commit.committer != .unknown) {
                     var tb = try ui.authorBox(allocator, pa, commit.committer);
                     errdefer tb.deinit(allocator);
-                    tb.options.label = " committer ";
+                    tb.options.top_label.text = " committer ";
                     try row.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
                 }
                 row.getFocus().child_id = row.children.keys()[0];
                 try inner.children.put(allocator, row.getFocus().id, .{ .widget = .{ .box = row }, .rect = null, .min_size = null });
             }
             {
-                var tb = try wgt.TextBox.init(allocator, commit.timestamp, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .label = " timestamp " });
+                var tb = try wgt.TextBox.init(allocator, commit.timestamp, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .top_label = .{ .text = " timestamp " } });
                 errdefer tb.deinit(allocator);
                 tb.getFocus().mode = .all;
                 try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
@@ -672,7 +672,7 @@ pub const View = struct {
                     if (bytes_added) "added" else "removed", bytes, stats.files_added + stats.files_changed,
                 });
                 if (stats.files_removed != 0) try text.writer.print("\nfiles removed: {d}", .{stats.files_removed});
-                var tb = try wgt.TextBox.init(allocator, text.written(), .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .label = " stats " });
+                var tb = try wgt.TextBox.init(allocator, text.written(), .{ .border = .single, .round_corners = true, .wrap_kind = .none, .top_label = .{ .text = " stats " } });
                 errdefer tb.deinit(allocator);
                 tb.getFocus().mode = .all;
                 try inner.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });

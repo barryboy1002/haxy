@@ -47,7 +47,7 @@ pub const View = struct {
             break :blk try wgt.Scroll(ui.Widget).init(allocator, .{ .markdown = markdown }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true });
         };
         errdefer scroll.deinit(allocator);
-        var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .single, .round_corners = true, .direction = .vert });
+        var frame = try wgt.Box(ui.Widget).init(allocator, .{ .border = .single, .round_corners = true, .direction = .vert });
         errdefer frame.deinit(allocator);
         frame.getFocus().child_id = scroll.getFocus().id;
         try frame.children.put(allocator, scroll.getFocus().id, .{ .widget = .{ .scroll = scroll }, .rect = null, .min_size = null, .flex = .grow });
@@ -60,7 +60,7 @@ pub const View = struct {
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         const focused = if (root_focus.grandchild_id) |id| self.markdownView().owns(id) else false;
-        self.frame.options.border_style = if (focused) .double else .single;
+        self.frame.options.border = if (focused) .double else .single;
         try self.frame.build(allocator, constraint, root_focus);
     }
 

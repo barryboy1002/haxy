@@ -46,9 +46,9 @@ test "web controls omit hidden inputs but retain off-screen inputs" {
     defer arena.deinit();
     const allocator = arena.allocator();
     var session = ui.Session{ .arena = &arena, .page_arena = &arena, .is_terminal = false };
-    var root = ui.Widget{ .box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert }) };
+    var root = ui.Widget{ .box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert }) };
     defer root.deinit(allocator);
-    var scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert }) }, .{ .web_native = true });
+    var scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert }) }, .{ .web_native = true });
     for ([_][]const u8{ "visible", "hidden", "offscreen" }, 0..) |name, i| {
         var input = try wgt.TextInput.init(allocator, .{ .name = name, .render_content = false });
         input.getFocus().mode = .all;

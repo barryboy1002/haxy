@@ -152,11 +152,11 @@ pub const Item = struct {
     const gap_index: usize = 2;
 
     pub fn init(allocator: std.mem.Allocator, session: *ui.Session, identity: []const u8, thread_kind: evt.EventKind, can_reply: bool, entry: CommentWithId) !Item {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
 
         {
-            var bar = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            var bar = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
             errdefer bar.deinit(allocator);
 
             // the author sits on the left and the buttons on the right
@@ -186,10 +186,10 @@ pub const Item = struct {
                     .email, .user_name => |text| text,
                 } else "";
                 var parent = try wgt.TextBox.init(allocator, parent_text, .{
-                    .border_style = .single,
+                    .border = .single,
                     .round_corners = true,
                     .wrap_kind = .none,
-                    .label = " replying to ",
+                    .top_label = .{ .text = " replying to " },
                 });
                 errdefer parent.deinit(allocator);
                 parent.getFocus().mode = .all;
@@ -304,7 +304,7 @@ pub fn appendComment(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), ses
 pub fn appendCount(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), count: usize, singular: []const u8, plural: []const u8) !void {
     var text_buf: [64]u8 = undefined;
     const text = try std.fmt.bufPrint(&text_buf, "{d} {s}", .{ count, if (count == 1) singular else plural });
-    var count_box = try wgt.TextBox.init(allocator, text, .{ .border_style = .hidden, .wrap_kind = .none });
+    var count_box = try wgt.TextBox.init(allocator, text, .{ .border = .hidden, .wrap_kind = .none });
     errdefer count_box.deinit(allocator);
     try box.children.put(allocator, count_box.getFocus().id, .{ .widget = .{ .text_box = count_box }, .rect = null, .min_size = null });
 }
@@ -313,7 +313,7 @@ pub fn appendWindowNav(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), s
     const has_prev = window.start > 0;
     const has_more = window.start < window.count and window.count - window.start > page_size;
     if (!has_prev and !has_more) return;
-    var row = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+    var row = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
     errdefer row.deinit(allocator);
     if (has_prev) {
         const start = window.start -| page_size;
@@ -353,7 +353,7 @@ fn removeRoute(kind: evt.EventKind, identity: []const u8, thread_id: []const u8,
 }
 
 pub fn linkBox(allocator: std.mem.Allocator, session: *ui.Session, text: []const u8, route: ui.RoutablePage) !wgt.TextBox {
-    var box = try wgt.TextBox.init(allocator, text, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+    var box = try wgt.TextBox.init(allocator, text, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
     errdefer box.deinit(allocator);
     box.getFocus().mode = .all;
     box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)}) };

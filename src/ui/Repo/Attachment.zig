@@ -51,14 +51,14 @@ pub fn appendRows(
 ) !void {
     const pa = session.page_arena.allocator();
     for (attachments) |entry| {
-        var row = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var row = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer row.deinit(allocator);
 
         var tb = try wgt.TextBox.init(allocator, entry.name, .{
-            .border_style = .single,
+            .border = .single,
             .round_corners = true,
             .wrap_kind = .none,
-            .label = " attachment ",
+            .top_label = .{ .text = " attachment " },
         });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
@@ -66,7 +66,7 @@ pub fn appendRows(
         try row.children.put(allocator, tb.getFocus().id, .{ .widget = .{ .text_box = tb }, .rect = null, .min_size = null });
 
         row.getFocus().kind = .{ .custom = try pa.print("form:{s}/attachment:{s}/remove", .{ parent_url, &entry.id }) };
-        var remove = try wgt.TextBox.init(allocator, "✕", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+        var remove = try wgt.TextBox.init(allocator, "✕", .{ .border = .single, .round_corners = true, .wrap_kind = .none });
         errdefer remove.deinit(allocator);
         remove.getFocus().mode = .all;
         remove.getFocus().kind = .{ .custom = "submit" };

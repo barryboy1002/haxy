@@ -35,7 +35,7 @@ pub const View = struct {
     const hash_index: usize = 3;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
         const route = ui.RoutablePage.repoRepoRoute(data.identity) orelse return error.RouteTooLong;
         box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("form:{s}", .{try route.toUrl(session.page_arena)}) };
@@ -43,7 +43,7 @@ pub const View = struct {
         const saved_fields = if (session.formFeedback(.repo_settings)) |saved| saved.fields else null;
 
         {
-            var name = try wgt.TextInput.init(allocator, .{ .label = " name ", .name = "name", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
+            var name = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " name " }, .name = "name", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer name.deinit(allocator);
             name.getFocus().mode = .all;
             try name.setContent(allocator, if (saved_fields) |saved| saved.name else data.name);
@@ -54,7 +54,7 @@ pub const View = struct {
         }
 
         {
-            var description = try wgt.TextInput.init(allocator, .{ .label = " description ", .name = "description", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
+            var description = try wgt.TextInput.init(allocator, .{ .top_label = .{ .text = " description " }, .name = "description", .visible_width = 30, .round_corners = true, .render_content = session.is_terminal });
             errdefer description.deinit(allocator);
             description.getFocus().mode = .all;
             try description.setContent(allocator, if (saved_fields) |saved| saved.description else data.description);
@@ -71,7 +71,7 @@ pub const View = struct {
         }
 
         {
-            var hash_box = try wgt.TextBox.init(allocator, @tagName(data.hash_kind), .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .label = " hash " });
+            var hash_box = try wgt.TextBox.init(allocator, @tagName(data.hash_kind), .{ .border = .single, .round_corners = true, .wrap_kind = .none, .top_label = .{ .text = " hash " } });
             errdefer hash_box.deinit(allocator);
             try box.children.put(allocator, hash_box.getFocus().id, .{ .widget = .{ .text_box = hash_box }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
@@ -92,7 +92,7 @@ pub const View = struct {
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
         const failure = if (self.session.formFeedback(.repo_settings)) |saved| saved.failure else null;
-        (try formField(self.formBox(), "name")).options.label = if (failure) |value| switch (value) {
+        (try formField(self.formBox(), "name")).options.top_label.text = if (failure) |value| switch (value) {
             .required_name => " name (required) ",
             .invalid_name => " name (invalid) ",
             .name_taken => " name (taken) ",

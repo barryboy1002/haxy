@@ -396,12 +396,12 @@ pub const View = struct {
     const fixed_rows = 2;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var outer = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer outer.deinit(allocator);
 
         // the sub header carries the tab's only action
         {
-            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
             errdefer header.deinit(allocator);
             const route = ui.RoutablePage.repoUndoClearRoute(data.identity) orelse return error.RouteTooLong;
             const link = try session.page_arena.allocator().print("a:{s}", .{try route.toUrl(session.page_arena)});
@@ -419,16 +419,16 @@ pub const View = struct {
             return .{ .box = outer, .data = data, .session = session };
         }
 
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         errdefer box.deinit(allocator);
         {
             var scroll = blk: {
-                var rows = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert, .stretch = true });
+                var rows = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert, .stretch = true });
                 errdefer rows.deinit(allocator);
                 for (data.items) |item| {
                     try addText(allocator, &rows, item.action, item.link, .hidden);
                     // a transaction a later undo discarded says so on its border
-                    if (item.undone) rows.children.values()[rows.children.count() - 1].widget.text_box.options.bottom_label = "(undone)";
+                    if (item.undone) rows.children.values()[rows.children.count() - 1].widget.text_box.options.bottom_label.text = "(undone)";
                 }
                 if (data.next) |next| {
                     const route = ui.RoutablePage.repoUndoRoute(data.identity, next) orelse return error.RouteTooLong;
@@ -443,7 +443,7 @@ pub const View = struct {
         }
         {
             var scroll = blk: {
-                var details = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+                var details = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
                 errdefer details.deinit(allocator);
                 if (data.items.len > 0) {
                     try addText(allocator, &details, "", null, .single);
@@ -464,7 +464,7 @@ pub const View = struct {
 
     // the same shape the thread views use to confirm a removal
     fn initClearForm(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !ui.widget.Center {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
         const route = ui.RoutablePage.repoUndoClearRoute(data.identity) orelse return error.RouteTooLong;
         box.getFocus().kind = .{ .custom = try session.page_arena.allocator().print("form:{s}", .{try route.toUrl(session.page_arena)}) };
@@ -473,7 +473,7 @@ pub const View = struct {
         errdefer prompt.deinit(allocator);
         try box.children.put(allocator, prompt.getFocus().id, .{ .widget = .{ .text = prompt }, .rect = null, .min_size = null });
 
-        var button = try wgt.TextBox.init(allocator, "clear undo history", .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+        var button = try wgt.TextBox.init(allocator, "clear undo history", .{ .border = .single, .round_corners = true, .wrap_kind = .none });
         errdefer button.deinit(allocator);
         button.getFocus().mode = .all;
         button.getFocus().kind = if (data.handle.canUndo()) .{ .custom = "submit" } else .text_box;
@@ -483,8 +483,8 @@ pub const View = struct {
         return ui.widget.Center.init(allocator, .{ .box = box });
     }
 
-    fn addText(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: ?[]const u8, border: wgt.BorderStyle) !void {
-        var row = try wgt.TextBox.init(allocator, text, .{ .border_style = border, .round_corners = true, .wrap_kind = .word });
+    fn addText(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: ?[]const u8, border: wgt.Border) !void {
+        var row = try wgt.TextBox.init(allocator, text, .{ .border = border, .round_corners = true, .wrap_kind = .word });
         errdefer row.deinit(allocator);
         row.getFocus().mode = .all;
         if (link) |value| row.getFocus().kind = .{ .custom = value };
@@ -494,7 +494,7 @@ pub const View = struct {
     // a labeled row below the timestamp, added as the selected action needs it
     fn addLabeled(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), label: []const u8, text: []const u8, link: ?[]const u8) !void {
         try addText(allocator, box, text, link, .single);
-        box.children.values()[box.children.count() - 1].widget.text_box.options.label = label;
+        box.children.values()[box.children.count() - 1].widget.text_box.options.top_label.text = label;
     }
 
     // enter counts only on the focused button; a click counts anywhere on it

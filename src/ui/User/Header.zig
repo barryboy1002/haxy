@@ -37,14 +37,14 @@ pub const View = struct {
     session: *ui.Session,
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = .hidden, .round_corners = true, .direction = .horiz });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = .hidden, .round_corners = true, .direction = .horiz });
         errdefer box.deinit(allocator);
 
-        var title_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var title_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         var title_box_owned = false;
         errdefer if (!title_box_owned) title_box.deinit(allocator);
 
-        var tabs_box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+        var tabs_box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
         var tabs_box_owned = false;
         errdefer if (!tabs_box_owned) tabs_box.deinit(allocator);
 
@@ -119,7 +119,7 @@ pub const View = struct {
 
         // repos tab
         {
-            var text_box = try wgt.TextBox.init(allocator, repos_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, repos_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = repos_link };
@@ -134,7 +134,7 @@ pub const View = struct {
 
         // forks tab
         {
-            var text_box = try wgt.TextBox.init(allocator, forks_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, forks_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = forks_link };
@@ -161,7 +161,7 @@ pub const View = struct {
 
         // new repo tab with a login, new user tab without one
         if (session.data.user_id != null) {
-            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_repo_tab_bottom_label });
+            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = new_repo_tab_bottom_label } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_repo_link };
@@ -173,7 +173,7 @@ pub const View = struct {
                 .min_size = .{ .width = @max(new_tab_label.len, new_repo_tab_bottom_label.len) + 2, .height = null },
             });
         } else {
-            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = new_user_tab_bottom_label });
+            var text_box = try wgt.TextBox.init(allocator, new_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = new_user_tab_bottom_label } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = new_user_link };
@@ -189,7 +189,7 @@ pub const View = struct {
         // user tab
         {
             const label = ui.UserLogout.tabLabel(session);
-            var text_box = try wgt.TextBox.init(allocator, label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = user_link };
@@ -204,7 +204,7 @@ pub const View = struct {
 
         // quit tab
         if (session.is_terminal) {
-            var text_box = try wgt.TextBox.init(allocator, ui.Quit.tab_label, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, ui.Quit.tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = ui.Quit.tab_kind };

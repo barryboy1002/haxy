@@ -180,7 +180,7 @@ pub const View = struct {
     const stack_index: usize = 1;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .round_corners = true, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .round_corners = true, .direction = .vert });
         errdefer box.deinit(allocator);
 
         // build the header first so we can grab the repos-tab id for the user
@@ -359,11 +359,11 @@ pub const ReposView = struct {
     const list_index = 1;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !ReposView {
-        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .vert });
+        var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
         errdefer box.deinit(allocator);
 
         {
-            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border_style = null, .direction = .horiz });
+            var header = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .horiz });
             errdefer header.deinit(allocator);
             {
                 var search_box = try ui.widget.SearchBox.init(allocator, session, " search ", "search", data.repos_search);
