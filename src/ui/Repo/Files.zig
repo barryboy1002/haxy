@@ -507,9 +507,9 @@ pub const View = struct {
     // it's borderless — the border lives on the surrounding scroll frame, which
     // doubles when this content is focused. a non-empty `link` makes activating
     // the box follow it, like addRow.
-    fn addContentBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: []const u8) !void {
+    fn addContentBox(self: *View, allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), spans: []const wgt.Span, link: []const u8) !void {
         _ = self;
-        var tb = try wgt.TextBox.init(allocator, text, .{ .border = null, .wrap_kind = .none });
+        var tb = try wgt.TextBox.initSpans(allocator, spans, .{ .border = null, .wrap_kind = .none });
         errdefer tb.deinit(allocator);
         tb.getFocus().mode = .all;
         if (link.len != 0) tb.getFocus().kind = .{ .custom = link };
@@ -677,6 +677,7 @@ pub const View = struct {
         var markdown = false;
         if (self.selectedEntry()) |entry| {
             if (!entry.is_dir) {
+                const path = try childDir(self.session.page_arena.allocator(), self.data.dir, entry.name);
                 // the window links sit above the scroll, so they stay put
                 // while the content scrolls.
                 if (entry.window_start > 0) try self.addNavLink(allocator, nav_box, "scroll to top", entry, 0);
@@ -684,22 +685,19 @@ pub const View = struct {
                 if (!entry.loaded) {
                     // the placeholder carries the file's "a:" link, so enter
                     // (or a click) here loads the file like on its list row.
-                    const path = try childDir(self.session.page_arena.allocator(), self.data.dir, entry.name);
                     const link = try fileLink(self.session.page_arena, self.data, path, false, 0);
-                    try self.addContentBox(allocator, inner, "(press enter to load this file)", link);
+                    try self.addContentBox(allocator, inner, &.{.{ .text = "(press enter to load this file)" }}, link);
                 } else if (entry.is_binary) {
-                    try self.addContentBox(allocator, inner, "(binary file)", "");
+                    try self.addContentBox(allocator, inner, &.{.{ .text = "(binary file)" }}, "");
                 } else if (isMarkdown(entry.name) and entry.window_start == 0 and !entry.has_more and entry.lines.len <= max_markdown_lines) {
                     const page_arena = self.session.page_arena;
                     const doc = try md.parse(page_arena.allocator(), entry.lines);
-                    const path = try childDir(page_arena.allocator(), self.data.dir, entry.name);
                     var view = try Markdown.View.init(allocator, doc, self.data, path, page_arena);
                     errdefer view.deinit(allocator);
                     try inner.children.put(allocator, view.getFocus().id, .{ .widget = .{ .markdown = view }, .rect = null, .min_size = null });
                     markdown = true;
                 } else {
-                    const text = try numberedContent(self.session.page_arena.allocator(), entry.lines, entry.window_start);
-                    try self.addContentBox(allocator, inner, text, "");
+                    try self.addContentBox(allocator, inner, try numberedContent(self.session.page_arena, self.data, path, entry.lines, entry.window_start), "");
                 }
             }
         }
@@ -959,26 +957,22 @@ pub const View = struct {
     }
 };
 
-// join `lines` into one string, each prefixed with its 1-based file line number
+// `lines` as spans, each prefixed with its 1-based file line number
 // (right-aligned in a column wide enough for the last number, then a space),
-// like the diffs view. `start` is the window's 0-based first line, so numbers
-// continue across paginated windows.
-fn numberedContent(arena: std.mem.Allocator, lines: []const []const u8, start: usize) ![]const u8 {
-    if (lines.len == 0) return "";
+// like the diffs view. each number links to the window starting at its line.
+// `start` is the window's 0-based first line, so numbers continue across
+// paginated windows.
+fn numberedContent(page_arena: *std.heap.ArenaAllocator, data: *const Self, path: []const u8, lines: []const []const u8, start: usize) ![]const wgt.Span {
+    const arena = page_arena.allocator();
     const width = std.fmt.count("{d}", .{start + lines.len});
-    const indent = try arena.alloc(u8, width);
-    @memset(indent, ' ');
-
-    var out: std.ArrayList(u8) = .empty;
+    var spans: std.ArrayList(wgt.Span) = .empty;
     for (lines, 0..) |line, i| {
-        if (i != 0) try out.append(arena, '\n');
-        const num_str = try arena.print("{d}", .{start + i + 1});
-        try out.appendSlice(arena, indent[0 .. width - num_str.len]);
-        try out.appendSlice(arena, num_str);
-        try out.append(arena, ' ');
-        try out.appendSlice(arena, line);
+        const number = start + i + 1;
+        const route = data.filesRoute(path, number) orelse return error.RouteTooLong;
+        try spans.append(arena, .{ .text = try arena.print("{d: >[1]}", .{ number, width }), .link = try route.toUrl(page_arena) });
+        try spans.append(arena, .{ .text = try arena.print(" {s}{s}", .{ line, if (i + 1 < lines.len) "\n" else "" }) });
     }
-    return out.toOwnedSlice(arena);
+    return spans.toOwnedSlice(arena);
 }
 
 // the index of the "README"/"README.md" file entry (case-insensitive), or null

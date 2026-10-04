@@ -2212,7 +2212,11 @@ fn renderPanel(allocator: std.mem.Allocator, output: *std.ArrayList(u8), focus: 
             if (!sameLink(link, open_link)) {
                 if (open_link != null) try output.appendSlice(allocator, "</a>");
                 if (link) |url| {
-                    try output.appendSlice(allocator, "<a class=\"cell-link\" tabindex=\"-1\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+                    // a page path opens in this tab, any other url in a new one
+                    try output.appendSlice(allocator, if (url[0] == '/')
+                        "<a class=\"cell-link\" tabindex=\"-1\" href=\""
+                    else
+                        "<a class=\"cell-link\" tabindex=\"-1\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
                     try appendEscapedHtml(allocator, output, url);
                     try output.appendSlice(allocator, "\">");
                 }
@@ -2508,9 +2512,11 @@ fn cssColor(buf: []u8, i: usize, prop: []const u8, color: ?Grid.Color, fallback:
     return i + s.len;
 }
 
-// a cell's link as an href, when it's a web or mail url
+// a cell's link as an href, when it's a page path or a web or mail url
 fn webLink(link: ?[]const u8) ?[]const u8 {
     const url = link orelse return null;
+    // a page path, not a protocol-relative url
+    if (url.len > 1 and url[0] == '/' and url[1] != '/') return url;
     for ([_][]const u8{ "http://", "https://", "mailto:" }) |scheme| {
         if (std.ascii.startsWithIgnoreCase(url, scheme)) return url;
     }

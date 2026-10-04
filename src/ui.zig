@@ -2554,6 +2554,7 @@ pub fn inputKey(allocator: std.mem.Allocator, root: *Widget, key: Key, session: 
         },
         .mouse => |mouse| {
             if (mouse.action == .press and mouse.action.press == .left) {
+                if (cellPageLink(root, mouse.x, mouse.y, session.data)) |route| return session.navigate(route);
                 if (root_focus.hitTest(mouse.x, mouse.y)) |hit| {
                     const focus_id = hit.id;
                     if (hit.kind == .background) {
@@ -2658,6 +2659,15 @@ pub fn crossPageLink(root_focus: *Focus, focus_id: usize, data: Session.Data) ?R
     // links stay in-page.
     if (route.parent() != current.parent() or RoutablePage.repoPageChanged(route, current) or RoutablePage.forkPageChanged(route, current) or RoutablePage.homePageChanged(route, current) or RoutablePage.userPageChanged(route, current)) return route;
     return null;
+}
+
+// the page the clicked cell links to, from a link inside a text box's content
+fn cellPageLink(root: *Widget, x: usize, y: usize, data: Session.Data) ?RoutablePage {
+    const grid = root.getGrid() orelse return null;
+    const cell = grid.cell(x, y) catch return null;
+    const link = cell.link orelse return null;
+    if (link.len == 0 or link[0] != '/') return null;
+    return if (data.host_kind == .local) RoutablePage.fromUrlLocal(link) else RoutablePage.fromUrl(link);
 }
 
 // whether the `a:` focus target links to the page already shown, which a click
