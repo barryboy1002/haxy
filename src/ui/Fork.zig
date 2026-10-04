@@ -165,7 +165,7 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
                 .commits = commits,
                 .patch = patch_data,
                 .diff = .{
-                    .route = .{ .fork = .{ .identity = try aa.dupe(u8, identity.identity), .id = try aa.dupe(u8, &id_hex), .oid = diff_oid, .base_oid = diff_base_oid } },
+                    .route = .{ .fork = .{ .identity = try aa.dupe(u8, identity.identity), .id = try aa.dupe(u8, &id_hex), .oid = diff_oid, .base_oid = diff_base_oid, .patch_base_oid = try aa.dupe(u8, &commits_base_oid) } },
                     .path = diff_path,
                     .window = try Diff.render(.xit, repo_opts, io, arena.child_allocator, aa, fork_repo, if (diff_base) |*base| base else null, diff_head, diff_start, diff_path),
                 },

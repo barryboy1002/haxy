@@ -17,6 +17,20 @@ pub const Hunk = struct {
     text: []const u8,
     // one byte per line of text: the edit's +/-/space prefix
     prefixes: []const u8,
+    status: Status = .changed,
+};
+pub const Status = enum {
+    added,
+    removed,
+    changed,
+
+    fn label(self: Status) []const u8 {
+        return switch (self) {
+            .added => " added ",
+            .removed => " removed ",
+            .changed => " changed ",
+        };
+    }
 };
 pub const Window = struct {
     hunks: []const Hunk = &.{},
@@ -32,9 +46,11 @@ const Self = @This();
 
 pub const Route = union(enum) {
     repo: struct { identity: []const u8, ref_or_oid: ui.RoutablePage.RefOrOid, value: []const u8, base_oid: []const u8 },
-    patchrev: struct { identity: []const u8, id: []const u8 },
-    // `oid` names one commit's diff against `base_oid` ("" = the whole patch)
-    fork: struct { identity: []const u8, id: []const u8, oid: []const u8 = "", base_oid: []const u8 = "" },
+    // `base_oid` is the revision's base commit, which the url leaves out
+    patchrev: struct { identity: []const u8, id: []const u8, base_oid: []const u8 },
+    // `oid` names one commit's diff against `base_oid` ("" = the whole patch).
+    // `patch_base_oid` is the whole patch's base commit, which the url leaves out
+    fork: struct { identity: []const u8, id: []const u8, oid: []const u8 = "", base_oid: []const u8 = "", patch_base_oid: []const u8 = "" },
 
     pub fn page(self: Route, start: usize, path: []const u8) ?ui.RoutablePage {
         return switch (self) {
@@ -46,6 +62,20 @@ pub const Route = union(enum) {
 
     fn link(self: Route, arena: *std.heap.ArenaAllocator, start: usize, path: []const u8) ![]const u8 {
         const route = self.page(start, path) orelse return error.RouteTooLong;
+        return arena.allocator().print("a:{s}", .{try route.toUrl(arena)});
+    }
+
+    // a link to the file's content in the files view, from the base commit for a removed file
+    fn fileLink(self: Route, arena: *std.heap.ArenaAllocator, path: []const u8, status: Status) ![]const u8 {
+        const route = (if (status == .removed) switch (self) {
+            .repo => |r| ui.RoutablePage.repoFilesRoute(r.identity, .object, r.base_oid, path, 0),
+            .patchrev => |r| ui.RoutablePage.repoFilesRoute(r.identity, .object, r.base_oid, path, 0),
+            .fork => |f| ui.RoutablePage.forkFilesRoute(f.identity, f.id, if (f.base_oid.len != 0) f.base_oid else f.patch_base_oid, path, 0),
+        } else switch (self) {
+            .repo => |r| ui.RoutablePage.repoFilesRoute(r.identity, r.ref_or_oid, r.value, path, 0),
+            .patchrev => |r| ui.RoutablePage.repoPatchRevFilesRoute(r.identity, r.id, path, 0),
+            .fork => |f| ui.RoutablePage.forkFilesRoute(f.identity, f.id, f.oid, path, 0),
+        }) orelse return error.RouteTooLong;
         return arena.allocator().print("a:{s}", .{try route.toUrl(arena)});
     }
 };
@@ -70,7 +100,7 @@ pub fn init(
         break :blk .{
             record.base_tree_oid[0..oid_len].*,
             record.head_tree_oid[0..oid_len].*,
-            Route{ .patchrev = .{ .identity = identity, .id = try aa.dupe(u8, route.patchrev_id.slice()) } },
+            Route{ .patchrev = .{ .identity = identity, .id = try aa.dupe(u8, route.patchrev_id.slice()), .base_oid = try aa.dupe(u8, record.event.base_oid) } },
         };
     } else blk: {
         const resolved = (try ui.ResolvedRefOrOid(repo_kind, repo_opts).init(repo, io, aa, route.ref_or_oid, route.value.slice())) orelse return error.NotFound;
@@ -128,6 +158,20 @@ pub fn render(
         defer pair.deinit();
 
         if (path.len != 0 and !std.mem.eql(u8, pair.path, path)) continue;
+
+        // an added or removed file shows only its path
+        const status: Status = if (pair.a.source == .nothing) .added else if (pair.b.source == .nothing) .removed else .changed;
+        if (status != .changed) {
+            const i = index;
+            index += 1;
+            if (i < start) continue;
+            if (hunks.items.len >= page_size) {
+                has_more = true;
+                break :file_loop;
+            }
+            try hunks.append(arena, .{ .path = try arena.dupe(u8, pair.path), .text = "", .prefixes = "", .status = status });
+            continue;
+        }
 
         var hunk_iter = try df.HunkIterator(repo_kind, repo_opts).init(gpa, &pair.a, &pair.b);
         defer hunk_iter.deinit(gpa);
@@ -207,19 +251,24 @@ fn editLineNum(edit: df.Edit) usize {
 
 fn appendWindow(data: @This(), allocator: std.mem.Allocator, session: *ui.Session, box: *wgt.Box(ui.Widget)) !void {
     if (data.path.len != 0) {
-        try addLink(allocator, box, data.path, "");
+        const status = if (data.window.hunks.len > 0) data.window.hunks[0].status else .changed;
+        try addSpans(allocator, box, &.{.{ .text = data.path }}, try data.route.fileLink(session.page_arena, data.path, status), status.label());
         try addLink(allocator, box, "← all files", try data.route.link(session.page_arena, 0, ""));
     }
     if (data.window.start > 0) try addLink(allocator, box, "← previous", try data.route.link(session.page_arena, data.window.start -| page_size, data.path));
     for (data.window.hunks) |hunk| {
-        if (data.path.len == 0) if (hunk.path) |path| try addLink(allocator, box, path, try data.route.link(session.page_arena, 0, path));
+        if (data.path.len == 0) if (hunk.path) |path| {
+            // a changed file's path narrows the diff to it, the others open the file
+            const link = if (hunk.status == .changed) try data.route.link(session.page_arena, 0, path) else try data.route.fileLink(session.page_arena, path, hunk.status);
+            try addSpans(allocator, box, &.{.{ .text = path }}, link, hunk.status.label());
+        };
         if (hunk.text.len != 0) try addHunk(allocator, box, hunk);
     }
     if (data.window.has_more) try addLink(allocator, box, "next →", try data.route.link(session.page_arena, data.window.start + page_size, data.path));
 }
 
 fn addLink(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), text: []const u8, link: []const u8) !void {
-    try addSpans(allocator, box, &.{.{ .text = text }}, link);
+    try addSpans(allocator, box, &.{.{ .text = text }}, link, "");
 }
 
 // one span per line, inserted lines green and deleted lines red. the text
@@ -239,11 +288,11 @@ fn addHunk(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), hunk: Hunk) !
         try spans.append(allocator, .{ .text = hunk.text[start..end], .style = style });
         start = end;
     }
-    try addSpans(allocator, box, spans.items, "");
+    try addSpans(allocator, box, spans.items, "", "");
 }
 
-fn addSpans(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), spans: []const wgt.Span, link: []const u8) !void {
-    var tb = try wgt.TextBox.initSpans(allocator, spans, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none });
+fn addSpans(allocator: std.mem.Allocator, box: *wgt.Box(ui.Widget), spans: []const wgt.Span, link: []const u8, label: []const u8) !void {
+    var tb = try wgt.TextBox.initSpans(allocator, spans, .{ .border_style = .single, .round_corners = true, .wrap_kind = .none, .label = label });
     errdefer tb.deinit(allocator);
     tb.getFocus().mode = .all;
     if (link.len != 0) tb.getFocus().kind = .{ .custom = link };

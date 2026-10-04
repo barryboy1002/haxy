@@ -1082,6 +1082,8 @@ fn seedPatchRevision(
     base_oid: [hash.hexLen(.sha1)]u8,
     path: []const u8,
     contents: []const []const u8,
+    // a base file the last commit removes
+    removed_path: ?[]const u8,
 ) !void {
     const patch_hex = std.fmt.bytesToHex(patch_id.*, .lower);
     const fork_path = try fork.forkPath(allocator, users_dir, forker_id, patch_id);
@@ -1101,6 +1103,7 @@ fn seedPatchRevision(
     var writer = std.Io.Writer.Allocating.init(allocator);
     defer writer.deinit();
     if (std.Io.Dir.path.dirname(path)) |dir| try fork_dir.createDirPath(io, dir);
+    const commit_count = contents.len + @intFromBool(removed_path != null);
     for (contents, 0..) |content, i| {
         {
             const file = try fork_dir.createFile(io, path, .{});
@@ -1109,8 +1112,15 @@ fn seedPatchRevision(
         }
         try fork_repo.add(io, allocator, &.{path});
         writer.clearRetainingCapacity();
-        try writer.writer.print("{s} ({d}/{d})", .{ title, i + 1, contents.len });
+        try writer.writer.print("{s} ({d}/{d})", .{ title, i + 1, commit_count });
         source_oid = try fork_repo.commit(io, allocator, .{ .message = writer.written(), .timestamp = timestamp + i });
+    }
+    if (removed_path) |removed| {
+        // the bare fork never checked the base files out, so only the index drops it
+        try fork_repo.remove(io, allocator, &.{removed}, .{ .update_work_dir = false });
+        writer.clearRetainingCapacity();
+        try writer.writer.print("{s} ({d}/{d})", .{ title, commit_count, commit_count });
+        source_oid = try fork_repo.commit(io, allocator, .{ .message = writer.written(), .timestamp = timestamp + contents.len });
     }
     try fork_repo.patchAll(io, allocator, null);
     try fork_repo.addConfig(io, allocator, .{ .name = "core.bare", .value = "true" });
@@ -1171,6 +1181,8 @@ fn seedPatches(
         alpha_edit: ?ScatterEdit = null,
         // based behind master, so merging it makes a merge commit
         behind_master: bool = false,
+        // a base file the patch removes
+        removed_path: ?[]const u8 = null,
     }{
         .{
             .title = "Draft a faster dependency scanner",
@@ -1196,6 +1208,7 @@ fn seedPatches(
             .description = "Add a stable JSON representation of `inspect` results for scripts and editor integrations.",
             .labels = "enhancement cli",
             .status = .open,
+            .removed_path = "docs/dev/contribute.md",
         },
         .{
             .title = "Edit an adjacent line in alpha.txt",
@@ -1267,7 +1280,7 @@ fn seedPatches(
                 }
                 break :blk .{ "patch.txt", contents.len };
             };
-            try seedPatchRevision(io, allocator, users_dir, user_id, &patch_ids[i], patch.title, patch_author, timestamp + 1, random, base_oid, file_path, contents[0..count]);
+            try seedPatchRevision(io, allocator, users_dir, user_id, &patch_ids[i], patch.title, patch_author, timestamp + 1, random, base_oid, file_path, contents[0..count], patch.removed_path);
         }
         const status = patch.status orelse continue;
         try pch.publish(.{}, io, allocator, users_dir, admin_repo, target_repo, .{

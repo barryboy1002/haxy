@@ -165,17 +165,18 @@ fn testDiff(comptime kind: xit.repo.RepoKind) !void {
             const focus = view.getFocus();
             try view.build(allocator, .{ .min_size = .{ .width = null, .height = null }, .max_size = .{ .width = 100, .height = 30 } }, focus);
             const box = &view.scroll.child.box;
-            try std.testing.expectEqual(first.hunks.len * 2 + 1, box.children.count());
+            // the added files show only their paths, which link to their content
+            try std.testing.expectEqual(first.hunks.len + 1, box.children.count());
             const file = ui.crossPageLink(focus, box.children.keys()[0], session.data) orelse return error.MissingFileLink;
             const next = ui.crossPageLink(focus, box.children.keys()[box.children.count() - 1], session.data) orelse return error.MissingLink;
             if (data.route == .repo) {
-                try std.testing.expectEqualStrings("file-00.txt", file.repo_diff.path.slice());
-                try std.testing.expectEqualStrings(&base, file.repo_diff.base_oid.slice());
+                try std.testing.expectEqualStrings("file-00.txt", file.repo_files.path.slice());
+                try std.testing.expectEqualStrings(&head, file.repo_files.ref_value.slice());
                 try std.testing.expectEqualStrings(&base, next.repo_diff.base_oid.slice());
                 try std.testing.expectEqualStrings(&head, next.repo_diff.value.slice());
                 try std.testing.expectEqual(Diff.page_size, next.repo_diff.start);
             } else {
-                try std.testing.expectEqualStrings("file-00.txt", file.fork_diff.path.slice());
+                try std.testing.expectEqualStrings("file-00.txt", file.fork_files.path.slice());
                 try std.testing.expectEqual(Diff.page_size, next.fork_diff.start);
             }
         }
