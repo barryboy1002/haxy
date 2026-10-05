@@ -94,11 +94,12 @@ pub const View = struct {
             const text = try std.fmt.bufPrint(&text_buf, "{s}/", .{data.owner_name});
             const link = try aa.print("a:/{s}", .{data.owner_name});
 
-            var text_box = try wgt.TextBox.init(allocator, text, .{ .border = .hidden, .wrap_kind = .none });
+            const private_label = if (page.repo.event.read_access == .private) "(private)" else "";
+            var text_box = try wgt.TextBox.init(allocator, text, .{ .border = .hidden, .wrap_kind = .none, .bottom_label = .{ .text = private_label } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = link };
-            first_group_width += try xitui.width.displayWidth(text) + 2;
+            first_group_width += @max(try xitui.width.displayWidth(text), private_label.len) + 2;
             try title_box.children.put(allocator, text_box.getFocus().id, .{
                 .widget = .{ .text_box = text_box },
                 .rect = null,

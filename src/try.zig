@@ -167,6 +167,8 @@ pub fn main(init: std.process.Init) !void {
             .{ .user_index = 1, .name = "vim", .description = "The ubiquitous text editor" },
             // private, so only bobby and admin can see it
             .{ .user_index = 2, .name = "neovim", .description = "Hyperextensible Vim-based text editor", .read_access = .private },
+            // private and owned by admin
+            .{ .user_index = 0, .name = "dotfiles", .description = "Shell, editor, and terminal configuration", .read_access = .private },
             .{ .user_index = 3, .name = "emacs", .description = "GNU Emacs source code mirror" },
             .{ .user_index = 4, .name = "tmux", .description = "Terminal multiplexer" },
             .{ .user_index = 5, .name = "zsh", .description = "Mirror of the Z shell source code repository" },
@@ -195,6 +197,8 @@ pub fn main(init: std.process.Init) !void {
             .{ .user_index = 18, .name = "prometheus", .description = "The Prometheus monitoring system and time series database" },
             .{ .user_index = 19, .name = "grafana", .description = "The open and composable observability and data visualization platform" },
             .{ .user_index = 20, .name = "ansible", .description = "Simple, agentless IT automation" },
+            // public and owned by admin. the last repo is the one given patches
+            .{ .user_index = 0, .name = "toolbox", .description = "Command line tools for inspecting and building workspaces" },
         };
 
         var user_ids: [user_data.len][evt.event_id_size]u8 = undefined;
@@ -271,7 +275,8 @@ pub fn main(init: std.process.Init) !void {
             for (repo_data, repo_events, grant_events) |r, repo_event, grant_event| {
                 if (r.user_index != user_index) continue;
                 try owned.append(arena.allocator(), repo_event);
-                try owned.append(arena.allocator(), grant_event);
+                // admin already owns its own repos
+                if (r.user_index != 0) try owned.append(arena.allocator(), grant_event);
             }
             if (owned.items.len > 0) try evt.consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, evt.user_repo_opts, io, allocator, &user_repo, evt.events_ref, owned.items);
         }
