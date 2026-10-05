@@ -91,7 +91,7 @@ pub fn init(
                     _ = try pair.value_cursor.readBytes(&event_id);
                     const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &event_id)) orelse continue;
                     // unreadable repos leave their window short rather than shifting the others
-                    if (try evt.Repo.roleOf(DB, hash_kind, moment, arena, repo_event, &event_id, session.userId()) == .none) continue;
+                    if (try evt.Repo.roleOf(DB, hash_kind, moment, arena, repo_event, &event_id, session.userId()) == null) continue;
                     try repos.append(arena.allocator(), repo_event);
                 }
             }
@@ -108,7 +108,7 @@ pub fn init(
                     const kv_cursor = (try iter.next()) orelse break;
                     const repo_id = try evt.readOrderKeyId(DB, kv_cursor);
                     const repo_event = (try evt.Repo.readById(DB, hash_kind, moment, arena, &repo_id)) orelse continue;
-                    if (try evt.Repo.roleOf(DB, hash_kind, moment, arena, repo_event, &repo_id, session.userId()) == .none) continue;
+                    if (try evt.Repo.roleOf(DB, hash_kind, moment, arena, repo_event, &repo_id, session.userId()) == null) continue;
                     try repos.append(arena.allocator(), repo_event);
                 }
                 repos_next_start = if (end < count) end else null;
@@ -134,7 +134,7 @@ pub fn init(
                 // the target lives in its owner's user repo
                 const owner_id = record.event.repo_user_id[0..evt.event_id_size];
                 const target = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, record.event.repo_id[0..evt.event_id_size], session.userId())) orelse continue;
-                if (target.role == .none) continue;
+                if (target.role == null) continue;
                 const target_repo = target.repo;
 
                 var title: []const u8 = "(unavailable)";

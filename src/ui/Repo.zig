@@ -246,9 +246,8 @@ pub fn init(
         const users_dir = session.users_dir orelse return error.NoMoment;
         const found = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, haxy_moment, users_dir, repo_identity.owner, repo_identity.name, session.userId())) orelse return error.NotFound;
         // a repo the session can't read doesn't exist to it
-        if (found.role == .none) return error.NotFound;
+        role = found.role orelse return error.NotFound;
         repo = found.repo;
-        role = found.role;
         repo_id_maybe = found.event_id;
 
         // resolve the creating user so the header can show their name to the left

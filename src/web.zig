@@ -542,7 +542,7 @@ fn mayRead(
     };
     const owner_repo = evt.parseOwnerRepoPath(identity) orelse return false;
     const repo = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, server.users_dir, owner_repo.owner, owner_repo.name, user_id)) orelse return false;
-    return repo.role != .none;
+    return repo.role != null;
 }
 
 // the logged-in user the request's session cookie names

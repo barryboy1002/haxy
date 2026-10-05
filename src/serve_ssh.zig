@@ -576,7 +576,9 @@ fn authorizeRepoKey(
         .receive_pack => .write,
     };
     // skip the key lookups when the base role is enough
-    if (repo.role.atLeast(min_role)) return .{ .allowed = null };
+    if (repo.role) |base| {
+        if (base.atLeast(min_role)) return .{ .allowed = null };
+    }
 
     // the creator owns the repo
     const owner_id = repo.repo.event.user_id[0..evt.event_id_size];

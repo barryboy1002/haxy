@@ -2075,9 +2075,8 @@ pub fn authorizeUser(
 
     const owner_repo = evt.parseOwnerRepoPath(identity) orelse return .repo_not_found;
     const repo = (try evt.readRepoByOwnerAndName(io, arena.child_allocator, arena, moment, users_dir, owner_repo.owner, owner_repo.name, user_id)) orelse return .repo_not_found;
-    const role = repo.role;
     // a repo the user can't read doesn't exist to them
-    if (role == .none) return .repo_not_found;
+    const role = repo.role orelse return .repo_not_found;
     if (!role.atLeast(min_role)) return .forbidden;
     return .{ .actor = .{
         .author = .{ .name = user.event.name, .email = user.event.email },

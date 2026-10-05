@@ -40,7 +40,6 @@ pub fn idOf(target_id: []const u8, user_id: []const u8) [evt.event_id_size]u8 {
 fn validate(event_id: *const [evt.event_id_size]u8, record: Record) !void {
     if (record.event.target_id.len != evt.event_id_size) return error.InvalidTargetId;
     if (record.event.user_id.len != evt.event_id_size) return error.InvalidUserId;
-    if (record.event.role == .none) return error.InvalidRole;
     if (!std.mem.eql(u8, event_id, &idOf(record.event.target_id, record.event.user_id))) return error.InvalidGrantId;
 }
 
