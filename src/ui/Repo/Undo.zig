@@ -370,7 +370,7 @@ pub fn perform(allocator: std.mem.Allocator, session: *ui.Session, target: ui.Ro
 
 // the repo an owner may act on, or null when they may not
 fn authorizedSource(session: *ui.Session, identity: []const u8) !?ui.RepoSource {
-    if (try session.authorize(identity, .owner) == null) return null;
+    if (try session.authorize(identity, .owner, null) == null) return null;
     if (session.local) |local| return local;
     const admin_repo = session.admin_repo orelse return error.NotFound;
     const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);

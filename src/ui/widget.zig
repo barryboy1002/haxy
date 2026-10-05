@@ -1047,24 +1047,35 @@ pub const SearchBox = struct {
     }
 };
 
-// a row of bordered options posted as one form field. the selection is the
-// focused option, so a click selects on the web too.
+// a wrapping row of bordered options posted as one form field. the selection
+// is the focused option, so a click selects on the web too.
 pub const Radio = struct {
+    // holds the options' flow, framed under the label when there is one
     box: wgt.Box(Widget),
     name: []const u8,
     values: []const []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, name: []const u8, values: []const []const u8, initial: []const u8) !Radio {
-        var box = try wgt.Box(Widget).init(allocator, .{ .border = null, .direction = .horiz });
+    pub fn init(allocator: std.mem.Allocator, session: *ui.Session, name: []const u8, values: []const []const u8, initial: []const u8, label: ?[]const u8) !Radio {
+        var box = try wgt.Box(Widget).init(allocator, .{
+            .border = if (label != null) .single else null,
+            .round_corners = true,
+            .direction = .vert,
+            .top_label = .{ .text = label orelse "" },
+        });
         errdefer box.deinit(allocator);
-        for (values) |value| {
-            var option = try wgt.TextBox.init(allocator, value, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
-            errdefer option.deinit(allocator);
-            option.getFocus().mode = .all;
-            option.getFocus().kind = .{ .custom = try session.page_arena.allocator().print(ui.radio_prefix ++ "{s}={s}", .{ name, value }) };
-            if (std.mem.eql(u8, value, initial)) box.getFocus().child_id = option.getFocus().id;
-            try box.children.put(allocator, option.getFocus().id, .{ .widget = .{ .text_box = option }, .rect = null, .min_size = .{ .width = try xitui.width.displayWidth(value) + 2, .height = 3 } });
+
+        var flow = try WordFlow.init(allocator);
+        errdefer flow.deinit(allocator);
+        const pa = session.page_arena.allocator();
+        const items = try pa.alloc(WordFlow.Item, values.len);
+        for (items, values) |*item, value| item.* = .{ .text = value, .link = try pa.print(ui.radio_prefix ++ "{s}={s}", .{ name, value }) };
+        try flow.setItems(allocator, items);
+        for (flow.text_boxes.items, values) |*option, value| {
+            if (std.mem.eql(u8, value, initial)) flow.focus.child_id = option.getFocus().id;
         }
+
+        box.getFocus().child_id = flow.getFocus().id;
+        try box.children.put(allocator, flow.getFocus().id, .{ .widget = .{ .word_flow = flow }, .rect = null, .min_size = null });
         return .{ .box = box, .name = name, .values = values };
     }
 
@@ -1072,28 +1083,35 @@ pub const Radio = struct {
         self.box.deinit(allocator);
     }
 
+    fn optionFlow(self: *Radio) *WordFlow {
+        return &self.box.children.values()[0].widget.word_flow;
+    }
+
     // the focused option's value
     pub fn selected(self: *Radio) []const u8 {
-        const index = self.box.children.getIndex(self.box.getFocus().child_id orelse unreachable) orelse unreachable;
-        return self.values[index];
+        const options = self.optionFlow();
+        return self.values[options.indexOfFocusId(options.focus.child_id orelse unreachable) orelse unreachable];
     }
 
     pub fn build(self: *Radio, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
         self.clearGrid();
-        const selected_id = self.box.getFocus().child_id;
-        for (self.box.children.keys(), self.box.children.values()) |id, *child| {
-            child.widget.text_box.options.border = if (id == selected_id) .single else .hidden;
+        const options = self.optionFlow();
+        const selected_id = options.focus.child_id;
+        for (options.text_boxes.items) |*option| {
+            option.options.border = if (option.getFocus().id == selected_id) .single else .hidden;
         }
         try self.box.build(allocator, constraint, root_focus);
     }
 
+    // left and right step through the options in order, however they wrap
     pub fn input(self: *Radio, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
         _ = allocator;
-        const ids = self.box.children.keys();
-        const index = self.box.children.getIndex(self.box.getFocus().child_id orelse return) orelse return;
+        const options = self.optionFlow();
+        const index = options.indexOfFocusId(options.focus.child_id orelse return) orelse return;
+        const option_boxes = options.text_boxes.items;
         switch (key) {
-            .arrow_left => if (index > 0) root_focus.setFocus(ids[index - 1]),
-            .arrow_right => if (index + 1 < ids.len) root_focus.setFocus(ids[index + 1]),
+            .arrow_left => if (index > 0) root_focus.setFocus(option_boxes[index - 1].getFocus().id),
+            .arrow_right => if (index + 1 < option_boxes.len) root_focus.setFocus(option_boxes[index + 1].getFocus().id),
             else => {},
         }
     }

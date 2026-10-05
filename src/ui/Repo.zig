@@ -18,9 +18,9 @@ pub const Markdown = @import("./Repo/Markdown.zig");
 pub const Commits = @import("./Repo/Commits.zig");
 pub const Diff = @import("./Repo/Diff.zig");
 pub const Refs = @import("./Repo/Refs.zig");
+pub const Discussions = @import("./Repo/Discussions.zig");
 pub const Issues = @import("./Repo/Issues.zig");
 pub const Patches = @import("./Repo/Patches.zig");
-pub const Discussions = @import("./Repo/Discussions.zig");
 pub const Comment = @import("./Repo/Comment.zig");
 pub const Undo = @import("./Repo/Undo.zig");
 pub const Events = @import("./Repo/Events.zig");
@@ -33,9 +33,9 @@ handle: ui.RepoHandle,
 files: Files,
 changes: Changes,
 refs: Refs,
+discussions: Discussions,
 issues: Issues,
 patches: Patches,
-discussions: Discussions,
 events: Events,
 undo: ?Undo = null,
 settings: ?Settings = null,
@@ -122,6 +122,30 @@ pub fn init(
         .repo_refs => |*r| r.search.slice(),
         else => "",
     };
+    const discussions_label: []const u8 = switch (route) {
+        .repo_discussions => |*t| t.label.slice(),
+        else => "",
+    };
+    const discussions_search: []const u8 = switch (route) {
+        .repo_discussions => |*t| t.search.slice(),
+        else => "",
+    };
+    const discussions_selected: []const u8 = switch (route) {
+        .repo_discussions => |*t| t.selected.slice(),
+        else => "",
+    };
+    const discussions_comment: []const u8 = switch (route) {
+        .repo_discussions => |*t| t.comment.slice(),
+        else => "",
+    };
+    const discussions_view: ui.RoutablePage.DiscussionsView = switch (route) {
+        .repo_discussions => |t| t.view,
+        else => .recent,
+    };
+    const discussions_comments_start: usize = switch (route) {
+        .repo_discussions => |t| t.comments_start,
+        else => 0,
+    };
     // the issues tab's label filter, the issue its window is rooted at, and the
     // view it shows.
     const issues_label: []const u8 = switch (route) {
@@ -180,30 +204,6 @@ pub fn init(
         .repo_patches => |p| p.comments_start,
         else => 0,
     };
-    const discussions_label: []const u8 = switch (route) {
-        .repo_discussions => |*t| t.label.slice(),
-        else => "",
-    };
-    const discussions_search: []const u8 = switch (route) {
-        .repo_discussions => |*t| t.search.slice(),
-        else => "",
-    };
-    const discussions_selected: []const u8 = switch (route) {
-        .repo_discussions => |*t| t.selected.slice(),
-        else => "",
-    };
-    const discussions_comment: []const u8 = switch (route) {
-        .repo_discussions => |*t| t.comment.slice(),
-        else => "",
-    };
-    const discussions_view: ui.RoutablePage.DiscussionsView = switch (route) {
-        .repo_discussions => |t| t.view,
-        else => .recent,
-    };
-    const discussions_comments_start: usize = switch (route) {
-        .repo_discussions => |t| t.comments_start,
-        else => 0,
-    };
     const events_kind: ?evt.EventKind = switch (route) {
         .repo_events => |e| e.kind,
         else => null,
@@ -234,11 +234,17 @@ pub fn init(
         source = local;
         // local routes elide the identity, so the display name comes from the
         // repo's directory rather than the route.
-        repo = .{ .event = .{
-            .user_id = "",
-            .name = try arena.allocator().dupe(u8, std.Io.Dir.path.basename(local.path)),
-            .description = "",
-        } };
+        repo = .{
+            .event = .{
+                .user_id = "",
+                .name = try arena.allocator().dupe(u8, std.Io.Dir.path.basename(local.path)),
+                .description = "",
+                // local mode shows every tab
+                .discuss_role = .read,
+                .issue_role = .read,
+                .patch_role = .read,
+            },
+        };
         owner_name = "";
     } else {
         const haxy_moment = session.haxy_moment orelse return error.NoMoment;
@@ -271,13 +277,21 @@ pub fn init(
     // no filesystem (wasm), nowhere to look, or a failed open: empty tabs.
     // the events tab needs write access, like undo
     if (route == .repo_events and !handle.canWrite()) return error.NotFound;
+    // a tab that is off doesn't exist
+    const route_thread_kind: ?evt.EventKind = switch (route) {
+        .repo_discussions => .discuss,
+        .repo_issues => .issue,
+        .repo_patches => .patch,
+        else => null,
+    };
+    if (route_thread_kind) |kind| if (repo.event.threadRole(kind) == null) return error.NotFound;
     const undo_index = if (route == .repo_undo) route.repo_undo.index else null;
     const undo_clear = route == .repo_undo and route.repo_undo.clear;
     // only xit repos have undo history, so it's read in their branch below
     var undo_data: ?Undo = null;
     // only the owner sees the settings, which show the repo's hash kind
     var settings: ?Settings = null;
-    const files, const changes, const refs, var issues, var patches, var discussions, const events = blk: {
+    const files, const changes, const refs, var discussions, var issues, var patches, const events = blk: {
         read: {
             const io = session.io orelse break :read;
             const src = source orelse break :read;
@@ -298,6 +312,9 @@ pub fn init(
                                 .name = repo.event.name,
                                 .description = repo.event.description,
                                 .access = repo.event.read_access,
+                                .discuss_role = repo.event.discuss_role,
+                                .issue_role = repo.event.issue_role,
+                                .patch_role = repo.event.patch_role,
                                 .hash_kind = opened.self_repo_opts.hash,
                             };
                             // tabs switch in-page, so every tab's data is read here
@@ -329,10 +346,10 @@ pub fn init(
                                 files_data,
                                 changes_data,
                                 try Refs.init(repo_kind, opened.self_repo_opts, arena, opened, io, gpa, repo_identity.identity, refs_kind, refs_from, refs_search),
-                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view, handle.viewer),
-                                try Patches.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, session, repo_id_maybe, repo_identity.identity, target_branch, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view, handle.viewer),
-                                try Discussions.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, discussions_label, discussions_search, discussions_selected, discussions_comment, discussions_comments_start, discussions_view, handle.viewer),
-                                try Events.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, events_view, events_kind, events_selected, events_moment, session.local != null, session.data.sync_failure),
+                                try Discussions.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, discussions_label, discussions_search, discussions_selected, discussions_comment, discussions_comments_start, discussions_view, tabViewer(handle, repo, .discuss)),
+                                try Issues.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view, tabViewer(handle, repo, .issue)),
+                                try Patches.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, session, repo_id_maybe, repo_identity.identity, target_branch, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view, tabViewer(handle, repo, .patch)),
+                                try Events.init(repo_kind, opened.self_repo_opts, arena, opened, io, session.haxy_moment, repo_identity.identity, repo.event, events_view, events_kind, events_selected, events_moment, session.local != null, session.data.sync_failure),
                             };
                         },
                     }
@@ -344,36 +361,43 @@ pub fn init(
             try Files.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, files_dir),
             Changes{ .commits = try Commits.emptyResult(aa, handle, requested_ref_or_oid orelse .branch, requested_ref_value, commits_base_oid) },
             try Refs.emptyResult(arena, repo_identity.identity, refs_kind, refs_from, refs_search),
+            try Discussions.emptyResult(aa, repo_identity.identity, discussions_label, discussions_search, discussions_selected, discussions_comment, discussions_comments_start, discussions_view),
             try Issues.emptyResult(aa, repo_identity.identity, issues_label, issues_search, issues_selected, issues_comment, issues_comments_start, issues_theirs, issues_view),
             try Patches.emptyResult(aa, repo_identity.identity, patches_label, patches_search, patches_selected, patches_comment, patches_comments_start, patches_theirs, patches_view),
-            try Discussions.emptyResult(aa, repo_identity.identity, discussions_label, discussions_search, discussions_selected, discussions_comment, discussions_comments_start, discussions_view),
             try Events.empty(aa, repo_identity.identity, events_view, session.local != null, session.data.sync_failure),
         };
     };
     if (route == .repo_undo and undo_data == null) return error.NotFound;
     if (route == .repo_repo and settings == null) return error.NotFound;
     if (undo_data) |*undo| undo.clear = undo_clear;
+    discussions.repo_source = source;
     issues.repo_source = source;
     patches.repo_source = source;
     patches.repo_id = repo_id_maybe;
-    discussions.repo_source = source;
 
     return .{
         // use the files tab's resolved ref for the header
-        .header = try Header.init(arena, repo.event.name, owner_name, files.ref_or_oid, files.ref_or_oid_value, issues.label, patches.label, discussions.label),
+        .header = try Header.init(arena, repo.event.name, owner_name, files.ref_or_oid, files.ref_or_oid_value, discussions.label, issues.label, patches.label),
         .repo = repo,
         .handle = handle,
         .files = files,
         .changes = changes,
         .refs = refs,
+        .discussions = discussions,
         .issues = issues,
         .patches = patches,
-        .discussions = discussions,
         .events = events,
         .undo = undo_data,
         .settings = settings,
         .quit = Quit.init(),
     };
+}
+
+// the viewer a tab's comment bar sees, which is none below the tab's role
+fn tabViewer(handle: ui.RepoHandle, repo: evt.Repo.Record, kind: evt.EventKind) ?ui.Viewer {
+    const viewer = handle.viewer orelse return null;
+    const tab_role = repo.event.threadRole(kind) orelse return null;
+    return if (viewer.role.atLeast(tab_role)) viewer else null;
 }
 
 pub const View = struct {
@@ -425,25 +449,25 @@ pub const View = struct {
                 try stack.children.put(allocator, refs_view.getFocus().id, .{ .repo_refs = refs_view });
             }
 
+            // discussions and their comment permalinks.
+            if (data.repo.event.discuss_role != null) {
+                var discussions_view = try Discussions.View.init(allocator, &data.discussions, session);
+                errdefer discussions_view.deinit(allocator);
+                try stack.children.put(allocator, discussions_view.getFocus().id, .{ .repo_discussions = discussions_view });
+            }
+
             // issues — the repo's issue tracker and comment permalinks.
-            {
+            if (data.repo.event.issue_role != null) {
                 var issues_view = try Issues.View.init(allocator, &data.issues, session);
                 errdefer issues_view.deinit(allocator);
                 try stack.children.put(allocator, issues_view.getFocus().id, .{ .repo_issues = issues_view });
             }
 
             // patches and their comment permalinks.
-            {
+            if (data.repo.event.patch_role != null) {
                 var patches_view = try Patches.View.init(allocator, &data.patches, session);
                 errdefer patches_view.deinit(allocator);
                 try stack.children.put(allocator, patches_view.getFocus().id, .{ .repo_patches = patches_view });
-            }
-
-            // discussions and their comment permalinks.
-            {
-                var discussions_view = try Discussions.View.init(allocator, &data.discussions, session);
-                errdefer discussions_view.deinit(allocator);
-                try stack.children.put(allocator, discussions_view.getFocus().id, .{ .repo_discussions = discussions_view });
             }
 
             if (data.handle.canWrite()) {
@@ -500,7 +524,7 @@ pub const View = struct {
         // tab's own search box.
         const results = data.files.find != null or
             (data.changes == .commits and data.changes.commits.search != null) or
-            data.issues.search != null or data.patches.search != null or data.discussions.search != null;
+            data.discussions.search != null or data.issues.search != null or data.patches.search != null;
         self.getFocus().child_id = box.children.keys()[if (results) stack_index else header_index];
         return self;
     }

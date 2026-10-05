@@ -135,6 +135,8 @@ pub fn init(
                 const owner_id = record.event.repo_user_id[0..evt.event_id_size];
                 const target = (try evt.readRepoById(io, gpa, arena, users_dir, owner_id, record.event.repo_id[0..evt.event_id_size], session.userId())) orelse continue;
                 if (target.role == null) continue;
+                // patches that are off take their drafts with them
+                if (target.repo.event.patch_role == null) continue;
                 const target_repo = target.repo;
 
                 var title: []const u8 = "(unavailable)";

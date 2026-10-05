@@ -11,8 +11,8 @@ pub const User = @import("event/User.zig");
 pub const Repo = @import("event/Repo.zig");
 pub const Fork = @import("event/Fork.zig");
 pub const Grant = @import("event/Grant.zig");
-pub const Issue = @import("event/Issue.zig");
 pub const Discussion = @import("event/Discussion.zig");
+pub const Issue = @import("event/Issue.zig");
 pub const Comment = @import("event/Comment.zig");
 pub const Attachment = @import("event/Attachment.zig");
 pub const Patch = @import("event/Patch.zig");
@@ -273,8 +273,8 @@ pub const EventKind = enum {
     repo,
     fork,
     grant,
-    issue,
     discuss,
+    issue,
     comment,
     attach,
     patchrev,
@@ -295,7 +295,7 @@ pub const RepoRole = enum {
                 else => false,
             },
             .repo => switch (kind) {
-                .issue, .discuss, .comment, .attach, .patchrev, .patch => true,
+                .discuss, .issue, .comment, .attach, .patchrev, .patch => true,
                 else => false,
             },
             .fork => switch (kind) {
@@ -322,8 +322,8 @@ pub const Event = union(EventKind) {
     repo: ?Repo,
     fork: ?Fork,
     grant: ?Grant,
-    issue: ?Issue,
     discuss: ?Discussion,
+    issue: ?Issue,
     comment: ?Comment,
     attach: ?Attachment,
     patchrev: ?PatchRev,
@@ -432,15 +432,15 @@ pub const EventWithId = struct {
                     else
                         null,
                 },
-                .issue => .{
-                    .issue = if (json_event.data) |value|
-                        try std.json.parseFromValueLeaky(Issue, arena.allocator(), value, .{ .ignore_unknown_fields = true })
-                    else
-                        null,
-                },
                 .discuss => .{
                     .discuss = if (json_event.data) |value|
                         try std.json.parseFromValueLeaky(Discussion, arena.allocator(), value, .{ .ignore_unknown_fields = true })
+                    else
+                        null,
+                },
+                .issue => .{
+                    .issue = if (json_event.data) |value|
+                        try std.json.parseFromValueLeaky(Issue, arena.allocator(), value, .{ .ignore_unknown_fields = true })
                     else
                         null,
                 },
@@ -513,8 +513,8 @@ pub fn remove(
         .repo => .{ .repo = null },
         .fork => .{ .fork = null },
         .grant => .{ .grant = null },
-        .issue => .{ .issue = null },
         .discuss => .{ .discuss = null },
+        .issue => .{ .issue = null },
         .comment => .{ .comment = null },
         .attach => .{ .attach = null },
         .patchrev => .{ .patchrev = null },
@@ -1211,15 +1211,6 @@ pub fn consumeInTransaction(
                     const record_maybe: ?Grant.Record = if (event_maybe) |event| .{ .event = event, .created_order = event_order, .updated_order = event_order } else null;
                     try Grant.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, record_maybe, &arena, &repo_event_oid);
                 },
-                .issue => |event_maybe| {
-                    const record_maybe: ?Issue.Record = if (event_maybe) |event| .{
-                        .event = event,
-                        .author_email = authorEmail(commit_object.content.commit.metadata.author orelse ""),
-                        .created_order = event_order,
-                        .updated_order = event_order,
-                    } else null;
-                    try Issue.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, record_maybe, &arena, &repo_event_oid);
-                },
                 .discuss => |event_maybe| {
                     const record_maybe: ?Discussion.Record = if (event_maybe) |event| .{
                         .event = event,
@@ -1228,6 +1219,15 @@ pub fn consumeInTransaction(
                         .updated_order = event_order,
                     } else null;
                     try Discussion.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, record_maybe, &arena, &repo_event_oid);
+                },
+                .issue => |event_maybe| {
+                    const record_maybe: ?Issue.Record = if (event_maybe) |event| .{
+                        .event = event,
+                        .author_email = authorEmail(commit_object.content.commit.metadata.author orelse ""),
+                        .created_order = event_order,
+                        .updated_order = event_order,
+                    } else null;
+                    try Issue.consume(DB, repo_opts.hash, haxy_moment, &current_event_id, record_maybe, &arena, &repo_event_oid);
                 },
                 .comment => |event_maybe| {
                     const record_maybe: ?Comment.Record = if (event_maybe) |event| .{
@@ -1654,6 +1654,86 @@ pub fn merge(
     }
 }
 
+// a comment or attachment a write names under a thread
+pub const ThreadChild = union(enum) {
+    comment: *const [event_id_size]u8,
+    attach: *const [event_id_size]u8,
+};
+
+// whether `thread_id` names a thread of `thread_kind` in the repo's events, and
+// `child`, when given, belongs to it. a caller's url can claim any kind for any
+// id, so every write under a thread checks its claim here first.
+pub fn threadHolds(
+    comptime repo_kind: rp.RepoKind,
+    comptime repo_opts: rp.RepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo: *rp.Repo(repo_kind, repo_opts),
+    thread_kind: EventKind,
+    thread_id: *const [event_id_size]u8,
+    child_maybe: ?ThreadChild,
+) !bool {
+    const DB = EventDB(repo_opts.hash);
+    var event_db_maybe: ?LocalEventDB(repo_opts.hash) = if (repo_kind == .git) try LocalEventDB(repo_opts.hash).openReadOnly(io, allocator, repo.core.repo_dir) else null;
+    defer if (event_db_maybe) |*event_db| event_db.deinit(io, allocator);
+    const moment = (if (event_db_maybe) |*event_db|
+        currentMomentFromDb(repo_opts.hash, event_db.db)
+    else if (repo_kind == .git)
+        return false
+    else
+        currentMoment(repo_opts, repo)) catch return false;
+
+    // only these kinds are threads
+    switch (thread_kind) {
+        .discuss, .issue, .patch => {},
+        else => return false,
+    }
+    const kinds_cursor = try moment.getCursor(hash.hashInt(repo_opts.hash, event_index_key)) orelse return false;
+    const kinds = try DB.HashMap(.read_only).init(kinds_cursor);
+    if ((try readEventKind(repo_opts.hash, kinds, thread_id)) != thread_kind) return false;
+
+    const child = child_maybe orelse return true;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const thread_id_hex = std.fmt.bytesToHex(thread_id.*, .lower);
+    switch (child) {
+        .comment => |id| {
+            const comment = (try readRecordSubset(Comment, struct { event: struct { thread_id: [event_id_size * 2]u8 } }, DB, repo_opts.hash, moment, &arena, id)) orelse return false;
+            return std.mem.eql(u8, &comment.event.thread_id, &thread_id_hex);
+        },
+        .attach => |id| {
+            const attachment = (try readRecordSubset(Attachment, struct { event: struct { parent_id: [event_id_size * 2]u8 } }, DB, repo_opts.hash, moment, &arena, id)) orelse return false;
+            return std.mem.eql(u8, &attachment.event.parent_id, &thread_id_hex);
+        },
+    }
+}
+
+// remove an event a thread's page names: the thread itself, or a comment or
+// attachment, which must belong to it
+pub fn removeInThread(
+    host: Host,
+    comptime repo_kind: rp.RepoKind,
+    comptime repo_opts: rp.RepoOpts(repo_kind),
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    repo: *rp.Repo(repo_kind, repo_opts),
+    thread_kind: EventKind,
+    thread_id: *const [event_id_size]u8,
+    kind: EventKind,
+    id: *const [event_id_size]u8,
+    author: CommitAuthor,
+) !void {
+    const child_maybe: ?ThreadChild = switch (kind) {
+        .comment => .{ .comment = id },
+        .attach => .{ .attach = id },
+        else => null,
+    };
+    if (child_maybe) |child| {
+        if (!try threadHolds(repo_kind, repo_opts, io, allocator, repo, thread_kind, thread_id, child)) return error.EventNotFound;
+    }
+    try remove(host, .repo, repo_kind, repo_opts, io, allocator, repo, id, kind, author);
+}
+
 pub fn readFromRepo(
     comptime T: type,
     comptime repo_kind: rp.RepoKind,
@@ -1810,8 +1890,8 @@ pub fn readAuthorEmail(
     id: *const [event_id_size]u8,
 ) !?[]const u8 {
     const record_map_key = switch (kind) {
-        .issue => Issue.record_map_key,
         .discuss => Discussion.record_map_key,
+        .issue => Issue.record_map_key,
         .comment => Comment.record_map_key,
         .attach => Attachment.record_map_key,
         .patchrev => PatchRev.record_map_key,
@@ -1952,8 +2032,8 @@ pub fn createRepo(
     return .{ .owner_id = owner_id.*, .repo_id = id_bytes };
 }
 
-// change the name, description, and read access of the repo named
-// `old_name` in its owner's user repo
+// change the name, description, read access, and tab roles of the repo
+// named `old_name` in its owner's user repo
 pub fn updateRepo(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -1964,6 +2044,9 @@ pub fn updateRepo(
     name: []const u8,
     description: []const u8,
     read_access: Repo.Access,
+    discuss_role: ?Repo.Role,
+    issue_role: ?Repo.Role,
+    patch_role: ?Repo.Role,
 ) !void {
     try Repo.validateName(name);
     var user_repo = (try openUserRepo(io, allocator, users_dir, owner_id)) orelse return error.NotFound;
@@ -1980,6 +2063,9 @@ pub fn updateRepo(
     event.name = name;
     event.description = description;
     event.read_access = read_access;
+    event.discuss_role = discuss_role;
+    event.issue_role = issue_role;
+    event.patch_role = patch_role;
     try consume(.{ .server = .{ .users_dir = users_dir } }, .user, .xit, user_repo_opts, io, allocator, &user_repo, events_ref, &[_]EventWithId{.{
         .id = std.fmt.bytesToHex(found.event_id, .lower),
         .timestamp = @intCast(std.Io.Timestamp.now(io, .real).toSeconds()),

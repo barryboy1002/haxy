@@ -482,8 +482,9 @@ fn handleLogout(request: *std.http.Server.Request, base: []const u8, session_sto
     });
 }
 
-// the actor for a write to the repo `repo_base` names with at least `min_role`,
-// or null once the refusal has been sent. local mode always writes.
+// the actor for a write to the repo `repo_base` names with at least `min_role`
+// and in the `thread_kind` tab when there is one, or null once the refusal has
+// been sent. local mode always writes.
 fn authorizeWrite(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -492,6 +493,7 @@ fn authorizeWrite(
     host: Host,
     repo_base: []const u8,
     min_role: evt.Repo.Role,
+    thread_kind: ?evt.EventKind,
 ) !?ui.Actor {
     const server = switch (host) {
         .server => |server| server,
@@ -505,7 +507,7 @@ fn authorizeWrite(
         var admin_repo = try rp.Repo(.xit, evt.admin_repo_opts).open(io, allocator, .{ .path = server.admin_repo_path });
         defer admin_repo.deinit(io, allocator);
         const moment = try evt.currentMoment(evt.admin_repo_opts, &admin_repo);
-        break :blk try ui.authorizeUser(io, moment, arena, server.users_dir, user_id, identity, min_role);
+        break :blk try ui.authorizeUser(io, moment, arena, server.users_dir, user_id, identity, min_role, thread_kind);
     };
     switch (authorization) {
         .actor => |actor| return actor,
@@ -675,7 +677,7 @@ fn handleRepoSettings(
     };
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner, null)) orelse return;
 
     const body = try readFormBody(request, allocator);
     defer allocator.free(body);
@@ -686,10 +688,17 @@ fn handleRepoSettings(
     const access_value = (try parseFormField(allocator, body, "access")) orelse try allocator.dupe(u8, "");
     defer allocator.free(access_value);
     const access = std.meta.stringToEnum(evt.Repo.Access, access_value) orelse return request.respond("invalid access", .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }} });
+    var roles: [3]?evt.Repo.Role = undefined;
+    for (&roles, [_][]const u8{ "discuss_role", "issue_role", "patch_role" }) |*role, field| {
+        const role_value = (try parseFormField(allocator, body, field)) orelse try allocator.dupe(u8, "");
+        defer allocator.free(role_value);
+        role.* = ui.Repo.Settings.labelRole(role_value) catch return request.respond("invalid role", .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }} });
+    }
+    const discuss_role, const issue_role, const patch_role = roles;
 
     // authorizeWrite refused any other base
     const identity = repoBaseIdentity(repo_base) orelse unreachable;
-    const route = ui.Repo.Settings.update(io, allocator, server.users_dir, actor, identity, name, description, access) catch |err| switch (err) {
+    const route = ui.Repo.Settings.update(io, allocator, server.users_dir, actor, identity, name, description, access, discuss_role, issue_role, patch_role) catch |err| switch (err) {
         error.NotFound => return respondRepoNotFound(request),
         else => {
             const failure = ui.Session.FormFeedback.RepoFailure.fromError(err) orelse return err;
@@ -697,6 +706,9 @@ fn handleRepoSettings(
                 .name = name,
                 .description = description,
                 .access = access,
+                .discuss_role = discuss_role,
+                .issue_role = issue_role,
+                .patch_role = patch_role,
             } } });
         },
     };
@@ -771,7 +783,7 @@ fn handleThreadNew(
 ) !void {
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, base, .read, kind)) orelse return;
     const author = actor.author;
     const body = try readFormBody(request, allocator);
     defer allocator.free(body);
@@ -938,7 +950,7 @@ fn handlePatchPublish(
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
     // only the draft's author may publish it, which publish checks
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, .patch)) orelse return;
     const user_id = actor.user_id orelse return respondLoginRequired(request);
     const author = actor.author;
 
@@ -981,7 +993,7 @@ fn handlePatchMerge(
     };
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const author = ((try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .write)) orelse return).author;
+    const author = ((try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .write, .patch)) orelse return).author;
 
     const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondRemoveNotFound(request);
     defer request_repo.deinit(allocator);
@@ -1035,7 +1047,7 @@ fn handleCommentNew(
 
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const author = ((try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return).author;
+    const author = ((try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, parts.thread_kind)) orelse return).author;
 
     const form_body = try readFormBody(request, allocator);
     defer allocator.free(form_body);
@@ -1072,7 +1084,14 @@ fn handleCommentNew(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| event_id_hex = try evt.Comment.create(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id_hex, &parent_id_hex, body, author),
+                inline else => |*repo| event_id_hex = evt.Comment.create(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, parts.thread_kind, &thread_id_hex, &parent_id_hex, body, author) catch |err| switch (err) {
+                    // the url's thread or parent comment isn't what it claims
+                    error.NotFound => return request.respond(not_found, .{
+                        .status = .not_found,
+                        .extra_headers = &.{.{ .name = "content-type", .value = "text/plain" }},
+                    }),
+                    else => |e| return e,
+                },
             }
         },
     }
@@ -1243,7 +1262,7 @@ fn handleAttach(
 
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, parts.kind)) orelse return;
     const author = actor.author;
     // an attachment changes the event it hangs off
     const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondAttachmentParentNotFound(request);
@@ -1269,7 +1288,7 @@ fn handleAttach(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| _ = evt.Attachment.create(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, &parent_id_hex, blob, author) catch |err| switch (err) {
+                inline else => |*repo| _ = evt.Attachment.create(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, parts.kind, &parent_id_hex, blob, author) catch |err| switch (err) {
                     error.ParentNotFound => return respondAttachmentParentNotFound(request),
                     else => return err,
                 },
@@ -1321,7 +1340,7 @@ fn updateComment(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| try evt.Comment.update(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &comment_id, body, author),
+                inline else => |*repo| try evt.Comment.update(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, parts.thread_kind, &thread_id, &comment_id, body, author),
             }
         },
     }
@@ -1352,7 +1371,7 @@ fn handleCommentEdit(
 ) !void {
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, parts.thread_kind)) orelse return;
     const author = actor.author;
     // edits only reach here for a comment
     const comment_id = parts.comment_id orelse unreachable;
@@ -1424,6 +1443,9 @@ fn updateThread(
 const RemoveParts = struct {
     repo_base: []const u8,
     kind: evt.EventKind,
+    // the thread the removed event is, or belongs to
+    thread_kind: evt.EventKind,
+    thread_id: [evt.event_id_size]u8,
     id: [evt.event_id_size]u8,
 };
 
@@ -1434,12 +1456,16 @@ fn removeParts(host: Host, base: []const u8) ?RemoveParts {
         return .{
             .repo_base = parent.repo_base,
             .kind = .attach,
+            .thread_kind = parent.kind,
+            .thread_id = parent.id_bytes,
             .id = attachment.id,
         };
     }
     if (commentBaseParts(host, base)) |thread| return .{
         .repo_base = thread.repo_base,
         .kind = if (thread.comment_id != null) .comment else thread.thread_kind,
+        .thread_kind = thread.thread_kind,
+        .thread_id = thread.thread_id,
         .id = thread.comment_id orelse thread.thread_id,
     };
     return null;
@@ -1457,7 +1483,7 @@ fn handleRemove(
 
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, parts.thread_kind)) orelse return;
     const author = actor.author;
 
     const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondRemoveNotFound(request);
@@ -1497,7 +1523,7 @@ fn handleRemove(
             var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
             defer any_repo.deinit(io, allocator);
             switch (any_repo) {
-                inline else => |*repo| evt.remove(host.event(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &parts.id, parts.kind, author) catch |err| switch (err) {
+                inline else => |*repo| evt.removeInThread(host.event(), repo_kind, repo.self_repo_opts, io, allocator, repo, parts.thread_kind, &parts.thread_id, parts.kind, &parts.id, author) catch |err| switch (err) {
                     error.EventNotFound => return respondRemoveNotFound(request),
                     else => |e| return e,
                 },
@@ -1569,7 +1595,7 @@ fn handleThreadStatus(
 
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, parts.thread_kind)) orelse return;
     const author = actor.author;
     {
         const request_repo = (try requestRepoSource(io, allocator, host, parts.repo_base)) orelse return respondRemoveNotFound(request);
@@ -1612,7 +1638,7 @@ fn handleThreadEdit(
 ) !void {
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read)) orelse return;
+    const actor = (try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .read, parts.thread_kind)) orelse return;
     const author = actor.author;
 
     const body = try readFormBody(request, allocator);
@@ -1752,7 +1778,7 @@ fn handleThreadResolve(
 
     var author_arena = std.heap.ArenaAllocator.init(allocator);
     defer author_arena.deinit();
-    const author = ((try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .write)) orelse return).author;
+    const author = ((try authorizeWrite(io, allocator, &author_arena, request, host, parts.repo_base, .write, parts.thread_kind)) orelse return).author;
 
     const body = try readFormBody(request, allocator);
     defer allocator.free(body);
@@ -1843,7 +1869,7 @@ fn handleUndo(io: std.Io, request: *std.http.Server.Request, allocator: std.mem.
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const repo_base = if (target.name.len == 0) "" else try arena.allocator().print("/{s}", .{target.name.slice()});
-    _ = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner)) orelse return;
+    _ = (try authorizeWrite(io, allocator, &arena, request, host, repo_base, .owner, null)) orelse return;
     const resolved = (try requestRepoSource(io, allocator, host, repo_base)) orelse return respondRepoNotFound(request);
     defer resolved.deinit(allocator);
     (switch (action) {

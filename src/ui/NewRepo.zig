@@ -46,13 +46,13 @@ pub const View = struct {
         }
 
         {
-            var access_radio = try ui.widget.Radio.init(allocator, session, "access", &.{ "private", "public" }, if (saved_fields) |saved| @tagName(saved.access) else "private");
+            var access_radio = try ui.widget.Radio.init(allocator, session, "access", &.{ "private", "public" }, if (saved_fields) |saved| @tagName(saved.access) else "private", null);
             errdefer access_radio.deinit(allocator);
             try box.children.put(allocator, access_radio.getFocus().id, .{ .widget = .{ .radio = access_radio }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
         {
-            var hash_radio = try ui.widget.Radio.init(allocator, session, "hash", &.{ "sha1", "sha256" }, if (saved_fields) |saved| @tagName(saved.hash) else "sha1");
+            var hash_radio = try ui.widget.Radio.init(allocator, session, "hash", &.{ "sha1", "sha256" }, if (saved_fields) |saved| @tagName(saved.hash) else "sha1", null);
             errdefer hash_radio.deinit(allocator);
             try box.children.put(allocator, hash_radio.getFocus().id, .{ .widget = .{ .radio = hash_radio }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }

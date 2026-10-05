@@ -8,6 +8,10 @@ name: []const u8,
 description: []const u8,
 read_access: Access = .private,
 write_access: Access = .private,
+// the least role that may write in each tab, null turns the tab off
+discuss_role: ?Role = .read,
+issue_role: ?Role = .read,
+patch_role: ?Role = null,
 
 // what the db stores: the event's data plus the commit-derived fields
 pub const Record = struct {
@@ -45,6 +49,17 @@ pub const Role = enum {
 };
 
 pub const name_max_len = 32;
+
+// the role a kind's tab needs for a write, or null when the tab is off or the
+// kind has no tab
+pub fn threadRole(self: Self, kind: evt.EventKind) ?Role {
+    return switch (kind) {
+        .discuss => self.discuss_role,
+        .issue => self.issue_role,
+        .patch => self.patch_role,
+        else => null,
+    };
+}
 
 // the role `user_id_maybe` holds in the repo, or null when they hold none: its
 // creator owns it, and anyone else gets the higher of the base role and their

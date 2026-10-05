@@ -1338,7 +1338,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
 
         fn removeEvent(self: *This, allocator: std.mem.Allocator, event_kind: evt.EventKind, id: [evt.event_id_size]u8) !void {
             if (comptime wasm) return;
-            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
+            const actor = (try self.session.authorize(self.data.identity, .read, kind)) orelse return;
             const author = actor.author;
 
             if (comptime supports_drafts) {
@@ -1354,13 +1354,14 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
             const io = self.session.io orelse return;
             const source = self.data.repo_source orelse return;
             if (!try source.canModify(io, allocator, actor, event_kind, &id)) return;
+            const thread_id = evt.parseEventId((self.entry orelse return).id) catch return;
 
             switch (source.repo_kind) {
                 inline else => |repo_kind| {
                     var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, source.localInitOpts());
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
-                        inline else => |*repo| try evt.remove(self.session.eventHost(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, event_kind, author),
+                        inline else => |*repo| try evt.removeInThread(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, kind, &thread_id, event_kind, &id, author),
                     }
                 },
             }
@@ -1375,7 +1376,7 @@ pub fn Detail(comptime kind: evt.EventKind, comptime Data: type) type {
             const entry = self.entry orelse return;
             const io = self.session.io orelse return;
             const source = self.data.repo_source orelse return;
-            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
+            const actor = (try self.session.authorize(self.data.identity, .read, kind)) orelse return;
             const author = actor.author;
             const status = (statusChange(entryStatus(entry)) orelse return).status;
             const id = try evt.parseEventId(entry.id);
@@ -2579,7 +2580,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             const io = self.session.io orelse return;
             const src = self.data.repo_source orelse return;
             const entry = self.data.selectedThread() orelse return;
-            const author = ((try self.session.authorize(self.data.identity, .write)) orelse return).author;
+            const author = ((try self.session.authorize(self.data.identity, .write, kind)) orelse return).author;
             const form = self.formBox() orelse return;
 
             // gather the inputs by name; the d<n> hunk inputs appear in chunk order
@@ -2642,7 +2643,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             if (comptime wasm) return;
             const io = self.session.io orelse return;
             const src = self.data.repo_source orelse return;
-            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
+            const actor = (try self.session.authorize(self.data.identity, .read, kind)) orelse return;
             const author = actor.author;
             const form = self.formBox() orelse return;
             const body_input = try formField(form, "body");
@@ -2670,10 +2671,10 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     switch (any_repo) {
                         inline else => |*repo| if (editing) {
                             const comment_id = evt.parseEventId(self.data.comment_id) catch return;
-                            try evt.Comment.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &comment_id, body, author);
+                            try evt.Comment.update(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, kind, &thread_id, &comment_id, body, author);
                             event_id_hex = std.fmt.bytesToHex(comment_id, .lower);
                         } else {
-                            event_id_hex = try evt.Comment.create(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, &thread_id, &parent_id, body, author);
+                            event_id_hex = try evt.Comment.create(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, kind, &thread_id, &parent_id, body, author);
                         },
                     }
                 },
@@ -2700,7 +2701,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             if (comptime wasm) return;
             const io = self.session.io orelse return;
             const src = self.data.repo_source orelse return;
-            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
+            const actor = (try self.session.authorize(self.data.identity, .read, kind)) orelse return;
 
             const form = self.threadForm() orelse return;
             const title_input = try formField(form, "title");
@@ -2783,7 +2784,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             if (comptime wasm) return;
             const io = self.session.io orelse return;
             const entry = self.data.selectedThread() orelse return;
-            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
+            const actor = (try self.session.authorize(self.data.identity, .read, kind)) orelse return;
             const author = actor.author;
 
             const form = self.threadForm() orelse return;
@@ -2883,7 +2884,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     if (comptime wasm) return;
                     const entry = self.data.selectedThread() orelse return;
                     if (!entryDraft(entry.*)) return;
-                    const author = ((try self.session.authorize(self.data.identity, .read)) orelse return).author;
+                    const author = ((try self.session.authorize(self.data.identity, .read, kind)) orelse return).author;
                     try self.data.publishDraft(self.session, allocator, author, entry.id);
                     const route = listRoute(self.data.identity, @fromBackingInt(@intCast(0)), "", entry.id) orelse return;
                     try self.session.navigate(route);
@@ -2893,7 +2894,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
                     const entry = self.data.selectedThread() orelse return;
                     const revision: evt.Patch.MergeRevision = if (button_index > 1) .squash else .source;
                     if (!Data.canMerge(entry.*, self.session) or entry.mergeability.get(revision) != .clean) return;
-                    const author = ((try self.session.authorize(self.data.identity, .write)) orelse return).author;
+                    const author = ((try self.session.authorize(self.data.identity, .write, kind)) orelse return).author;
                     self.data.mergePatch(self.session, allocator, author, entry.id, revision) catch |err| switch (err) {
                         error.MergeConflict, error.MergeCheckUnavailable, error.PatchOutOfDate, error.PatchDataUnavailable => {
                             const route = listRoute(self.data.identity, entryStatus(entry.*), "", entry.id) orelse return;
@@ -2919,7 +2920,7 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
 
         fn removeEvent(self: *This, allocator: std.mem.Allocator, event_kind: evt.EventKind, id: [evt.event_id_size]u8) !void {
             if (comptime wasm) return;
-            const actor = (try self.session.authorize(self.data.identity, .read)) orelse return;
+            const actor = (try self.session.authorize(self.data.identity, .read, kind)) orelse return;
             const author = actor.author;
 
             if (comptime supports_drafts) {
@@ -2935,13 +2936,14 @@ pub fn View(comptime kind: evt.EventKind, comptime Data: type) type {
             const io = self.session.io orelse return;
             const src = self.data.repo_source orelse return;
             if (!try src.canModify(io, allocator, actor, event_kind, &id)) return;
+            const thread_id = evt.parseEventId(self.data.selected_id) catch return;
 
             switch (src.repo_kind) {
                 inline else => |repo_kind| {
                     var any_repo = try rp.AnyRepo(repo_kind, .{}).open(io, allocator, src.localInitOpts());
                     defer any_repo.deinit(io, allocator);
                     switch (any_repo) {
-                        inline else => |*repo| try evt.remove(self.session.eventHost(), .repo, repo_kind, repo.self_repo_opts, io, allocator, repo, &id, event_kind, author),
+                        inline else => |*repo| try evt.removeInThread(self.session.eventHost(), repo_kind, repo.self_repo_opts, io, allocator, repo, kind, &thread_id, event_kind, &id, author),
                     }
                 },
             }

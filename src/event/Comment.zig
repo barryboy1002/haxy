@@ -105,12 +105,19 @@ pub fn create(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo: *rp.Repo(repo_kind, repo_opts),
+    thread_kind: evt.EventKind,
     thread_id: *const [evt.event_id_size * 2]u8,
     parent_id: *const [evt.event_id_size * 2]u8,
     body: []const u8,
     author: evt.CommitAuthor,
 ) ![evt.event_id_size * 2]u8 {
     if (!fieldsValid(body)) return error.InvalidFields;
+
+    // a reply's parent is the thread itself or one of its comments
+    const thread_id_bytes = evt.parseEventId(thread_id) catch return error.NotFound;
+    const parent_id_bytes = evt.parseEventId(parent_id) catch return error.NotFound;
+    const parent: ?evt.ThreadChild = if (std.mem.eql(u8, thread_id, parent_id)) null else .{ .comment = &parent_id_bytes };
+    if (!try evt.threadHolds(repo_kind, repo_opts, io, allocator, repo, thread_kind, &thread_id_bytes, parent)) return error.NotFound;
 
     var id_bytes: [evt.event_id_size]u8 = undefined;
     io.random(&id_bytes);
@@ -137,12 +144,16 @@ pub fn update(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo: *rp.Repo(repo_kind, repo_opts),
+    thread_kind: evt.EventKind,
     thread_id: *const [evt.event_id_size * 2]u8,
     comment_id: *const [evt.event_id_size]u8,
     body: []const u8,
     author: evt.CommitAuthor,
 ) !void {
     if (!fieldsValid(body)) return error.InvalidFields;
+
+    const thread_id_bytes = evt.parseEventId(thread_id) catch return error.NotFound;
+    if (!try evt.threadHolds(repo_kind, repo_opts, io, allocator, repo, thread_kind, &thread_id_bytes, .{ .comment = comment_id })) return error.NotFound;
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -159,7 +170,6 @@ pub fn update(
             evt.currentMoment(repo_opts, repo)) catch return error.NotFound;
         break :blk (try readById(DB, repo_opts.hash, moment, &arena, comment_id)) orelse return error.NotFound;
     };
-    if (!std.mem.eql(u8, &comment.event.thread_id, thread_id)) return error.NotFound;
     if (comment.removed) return error.NotFound;
 
     var updated = comment.event;

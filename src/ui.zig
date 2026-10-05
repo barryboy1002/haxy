@@ -2061,7 +2061,7 @@ pub fn activeUser(
 }
 
 // whether the user may write to the repo `identity` names with at least
-// `min_role`
+// `min_role`, and to the `thread_kind` tab when there is one
 pub fn authorizeUser(
     io: std.Io,
     moment: evt.AdminDB.HashMap(.read_only),
@@ -2070,6 +2070,7 @@ pub fn authorizeUser(
     user_id: [evt.event_id_size]u8,
     identity: []const u8,
     min_role: evt.Repo.Role,
+    thread_kind: ?evt.EventKind,
 ) !Authorization {
     const user = (try activeUser(moment, arena, user_id)) orelse return .login_required;
 
@@ -2078,6 +2079,11 @@ pub fn authorizeUser(
     // a repo the user can't read doesn't exist to them
     const role = repo.role orelse return .repo_not_found;
     if (!role.atLeast(min_role)) return .forbidden;
+    if (thread_kind) |kind| {
+        // a tab that is off doesn't exist
+        const tab_role = repo.repo.event.threadRole(kind) orelse return .repo_not_found;
+        if (!role.atLeast(tab_role)) return .forbidden;
+    }
     return .{ .actor = .{
         .author = .{ .name = user.event.name, .email = user.event.email },
         .user_id = user_id,
@@ -2255,6 +2261,9 @@ pub const Session = struct {
                 name: []const u8,
                 description: []const u8,
                 access: evt.Repo.Access,
+                discuss_role: ?evt.Repo.Role,
+                issue_role: ?evt.Repo.Role,
+                patch_role: ?evt.Repo.Role,
             },
         },
         issue: struct {
@@ -2367,9 +2376,9 @@ pub const Session = struct {
     }
 
     // the actor for a write to the repo `identity` names, or null when the
-    // session may not write there with at least `min_role`. local mode always
-    // writes.
-    pub fn authorize(self: *Self, identity: []const u8, min_role: evt.Repo.Role) !?Actor {
+    // session may not write there with at least `min_role` or in the
+    // `thread_kind` tab. local mode always writes.
+    pub fn authorize(self: *Self, identity: []const u8, min_role: evt.Repo.Role, thread_kind: ?evt.EventKind) !?Actor {
         if (self.data.host_kind == .local) {
             const author = blk: {
                 const src = self.local orelse break :blk local_author_fallback;
@@ -2384,7 +2393,7 @@ pub const Session = struct {
         const io = self.io orelse return null;
         const users_dir = self.users_dir orelse return null;
         const moment = try evt.currentMoment(evt.admin_repo_opts, admin_repo);
-        return switch (try authorizeUser(io, moment, self.page_arena, users_dir, user_id, identity, min_role)) {
+        return switch (try authorizeUser(io, moment, self.page_arena, users_dir, user_id, identity, min_role, thread_kind)) {
             .actor => |actor| actor,
             .login_required, .repo_not_found, .forbidden => null,
         };

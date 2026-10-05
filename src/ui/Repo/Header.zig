@@ -14,9 +14,9 @@ const diff_tab_label = "diff";
 const commits_tab_label = "commits";
 const files_tab_label = "files";
 const refs_tab_label = "refs";
+const discuss_tab_label = "discuss";
 const issues_tab_label = "issues";
 const patches_tab_label = "patches";
-const discuss_tab_label = "discuss";
 const events_tab_label = "events";
 const new_tab_label = "new";
 const new_repo_tab_bottom_label = "repo";
@@ -31,24 +31,24 @@ title: ui.Title,
 // the ref/oid this page is viewing; the value is url-encoded
 ref_or_oid: RefOrOid,
 ref_or_oid_value: []const u8,
-// the issues tab's label filter, url-encoded ("" = unfiltered), so the tab links
-// back to the filtered list.
+// each thread tab's label filter, url-encoded ("" = unfiltered), so the tab
+// links back to the filtered list.
+discussions_label: []const u8,
 issues_label: []const u8,
 patches_label: []const u8,
-discussions_label: []const u8,
 
 const Self = @This();
 
-pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, ref_or_oid: RefOrOid, ref_or_oid_value: []const u8, issues_label: []const u8, patches_label: []const u8, discussions_label: []const u8) !Self {
+pub fn init(arena: *std.heap.ArenaAllocator, name: []const u8, owner_name: []const u8, ref_or_oid: RefOrOid, ref_or_oid_value: []const u8, discussions_label: []const u8, issues_label: []const u8, patches_label: []const u8) !Self {
     return .{
         .name = name,
         .owner_name = owner_name,
         .title = try ui.Title.init(arena, name, .scanlines),
         .ref_or_oid = ref_or_oid,
         .ref_or_oid_value = ref_or_oid_value,
+        .discussions_label = discussions_label,
         .issues_label = issues_label,
         .patches_label = patches_label,
-        .discussions_label = discussions_label,
     };
 }
 
@@ -157,12 +157,12 @@ pub const View = struct {
         const changes_link = try ui.inPageTabLink(session, changes_route, current_tag == changes_tag);
         const refs_route = ui.RoutablePage.repoRefsRoute(identity, .branch, "") orelse return error.RouteTooLong;
         const refs_link = try ui.inPageTabLink(session, refs_route, current_tag == .repo_refs);
+        const discussions_route = ui.RoutablePage.repoDiscussionsRoute(identity, data.discussions_label, "") orelse return error.RouteTooLong;
+        const discussions_link = try ui.inPageTabLink(session, discussions_route, current_tag == .repo_discussions);
         const issues_route = ui.RoutablePage.repoIssuesRoute(identity, .open, data.issues_label, "") orelse return error.RouteTooLong;
         const issues_link = try ui.inPageTabLink(session, issues_route, current_tag == .repo_issues);
         const patches_route = ui.RoutablePage.repoPatchesRoute(identity, .open, data.patches_label, "") orelse return error.RouteTooLong;
         const patches_link = try ui.inPageTabLink(session, patches_route, current_tag == .repo_patches);
-        const discussions_route = ui.RoutablePage.repoDiscussionsRoute(identity, data.discussions_label, "") orelse return error.RouteTooLong;
-        const discussions_link = try ui.inPageTabLink(session, discussions_route, current_tag == .repo_discussions);
         const events_route = ui.RoutablePage.repoEventsRoute(identity, .active, null, "", null) orelse return error.RouteTooLong;
         const events_link = try ui.inPageTabLink(session, events_route, current_tag == .repo_events);
         const new_repo_route = ui.RoutablePage{ .repo_repo_new = Array.from(identity) orelse return error.RouteTooLong };
@@ -221,8 +221,23 @@ pub const View = struct {
             });
         }
 
-        // issues tab
-        {
+        // discuss tab, unless it is off
+        if (page.repo.event.discuss_role != null) {
+            var text_box = try wgt.TextBox.init(allocator, discuss_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
+            errdefer text_box.deinit(allocator);
+            text_box.getFocus().mode = .all;
+            text_box.getFocus().kind = .{ .custom = discussions_link };
+            try tab_ids.put(allocator, text_box.getFocus().id, {});
+            if (current_tag == .repo_discussions) selected_tab = text_box.getFocus().id;
+            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
+                .widget = .{ .text_box = text_box },
+                .rect = null,
+                .min_size = .{ .width = discuss_tab_label.len + 2, .height = null },
+            });
+        }
+
+        // issues tab, unless it is off
+        if (page.repo.event.issue_role != null) {
             var text_box = try wgt.TextBox.init(allocator, issues_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
@@ -236,8 +251,8 @@ pub const View = struct {
             });
         }
 
-        // patches tab
-        {
+        // patches tab, unless it is off
+        if (page.repo.event.patch_role != null) {
             var text_box = try wgt.TextBox.init(allocator, patches_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
@@ -248,21 +263,6 @@ pub const View = struct {
                 .widget = .{ .text_box = text_box },
                 .rect = null,
                 .min_size = .{ .width = patches_tab_label.len + 2, .height = null },
-            });
-        }
-
-        // discuss tab
-        {
-            var text_box = try wgt.TextBox.init(allocator, discuss_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
-            errdefer text_box.deinit(allocator);
-            text_box.getFocus().mode = .all;
-            text_box.getFocus().kind = .{ .custom = discussions_link };
-            try tab_ids.put(allocator, text_box.getFocus().id, {});
-            if (current_tag == .repo_discussions) selected_tab = text_box.getFocus().id;
-            try tabs_box.children.put(allocator, text_box.getFocus().id, .{
-                .widget = .{ .text_box = text_box },
-                .rect = null,
-                .min_size = .{ .width = discuss_tab_label.len + 2, .height = null },
             });
         }
 

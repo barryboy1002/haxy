@@ -248,6 +248,9 @@ pub fn main(init: std.process.Init) !void {
                         .name = r.name,
                         .description = r.description,
                         .read_access = r.read_access,
+                        .discuss_role = .read,
+                        .issue_role = .read,
+                        .patch_role = .read,
                     },
                 },
             };

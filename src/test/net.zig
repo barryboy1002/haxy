@@ -546,6 +546,8 @@ fn testPushFork(
         const target = (try evt.readRepoByOwnerAndName(io, allocator, &arena, moment, users_dir, "admin", "target", null)) orelse return error.NotFound;
         repo_id = target.event_id;
         @memcpy(&user_id, target.repo.event.user_id);
+        // patches are off on a new repo
+        try evt.updateRepo(io, allocator, users_dir, &user_id, .{ .name = "admin", .email = "admin@example.test" }, "target", "target", target.repo.event.description, target.repo.event.read_access, .read, .read, .read);
         var user_repo = (try evt.openUserRepo(io, allocator, users_dir, &user_id)) orelse return error.NotFound;
         defer user_repo.deinit(io, allocator);
         break :blk try fork.create(.{}, io, allocator, users_dir, .{
@@ -826,6 +828,7 @@ fn testPushFork(
                     .user_id = &user_id,
                     .name = "target",
                     .description = "",
+                    .patch_role = .read,
                 } },
             },
         });

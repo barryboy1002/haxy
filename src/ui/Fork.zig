@@ -49,6 +49,8 @@ pub fn init(arena: *std.heap.ArenaAllocator, session: *ui.Session, route: ui.Rou
     // a draft is as readable as the repo it targets
     const target_role = target.role orelse return error.NotFound;
     const target_record = target.repo;
+    // patches that are off take their drafts with them
+    if (target_record.event.patch_role == null) return error.NotFound;
     const owner = (try evt.User.readById(evt.AdminDB, evt.admin_repo_opts.hash, haxy_moment, arena, owner_id)) orelse return error.NotFound;
     if (!std.mem.eql(u8, target_record.event.name, identity.name)) return error.NotFound;
 

@@ -121,6 +121,7 @@ pub fn create(
     io: std.Io,
     allocator: std.mem.Allocator,
     repo: *rp.Repo(repo_kind, repo_opts),
+    parent_kind: evt.EventKind,
     parent_id: *const [evt.event_id_size * 2]u8,
     blob: evt.Blob,
     author: evt.CommitAuthor,
@@ -129,19 +130,7 @@ pub fn create(
     if (blob.size == 0 or blob.size > max_size) return error.InvalidFields;
 
     const parent_id_bytes = evt.parseEventId(parent_id) catch return error.InvalidFields;
-
-    {
-        const DB = evt.EventDB(repo_opts.hash);
-        var event_db_maybe: ?evt.LocalEventDB(repo_opts.hash) = if (repo_kind == .git) try evt.LocalEventDB(repo_opts.hash).openReadOnly(io, allocator, repo.core.repo_dir) else null;
-        defer if (event_db_maybe) |*event_db| event_db.deinit(io, allocator);
-        const haxy_moment = (if (event_db_maybe) |*event_db|
-            evt.currentMomentFromDb(repo_opts.hash, event_db.db)
-        else if (repo_kind == .git)
-            return error.ParentNotFound
-        else
-            evt.currentMoment(repo_opts, repo)) catch return error.ParentNotFound;
-        if (!try parentExists(DB, repo_opts.hash, haxy_moment, &parent_id_bytes)) return error.ParentNotFound;
-    }
+    if (!try evt.threadHolds(repo_kind, repo_opts, io, allocator, repo, parent_kind, &parent_id_bytes, null)) return error.ParentNotFound;
 
     var id_bytes: [evt.event_id_size]u8 = undefined;
     io.random(&id_bytes);

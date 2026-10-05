@@ -487,6 +487,15 @@ fn runForkSession(
     if (service == .receive_pack and !isKeyInAuthorizedKeys(user.event.ssh_keys, &sess.fingerprint))
         return writeError(sess, "unauthorized: this SSH key is not registered to the patch author");
 
+    const target = (try evt.readRepoById(io, allocator, &admin_arena, handler.users_dir, fork_record.event.repo_user_id[0..evt.event_id_size], fork_record.event.repo_id[0..evt.event_id_size], forker_id)) orelse
+        return writeError(sess, "repo not found");
+    // patches that are off take their drafts with them
+    const patch_role = target.repo.event.patch_role orelse return writeError(sess, "patch draft not found");
+    if (service == .receive_pack) {
+        const role = target.role orelse return writeError(sess, "repo not found");
+        if (!role.atLeast(patch_role)) return writeError(sess, "unauthorized: your role in this repo may not write patches");
+    }
+
     const draft_path = try fork.forkPath(allocator, handler.users_dir, &forker_id, &fork_id);
     defer allocator.free(draft_path);
     var draft = rp.AnyRepo(.xit, any_repo_opts).open(io, allocator, .{ .path = draft_path }) catch
@@ -498,8 +507,6 @@ fn runForkSession(
             inline else => |*repo| try repo.uploadPack(io, allocator, reader, writer, .{ .protocol_version = protocol_version }, &sideband),
         }
     } else {
-        const target = (try evt.readRepoById(io, allocator, &admin_arena, handler.users_dir, fork_record.event.repo_user_id[0..evt.event_id_size], fork_record.event.repo_id[0..evt.event_id_size], null)) orelse
-            return writeError(sess, "repo not found");
         if (!std.mem.eql(u8, target.repo.event.name, forker_repo.name)) return writeError(sess, "patch draft belongs to another repo");
         const target_path = try evt.repoPath(allocator, handler.users_dir, fork_record.event.repo_user_id, fork_record.event.repo_id);
         defer allocator.free(target_path);

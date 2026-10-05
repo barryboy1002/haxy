@@ -856,6 +856,7 @@ fn patchLifecycle(merge_revision: evt.Patch.MergeRevision) !void {
                 .user_id = &user_id,
                 .name = "repo",
                 .description = "",
+                .patch_role = .read,
             } },
         },
     });
@@ -1232,7 +1233,7 @@ fn testMergeability(
     } };
     try evt.Patch.update(.local, .xit, repo_opts, io, allocator, target, id, edit, author);
     try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
-    _ = try evt.Comment.create(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, target, &input.id, &input.id, "reviewing the answer", author);
+    _ = try evt.Comment.create(.{ .server = .{ .users_dir = users_dir } }, .xit, repo_opts, io, allocator, target, .patch, &input.id, &input.id, "reviewing the answer", author);
     try std.testing.expectEqualDeep(pch.Mergeability{}, try readMergeability(target, io, allocator, id, patch));
 
     // a server patch edit refreshes its mergeability

@@ -22,17 +22,44 @@ identity: []const u8,
 name: []const u8,
 description: []const u8,
 access: evt.Repo.Access,
+discuss_role: ?evt.Repo.Role,
+issue_role: ?evt.Repo.Role,
+patch_role: ?evt.Repo.Role,
 hash_kind: hash.HashKind,
 
 const Self = @This();
 
+// the tab role choices, in the order the form shows them
+const role_choices = [_]?evt.Repo.Role{ null, .owner, .write, .read };
+
+const role_labels = blk: {
+    var labels: [role_choices.len][]const u8 = undefined;
+    for (&labels, role_choices) |*label, role| label.* = roleLabel(role);
+    break :blk labels;
+};
+
+pub fn roleLabel(role_maybe: ?evt.Repo.Role) []const u8 {
+    const role = role_maybe orelse return "nobody";
+    return switch (role) {
+        .owner => "owners",
+        .write => "collaborators",
+        .read => "anybody",
+    };
+}
+
+// the tab role a label names
+pub fn labelRole(label: []const u8) error{InvalidRole}!?evt.Repo.Role {
+    for (role_choices) |role| {
+        if (std.mem.eql(u8, label, roleLabel(role))) return role;
+    }
+    return error.InvalidRole;
+}
+
 pub const View = struct {
-    center: ui.widget.Center,
+    // a centered form, scrolled when it outgrows the window
+    scroll: wgt.Scroll(ui.Widget),
     data: *const Self,
     session: *ui.Session,
-
-    const access_index: usize = 2;
-    const hash_index: usize = 3;
 
     pub fn init(allocator: std.mem.Allocator, data: *const Self, session: *ui.Session) !View {
         var box = try wgt.Box(ui.Widget).init(allocator, .{ .border = null, .direction = .vert });
@@ -65,7 +92,7 @@ pub const View = struct {
 
         {
             const access = if (saved_fields) |saved| saved.access else data.access;
-            var access_radio = try ui.widget.Radio.init(allocator, session, "access", &.{ "private", "public" }, @tagName(access));
+            var access_radio = try ui.widget.Radio.init(allocator, session, "access", &.{ "private", "public" }, @tagName(access), null);
             errdefer access_radio.deinit(allocator);
             try box.children.put(allocator, access_radio.getFocus().id, .{ .widget = .{ .radio = access_radio }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
@@ -76,17 +103,34 @@ pub const View = struct {
             try box.children.put(allocator, hash_box.getFocus().id, .{ .widget = .{ .text_box = hash_box }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
+        const roles = [_]struct { name: []const u8, label: []const u8, role: ?evt.Repo.Role }{
+            .{ .name = "discuss_role", .label = " who can create discussions ", .role = if (saved_fields) |saved| saved.discuss_role else data.discuss_role },
+            .{ .name = "issue_role", .label = " who can create issues ", .role = if (saved_fields) |saved| saved.issue_role else data.issue_role },
+            .{ .name = "patch_role", .label = " who can create patches ", .role = if (saved_fields) |saved| saved.patch_role else data.patch_role },
+        };
+        for (roles) |role| {
+            var role_radio = try ui.widget.Radio.init(allocator, session, role.name, &role_labels, roleLabel(role.role), role.label);
+            errdefer role_radio.deinit(allocator);
+            try box.children.put(allocator, role_radio.getFocus().id, .{ .widget = .{ .radio = role_radio }, .rect = null, .min_size = null });
+        }
+
         {
             var submit = try ui.widget.SubmitButton.initLabeled(allocator, "submit changes");
             errdefer submit.deinit(allocator);
             try box.children.put(allocator, submit.getFocus().id, .{ .widget = .{ .submit_button = submit }, .rect = null, .min_size = .{ .width = null, .height = 3 } });
         }
 
-        return .{ .center = try ui.widget.Center.init(allocator, .{ .box = box }), .data = data, .session = session };
+        var center = try ui.widget.Center.init(allocator, .{ .box = box });
+        errdefer center.deinit(allocator);
+        return .{
+            .scroll = try wgt.Scroll(ui.Widget).init(allocator, .{ .center = center }, .{ .direction = .vert, .web_native = !session.is_terminal, .fill = true }),
+            .data = data,
+            .session = session,
+        };
     }
 
     pub fn deinit(self: *View, allocator: std.mem.Allocator) void {
-        self.center.deinit(allocator);
+        self.scroll.deinit(allocator);
     }
 
     pub fn build(self: *View, allocator: std.mem.Allocator, constraint: layout.Constraint, root_focus: *Focus) !void {
@@ -103,7 +147,11 @@ pub const View = struct {
             .text_input => |*ti| try self.session.text_inputs.put(inputs_arena, ti.getFocus().id, ti),
             else => {},
         };
-        try self.center.build(allocator, constraint, root_focus);
+        // the window's height as a minimum centers a form that fits
+        try self.scroll.build(allocator, .{
+            .min_size = .{ .width = constraint.min_size.width, .height = constraint.max_size.height orelse constraint.min_size.height },
+            .max_size = constraint.max_size,
+        }, root_focus);
     }
 
     pub fn input(self: *View, allocator: std.mem.Allocator, key: Key, root_focus: *Focus) !void {
@@ -113,10 +161,25 @@ pub const View = struct {
         const keys = self.formBox().children.keys();
 
         const on_submit = child.widget == .submit_button;
-        // the read-only hash row is stepped over
         const direction = inp.vertDirection(key);
-        if (direction == .up or key == .back_tab) return if (cur > 0) root_focus.setFocus(keys[if (cur - 1 == hash_index) access_index else cur - 1]);
-        if (direction == .down or key == .tab) return if (cur + 1 < keys.len) root_focus.setFocus(keys[if (cur + 1 == hash_index) hash_index + 1 else cur + 1]);
+        const up = direction == .up or key == .back_tab;
+        if (up or direction == .down or key == .tab) {
+            var next = cur;
+            while (true) {
+                if (up) {
+                    if (next == 0) return;
+                    next -= 1;
+                } else {
+                    next += 1;
+                    if (next == keys.len) return;
+                }
+                // the read-only hash row is stepped over
+                if (self.formBox().children.values()[next].widget != .text_box) break;
+            }
+            root_focus.setFocus(keys[next]);
+            if (self.session.is_terminal) self.scrollToChild(next);
+            return;
+        }
         switch (key) {
             .enter => if (on_submit) return self.submitForm(allocator),
             .mouse => |mouse| if (on_submit) {
@@ -125,6 +188,23 @@ pub const View = struct {
             else => {},
         }
         try child.widget.input(allocator, key, root_focus);
+    }
+
+    // keep the form child at `index` in view, its rect shifted by the centering
+    fn scrollToChild(self: *View, index: usize) void {
+        const rect = self.formBox().children.values()[index].rect orelse return;
+        const center_grid = self.scroll.child.center.getGrid() orelse return;
+        const form_grid = self.formBox().getGrid() orelse return;
+        const offset_y: isize = @intCast((center_grid.size.height -| form_grid.size.height) / 2);
+        self.scroll.scrollToRect(.{ .x = rect.x, .y = rect.y + offset_y, .size = rect.size });
+    }
+
+    fn formRadio(form: *wgt.Box(ui.Widget), name: []const u8) !*ui.widget.Radio {
+        for (form.children.values()) |*child| switch (child.widget) {
+            .radio => |*radio| if (std.mem.eql(u8, radio.name, name)) return radio,
+            else => {},
+        };
+        return error.MissingFormField;
     }
 
     fn formField(form: *wgt.Box(ui.Widget), name: []const u8) !*wgt.TextInput {
@@ -141,22 +221,27 @@ pub const View = struct {
         if (comptime wasm) return;
         const io = self.session.io orelse return;
         const users_dir = self.session.users_dir orelse return;
-        const actor = (try self.session.authorize(self.data.identity, .owner)) orelse return;
+        const actor = (try self.session.authorize(self.data.identity, .owner, null)) orelse return;
 
         const name = try (try formField(self.formBox(), "name")).text(allocator);
         defer allocator.free(name);
         const description = try (try formField(self.formBox(), "description")).text(allocator);
         defer allocator.free(description);
-        const access_radio = &self.formBox().children.values()[access_index].widget.radio;
-        const access = std.meta.stringToEnum(evt.Repo.Access, access_radio.selected()) orelse unreachable;
+        const access = std.meta.stringToEnum(evt.Repo.Access, (try formRadio(self.formBox(), "access")).selected()) orelse unreachable;
+        const discuss_role = labelRole((try formRadio(self.formBox(), "discuss_role")).selected()) catch unreachable;
+        const issue_role = labelRole((try formRadio(self.formBox(), "issue_role")).selected()) catch unreachable;
+        const patch_role = labelRole((try formRadio(self.formBox(), "patch_role")).selected()) catch unreachable;
 
-        const route = update(io, allocator, users_dir, actor, self.data.identity, name, description, access) catch |err| {
+        const route = update(io, allocator, users_dir, actor, self.data.identity, name, description, access, discuss_role, issue_role, patch_role) catch |err| {
             const failure = ui.Session.FormFeedback.RepoFailure.fromError(err) orelse return err;
             const aa = self.session.arena.allocator();
             self.session.data.form_feedback = .{ .repo_settings = .{ .failure = failure, .fields = .{
                 .name = try aa.dupe(u8, name),
                 .description = try aa.dupe(u8, description),
                 .access = access,
+                .discuss_role = discuss_role,
+                .issue_role = issue_role,
+                .patch_role = patch_role,
             } } };
             return;
         };
@@ -164,24 +249,24 @@ pub const View = struct {
     }
 
     fn formBox(self: *View) *wgt.Box(ui.Widget) {
-        return &self.center.child.box;
+        return &self.scroll.child.center.child.box;
     }
 
     pub fn clearGrid(self: *View) void {
-        self.center.clearGrid();
+        self.scroll.clearGrid();
     }
 
     pub fn getGrid(self: View) ?Grid {
-        return self.center.getGrid();
+        return self.scroll.getGrid();
     }
 
     pub fn getFocus(self: *View) *Focus {
-        return self.center.getFocus();
+        return self.scroll.getFocus();
     }
 
     // up leaves the form from its first control
     pub fn atTop(self: View) bool {
-        const box = &self.center.child.box;
+        const box = &self.scroll.child.center.child.box;
         return box.focus.child_id == box.children.keys()[0];
     }
 };
@@ -197,10 +282,13 @@ pub fn update(
     name: []const u8,
     description: []const u8,
     access: evt.Repo.Access,
+    discuss_role: ?evt.Repo.Role,
+    issue_role: ?evt.Repo.Role,
+    patch_role: ?evt.Repo.Role,
 ) !ui.RoutablePage {
     const parsed = ui.RoutablePage.RepoIdentity.parse(identity) orelse return error.NotFound;
     const owner_id = actor.repo_user_id orelse return error.NotFound;
-    try evt.updateRepo(io, allocator, users_dir, &owner_id, actor.author, parsed.name, name, description, access);
+    try evt.updateRepo(io, allocator, users_dir, &owner_id, actor.author, parsed.name, name, description, access, discuss_role, issue_role, patch_role);
     var buf: [ui.RoutablePage.repo_route_max_len]u8 = undefined;
     const new_identity = std.fmt.bufPrint(&buf, "{s}:{s}", .{ parsed.owner, name }) catch return error.RouteTooLong;
     return ui.RoutablePage.repoRepoRoute(new_identity) orelse error.RouteTooLong;
