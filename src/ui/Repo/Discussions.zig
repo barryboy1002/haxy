@@ -222,7 +222,6 @@ const new_tab_label = "new";
 pub fn initHeader(allocator: std.mem.Allocator, session: *ui.Session, data: *const Self) !Header {
     var header = try Header.init(allocator, session, data.search);
     errdefer header.deinit(allocator);
-    const aa = session.page_arena.allocator();
     const selected_index = View.viewIndex(data.view);
     const page_selected = std.meta.activeTag(session.data.current_page) == .repo_discussions;
 
@@ -235,15 +234,11 @@ pub fn initHeader(allocator: std.mem.Allocator, session: *ui.Session, data: *con
         try header.addTab(allocator, label, link, 0);
     }
 
-    // labels tab, showing the active label filter
+    // labels tab
     {
         const labels_route = try thread.searchRoute(ui.RoutablePage.repoThreadLabelsRoute(.discuss, data.identity, data.label), data.search);
         const labels_link = try ui.inPageTabLink(session, labels_route, page_selected and selected_index == View.viewIndex(.labels));
-        const label = if (data.label.len == 0) labels_tab_label else blk: {
-            const decoded = std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.label));
-            break :blk try aa.print(labels_tab_label ++ " ({s})", .{decoded});
-        };
-        try header.addTab(allocator, label, labels_link, View.viewIndex(.labels));
+        try header.addTab(allocator, labels_tab_label, labels_link, View.viewIndex(.labels));
     }
 
     // new-discussion tab; an edit or comment url shows its tab in this place

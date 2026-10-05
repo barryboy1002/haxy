@@ -32,7 +32,7 @@ title: ui.Title,
 ref_or_oid: RefOrOid,
 ref_or_oid_value: []const u8,
 // each thread tab's label filter, url-encoded ("" = unfiltered), so the tab
-// links back to the filtered list.
+// links back to the filtered list and shows the label beneath it.
 discussions_label: []const u8,
 issues_label: []const u8,
 patches_label: []const u8,
@@ -79,6 +79,9 @@ pub const View = struct {
         const aa = session.page_arena.allocator();
         const ref_name = std.Uri.percentDecodeInPlace(try aa.dupe(u8, page.files.patchrev_id orelse data.ref_or_oid_value));
         const bottom_label = try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), ref_name);
+        const discussions_bottom_label = try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.discussions_label)));
+        const issues_bottom_label = try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.issues_label)));
+        const patches_bottom_label = try ui.clippedBottomLabel(try aa.alloc(u8, ui.clipped_bottom_label_max_len), std.Uri.percentDecodeInPlace(try aa.dupe(u8, data.patches_label)));
         const changes_label = switch (page.changes) {
             .diff => diff_tab_label,
             .commits => |c| if (c.commit_count) |count| try aa.print(commits_tab_label ++ " ({d})", .{count}) else commits_tab_label,
@@ -224,7 +227,7 @@ pub const View = struct {
 
         // discuss tab, unless it is off
         if (page.repo.event.discuss_role != null) {
-            var text_box = try wgt.TextBox.init(allocator, discuss_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, discuss_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = discussions_bottom_label } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = discussions_link };
@@ -239,7 +242,7 @@ pub const View = struct {
 
         // issues tab, unless it is off
         if (page.repo.event.issue_role != null) {
-            var text_box = try wgt.TextBox.init(allocator, issues_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, issues_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = issues_bottom_label } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = issues_link };
@@ -254,7 +257,7 @@ pub const View = struct {
 
         // patches tab, unless it is off
         if (page.repo.event.patch_role != null) {
-            var text_box = try wgt.TextBox.init(allocator, patches_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none });
+            var text_box = try wgt.TextBox.init(allocator, patches_tab_label, .{ .border = .single, .round_corners = true, .wrap_kind = .none, .bottom_label = .{ .text = patches_bottom_label } });
             errdefer text_box.deinit(allocator);
             text_box.getFocus().mode = .all;
             text_box.getFocus().kind = .{ .custom = patches_link };
